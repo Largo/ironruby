@@ -499,7 +499,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    Richards `device_in_add`, `work_in_add` and `add_input_and_check_priority` are now
    offered to the compiler and declined at `append` (no typed body: a deopt after an
    effect) or `NO_WORK` (gap 11); in Json `HashIndexTable#add` and `#get` at
-   `hash_slot_for`; in DeltaBlue `Dictionary#at` at `match`; in CD `RedBlackTree#get`
+   `hash_slot_for`; in DeltaBlue `Dictionary#at` at `match` (compiled since perf/havlak: see
+   Rejected, perf/jitbind, for what the calls on other receivers wait for now); in CD `RedBlackTree#get`
    at `node.value` and `Node#successor` at `x.right`, attribute reads on a local (the
    result of the bound `find_node` in `get`, which has no profile; a local that holds
    self in `successor`): `get` binds `find_node` and fails only there, a small thing to
@@ -1737,6 +1738,122 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   on both builds. Edge for the gate: the bare test is no instance variables now and no singleton
   class, so a string whose last instance variable was removed counts as bare and skips its hooks;
   MRI's FL_EXIVAR may stay set after the removal, which would send it through rb_obj_dup.
+- **perf/forward (2026-11-27) - a rest parameter passed on where nothing can see it again is the callee's
+  rest parameter; a block-passing call's hoisted splat is fresh** (gap 36 and gap 16's second part;
+  `IR_FORWARD_REST=0` turns the first off) - timed, not gated. Bytes a call
+  (`Util/bench/forward-bytes.rb`, new), base -> new: `def w(...) = raw(...)` 212 -> 116,
+  `w(...) = rest_t(...)` (a callee with a rest) 309 -> 116, `w(*args, &b) = raw(*args, &b)` 227 -> 132,
+  with a rest callee 312 -> 120, `w(*args) = rest_t(*args)` 214 -> 120, `w_splat(1) { }` 420 -> 325;
+  `w(*args) = raw(*args)` (one Array, the rest itself) 119 -> 118.
+  Two copies went. (1) `f(*a, &b)` - and `n(...)`, which is `n(*?fwd?, &?fwdblk?)` - hoists its arguments
+  before the block argument (MRI's order) and expanded the splat into a new Array there that the site
+  did not call fresh, so a rest callee copied it again; it is fresh now (`MethodCall`, the hoisted
+  `#splat`), and a splat that is fresh already is not copied at all. (2) `ForwardedRest` (new, the
+  method's AST before its body is transformed): the one splat of the method's rest parameter that may
+  call its Array fresh - the only reference to the parameter (no other read, assignment or
+  `defined?`), not in a loop or a block, and nothing that can reach the frame: no block literal (a
+  Proc's `#binding`), no `binding`/`eval`/`local_variable_*` call, no zsuper, no `retry`/`redo`.
+  `Arguments` sets the site's fresh flag for that splat only. By the same rules (a prism count) it
+  takes 25 of the prelude's 137 methods with a rest or `(...)`, and 216 of 744 in `ironruby/` and
+  `ruby/4.0`.
+  Instructions a call (`count.sh`, `Util/bench/prelude-cost.rb`): `w_splat` (`*args, &block`) 6223 ->
+  5742 (0.92), `w_fwd` 6163 -> 5613 (0.91); controls `w_pass`, `w_anon`, `w_opt` move by +-70 between
+  runs in both directions (0.986-1.014), the counter's floor here. Time (`ab.rb`, six rounds):
+  `w_splat` 0.87, `w_fwd` 0.84, `w_pass` overlapping.
+  Checked: `Util/splat-pass-matrix.rb` section 10b (new, 21 rows: a rest callee changing and keeping
+  the Array, two calls keeping two Arrays, a chain of forwards, the rest escaping or changed first, a
+  binding, a loop, a block literal, a block passed on, `...` with keywords and a block and without,
+  ruby2_keywords with keywords and with a Hash positional, send, public_send, `super(*a)`, zsuper,
+  method_missing, an empty rest), block-pass, light-rest, keyword-light, block-given: CRuby's output
+  and the unchanged build's with the JIT on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`, and the unchanged
+  build's with `IR_LIGHT_FRAMES=0`, `IR_FORWARD_REST=0` and `IR_SPLAT_REST=0`; hot-shapes the unchanged
+  build's in every mode (its known row against CRuby). ruby/spec language/send, method, delegation,
+  super: the same on both builds (send's one error is the known `into`/`to` wording).
+  For the gate: the callee may keep the caller's rest Array; the analysis is what says the caller
+  cannot see it again - read `ForwardedRest`'s list of what can reach a frame. A block-passing call's
+  retry (Ruby 1.8's `retry` from the block) would run the call again with the hoisted Array; prism
+  refuses `retry` outside a rescue, so it cannot be written.
+
+- **perf/timeout (2026-11-27) - `Timeout.timeout` wakes its watcher thread only when it has to**
+  (`Src/StdLib/ironruby/timeout.rb`, an override that loads CRuby's file as it is and redefines two
+  methods of `Timeout::State`) - timed, not gated. A raise rescued through `Timeout.timeout` cost
+  152-164 us against CRuby's 3.1 (perf/ensure's finding). Taken apart with copies of timeout.rb
+  (each with one thing left out; no profiler: this container refuses perf_event_open and the
+  sampler could not be installed): without the `ensure request.finished` 21 us, without the
+  watcher's signal 57-60, without the handler's `rescue ExitException` 66, without the Proc's
+  `return` 62; and by thread (`Util/bench/timeout-shapes.rb`'s measure): with the signal 145 us of
+  process CPU of which 100 on the calling thread, without it 57 and 57. So each call's
+  `@condvar.signal` wakes the watcher, whose iteration (drain the queue, `min_by`, `reject!`, wait
+  again) then runs beside the raise: ~45 us of its own CPU and ~43 more on the caller. Pinned to one
+  CPU the difference shrinks (72 against 54): interference between the two threads, not the
+  watcher's work alone - not found further without a sampler (no contended Monitor entries:
+  `Monitor.LockContentionCount` 0 per call; no gen-0 collections).
+  The watcher needs a signal only when it would otherwise sleep past the new request's deadline. It
+  now publishes the deadline it waits for (`@watcher_deadline`, under `@queue_mutex`, while in the
+  condition variable's wait), and `add_request` signals when the new deadline is earlier, when the
+  watcher is not in that wait (in `@queue.pop`, which the push wakes, or between waits, where it
+  checks the queue under the mutex), or when the queue has 64 requests. A request not signalled for
+  is due no earlier than what the watcher wakes for, and it drains the queue then: every timeout
+  fires when CRuby's would. Without a raise the watcher usually finds the request finished, drops it
+  and blocks in `@queue.pop`, which every push wakes as before, so that path is unchanged.
+  Timing (`ab.rb`, six rounds, the calling thread's CPU, ns): raise 53,328 -> 32,954 (0.62); no raise
+  2,765 -> 3,146 and the bare raise control 4,753 -> 4,750, both overlapping. Process CPU of a raise,
+  two runs (`Util/bench/timeout-shapes.rb`'s measure, us): 164 and 135 -> 76 and 69. Callgrind gives
+  nothing here: valgrind runs one thread at a time, so the interference cannot appear, and the
+  baseline's arm failed under it.
+  What is left of the raise (57 against a bare 8): `Error.handle_timeout`'s `rescue ExitException =>
+  e` (a class list by constant: a catch, a backtrace, then `raise` again; a frame like it alone 29 us
+  against 8.6 for a core class) and the Proc's `return yield` inside begin/ensure.
+  Checked: `Util/timeout-matrix.rb` (new, 28 rows: firing in sleep, a busy loop, IO and Queue#pop,
+  nil/zero/negative, a custom class and message, the backtrace, ExitException not taken by a bare
+  rescue, a raise in the block with its cause and `$!`, nested both ways, a short timeout after 2,000
+  long ones and inside a long one with 200 queued, two threads, one watcher thread after 10,000
+  calls) prints CRuby's output on the unchanged build and on this one (with the JIT on, `-X:NoJIT
+  -X:NoOSR`, `-X:NoJITCalls`, `IR_LIGHT_FRAMES=0`); ruby/spec library/timeout (7), core/thread/raise
+  (77) and core/kernel/sleep (15) pass on both.
+  For the gate: Timeout's own code is CRuby's and is loaded as it is; a timeout gem installed over it
+  is not overridden (the override is found first on the load path only for `require "timeout"` of
+  the stdlib copy).
+
+- **perf/jitaref (2026-11-26) - `a[i]` in a typed body after some Array has a singleton `[]`**
+  - trace only, not gated (the census cannot see it: it loads no library). The side finding of
+  perf/jitconst: app-shapes declined `OptionParser.top` (`@stack[-1]`) and `.base`, and rejected
+  `Gem::Requirement#none?`, all at "[] on a RubyArray". The typed body takes `recv[i]` with any
+  Integer index already (negative from the end, out of range nil: `JitRuntime.IndexInt`); in
+  isolation `top` is specialized. What turned it off is CSV: `csv/fields_converter.rb` defines
+  `def NO_QUOTED_FIELDS.[](_index)` on one Array, which puts `[]` in Array's
+  `ClrSingletonMethods`, and `HasPlainInstances` then says no for the class for the rest of the
+  process - every program that requires `csv` lost Array element reads in every typed body whose
+  receiver is not a typed Array parameter.
+  Now, while `Array#[]` is the public library method and Array has no adopted instances, a class
+  that only lost `HasPlainInstances` compiles the read with `IndexIntChecked` / `IndexLongChecked` /
+  `IndexObjChecked`: for an exact `RubyArray` receiver they ask whether this object has a singleton
+  class - the generic site's own test (`RubyOps.IsClrNonSingletonRuleValid`, an instance-data
+  lookup) - and deopt if it has, so the generic body dispatches to its method; any other receiver
+  goes to the existing helpers. A singleton defined after the compile moves Array's method version,
+  which the body's entry checks. A refinement of `Array#[]`, a redefinition, a subclass's own `[]`
+  and an adopted instance are refused or deopt as before.
+  Traces: app-shapes specialized 117 -> 119 (`OptionParser.top`, `OptionParser.base`), declined
+  after the pre-screen 30 -> 28; Json, Richards, DeltaBlue, CD and Havlak (3 x 10) the same on both
+  builds. `census.rb -d` 0 methods changed. `Gem::Requirement#none?` now stops at its second
+  obstacle, `@requirements[0] == DefaultRequirement` ("== on a receiver of unknown type"): Array#==
+  calls `==` on the elements (Ruby code), and an identity shortcut (true for the same object,
+  deopt otherwise) would deopt on every requirement that is not the default; left.
+  Instructions a call with CSV loaded (`Util/perf/callgrind/count.sh`,
+  `Util/bench/jit-aref-shapes.rb`, new): `@a[-1]` 2336 -> 1778 (0.76), `@a[i]` 2582 -> 2021
+  (0.78); `x[0]` on an Array parameter 2116 -> 2116 (the typed parameter path, unaffected), the
+  control `@a.size` 1523 -> 1523.
+  Checked: `Util/jit-aref-matrix.rb` (new, 24 rows: reads before and after one Array gets a
+  singleton `[]`, from bodies compiled before and after it, negative and out-of-range indexes, a
+  frozen Array, `dup` (no singleton) and `clone` (singleton kept) of the special Array, a singleton
+  `method_missing`, a subclass's own `[]`, Hash, String and nil receivers, an Array given its
+  singleton after the body compiled, a refinement, `Array#[]` redefined and restored), and jit,
+  jit-calls, jit-scan, osr-array and csv: CRuby's output and the unchanged build's with the JIT on,
+  `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`, and the unchanged build's with `IR_LIGHT_FRAMES=0`;
+  hot-shapes the unchanged build's in every mode with its known one-row difference from CRuby.
+  For the gate: an instance-data lookup per read for Arrays once the class has a singleton `[]`
+  anywhere - the cost the generic site pays in the same state; the other element methods (`[]=`,
+  `fetch`, `size`...) still use the class-wide test.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
@@ -1915,6 +2032,58 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the block's closure also reads it, per call, but that equivalence rests on ScopeBuilder's closure
     code. More block literals keep their tree on the dispatcher with the JIT on (any that assigns no
     enclosing local).
+
+- **perf/jitstr (2026-11-26) - `s + "lit"` and `s << "lit"` in a body the method JIT compiles** -
+  census only, not gated. Behind the String literal line (101 alone) are call arguments (44, gap 1's
+  wall, perf/strlit's rejected first build) and operands of String operators: `+` 12 (about 15 with
+  mixed forms), `<<` 11 (16 with `*` or `%` beside it), `"fmt" % x` 8, `"-" * n` 5, comparisons
+  a few (`s == "lit"` is perf/t3's intrinsic already). Taken: `+` and `<<` with a String literal
+  argument. Not `%` (format runs `to_s`/`inspect`: Ruby code from the typed body) nor `*` (left for
+  a step of its own). Different from round fifteen's String `==` and `String#[]` (perf/core2,
+  0.92 and 0.91 on their shapes, nothing hot compiled): judged by the methods that then compile,
+  and the screen takes the operator only where it lets a method through; and from the rejected
+  "`x == "lit"` without allocating" (code outside the JIT, bytes only): this is the typed body.
+  `EmitStringLiteralConcat`: for a receiver whose CLR type is exactly `MutableString` (a subclass
+  instance is another type) and whose encoding the literal's can join, the library's own code -
+  `MutableString.Concat` for `+`, `Append` for `<<` (`JitRuntime.StringConcatLiteral`,
+  `StringAppendLiteral`), the literal one frozen copy that neither keeps nor changes. Compiled only
+  while `String#+`/`#<<` are the public library methods with no String carrying a singleton method
+  of the name (`IsPlainLibraryMethod`, as `s == "lit"`; a redefinition moves the method version the
+  entry checks) and no refinement active where the method was written. Anything else deopts before
+  anything is done: nil, an Integer, an Array, a subclass, incompatible encodings (UTF-16LE), and for
+  `<<` a frozen receiver (FrozenError from the generic body's frame) or a chilled one (the
+  deprecation warning, and the String unchilled, by the generic body). `<<` is an effect, after its
+  own deopt and not one on self only (`_effectNotOnSelf`), so a deopt after it declines as usual; not
+  in an outlined loop. The screen refuses either as an operand of a binary operator (a String, so
+  the operator could only deopt): the first build let `URI::Generic#userinfo` (`@user + ':' +
+  @password`) through, and app-shapes' trace declined it after the pre-screen (30 -> 31); with that
+  refused the trace is the baseline's.
+  JIT compiles 3,376 -> 3,384, maybe 2,989 -> 2,997, never 22,011 -> 21,995, light frames unchanged
+  (Src/StdLib + AWFY, 28,376 methods; 16 methods moved up - 8 to `compiles`, 8 to `maybe` - none
+  down). Moved: `Net::HTTP#debug` (two copies), RDoc's `accept_rule`, `accept_blank_line` and
+  `accept_list_end`, `REXML::Declaration#to_s`, `REXML::Text#xpath`, `IPAddr#reverse`,
+  `#ip6_arpa`, `#ip6_int`, Thor's `file_collision_help`, `Bundler::UI::RGProxy#say`; none of AWFY
+  (Json's are call arguments) or the prelude. Real code barely has it: of the methods app-shapes
+  calls, the String literal is the only refusal in none.
+  Traces: app-shapes 117 specialized and 30 declined after the pre-screen on both builds; AWFY
+  Json, Richards, DeltaBlue, CD and Havlak (3 x 10) the same on both; `census.rb -c` 290 agree, 0
+  differ, and app-shapes' known 15.
+  Instructions a call (`Util/perf/callgrind/count.sh`, `Util/bench/jit-strop-shapes.rb`, new):
+  `s + ":"` 3308 -> 3048 (0.92), `s + ":" + "x"` 4669 -> 3979 (0.85), `buf << "x"` 3910 -> 3116
+  (0.80), `@user + ":"` 3462 -> 3137 (0.91), the control `s == "lit"` 1244 -> 1244. The
+  concatenation itself is most of the cost; the typed body saves the literal's allocation and the
+  dispatch.
+  Checked: `Util/jit-strop-matrix.rb` (new, 31 rows: new and unfrozen results, a frozen receiver of
+  `+`, UTF-8, BINARY and US-ASCII receivers, UTF-16LE, nil, Integer and Array receivers, a subclass
+  with and without its own `+`, a singleton `+`, `<<` on frozen, chilled (with the deprecation
+  warning counted), UTF-16LE and BINARY receivers, an effect then a deopt, `<<` then an ivar write
+  on a frozen self, a refinement, `String#+` and `#<<` redefined and restored), and jit,
+  jit-calls, jit-strlit, jit-scan, jit-interp, jit-const: CRuby's output and the unchanged build's
+  with the JIT on, `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`, and the unchanged build's with
+  `IR_LIGHT_FRAMES=0`; hot-shapes and inline-matrix (one case per process) the unchanged build's in
+  every mode, with their known one-row differences from CRuby.
+  For the gate: no IronRuby.Tests or spec run. A String given a singleton `+` anywhere makes every
+  later compile of `+` bail for the life of the process (`HasPlainInstances`, as for `==`).
 
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
@@ -5450,6 +5619,152 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
+  above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
+  The idea (perf/rescuefilter): a rescue above a passed ensure catches and throws again (~20 us for the
+  first such frame) only because Ruby evaluates its class list after the ensure runs; run the ensure
+  from the rescue's first-pass filter, then decide there, and have the second pass skip the clause.
+  Not sound, for the CLR's model rather than the work: (1) the CLR finally blocks between the raise and
+  the ensure - a Mutex's unlock and File.open's close in C# library methods, the DLR's `$!` restores,
+  every Ruby frame's bookkeeping - run in the second pass, and Ruby wants them before an outer ensure:
+  `Util/raise-matrix.rb` "pe: a Mutex unlocked before the outer ensure" prints `[[:locked, false]]` on
+  CRuby and today, the early clause would see `true`; (2) a compiled or light frame's clause reads its
+  frame's CLR locals and cannot be called from an outer filter without compiling every ensure clause
+  as a closure (a cost on the path that does not raise); (3) a clause that raises, jumps (`return`,
+  `break`, `next`, `throw`, `retry` above) or is interrupted (Thread#raise, Thread#kill) cannot do so
+  from inside a filter, which can only return, and whose exceptions the CLR swallows.
+  `Util/raise-matrix.rb` has seventeen new rows, "a rescue above a passed ensure" (the ensure before a
+  class list that is a method call, a constant reassigned / `===` defined / the exception extended in
+  the ensure, `$!`, cause, each jump, retry, Mutex and File order, the backtrace, Thread#raise and
+  Thread#kill during the ensure): CRuby's output on the unchanged build in every mode. What is left
+  for the cost: a cheaper catch (a lazier capture, `ExceptionDispatchInfo` for the throw again),
+  which needs a sampler.
+
+- **perf/rescuefilter (2026-11-27) - deciding a constant rescue class list in the first-pass filter:
+  measured, not built - it is decided there already, except above a passed ensure, where it cannot
+  soundly be.** perf/timeout named "`rescue ExitException => e`: 29 us per frame against 8.6 for a core
+  class". Wrong attribution: alone, a rescue of a user class named by a constant - top-level,
+  qualified, lexical in a module, with or without `=> e`, of an Exception subclass followed by `raise`
+  - costs what a core class does (8-16 us per raise against a bare 8,
+  `Util/bench/rescue-above-ensure-shapes.rb`, new), because `RubyOps.RescueSiteCannotMatch` reads the
+  clause's constant site cache in the filter, for any constant. What turns the filter off is not the
+  class but an ensure the exception has already gone through: `RescuePassMayTest` refuses while
+  `PendingPassedEnsures` is not zero, for every class list, core classes included - Ruby evaluates the
+  class list after those ensures have run, and the CLR's first pass runs before them. Then the frame
+  catches, completes the backtrace the ensure began (`TakePassedEnsureCapture`,
+  `CaptureExceptionTrace`), finds no match and throws again: the first such frame above an ensure
+  costs about 20 us (33 against 14 without the ensure), each further one about 3 (three: 43);
+  CRuby 0.8 and 1.2. Timeout's raise has exactly this shape (`handle_timeout`'s rescue above the
+  Proc's `ensure request.finished`): with perf/timeout's override, leaving out any one of the
+  rescue, the ensure or the Proc takes it from 63-76 us to 25-31.
+  Not sound to decide in the filter: the pending ensure runs arbitrary code first (`request.finished`
+  calls a method), which can reassign the constant (the site's version would move, but only after
+  the filter answered), define `===` on the class, or `extend` the exception with a module of the
+  class list. What would take it: run the pending ensure clauses from the filter itself, on top of
+  the raise, before the class list is looked at (the order Ruby wants), and have the second pass skip
+  them - the pieces are there for ensure-only bodies (`PassEnsure`, `EnterPassedEnsure`, the stack
+  room `PassEnsureStackRoom` keeps for a clause run on top of the raise), not for a clause that a
+  rescue frame above has to wait for. A larger change than a step; its matrix would need every row of
+  raise-matrix about ensure order, `$!`, cause, retry and jumps out of an ensure.
+
+- **perf/ensure (2026-11-26) - the catch-and-rethrow of an `ensure` clause that jumps (#213 item 3):
+  measured, not built - real code almost never has such a frame on a raise's path.** Compiled, an
+  `ensure` already lets an exception go through a CLR filter (`EnsureGuardExpression`,
+  `RubyOps.PassEnsure`); a clause with a jump in it - a call with a block, `yield`, zsuper,
+  `return`/`break`/`next`/`retry` (`Body.EnsureJumpFinder`, `GotoFinder`) - is made a catch of
+  everything and a throw again by the DLR's FlowControlRewriter, and its guard gets frame depth -1,
+  so an exception whose backtrace is still to be taken is caught there.
+  Cost (`Util/bench/ensure-jump-shapes.rb`, new, us per raise rescued, IronRuby / CRuby): one frame
+  plain 12.5 / 0.79, calling a block 55 / 0.99, yielding 61 / 0.87; twenty frames plain 28 / 2.3,
+  block 119 / 4.2, yield 112 / 3.1. So the first such frame costs about 43 us - the backtrace taken
+  eagerly where the plain ensure defers it - and each further one about 4.5 us, the rethrow.
+  How often: the prelude's 24 `ensure` clauses have no jump; of 276 in `Src/StdLib/ironruby` and
+  `ruby/4.0`, 25 do, all in cold code - socket helpers (4), bundler's DSL, CLI and settings (6),
+  open3 (2), irb (2), resolv, mkmf, rdoc, rubygems, puma (2), pty, msgpack, bigdecimal. A raise
+  through the frames real code puts around it (`Util/bench/raise-through-shapes.rb`, new, us,
+  IronRuby / CRuby): bare 8.1 / 0.59, Monitor#synchronize 11.7 / 0.67, Mutex#synchronize 11.8 /
+  0.68, File.open with a block 16.3 / 2.1, Array#each 16.0 / 0.69, Integer#times 15.9, Hash#each
+  16.2, loop 17.3, tap 14.8 - none carries the ~43 us of a jump-ensure. The rethrow is real but off
+  the paths that raise; a DLR patch for it (Build/dlr-patches) was not written.
+  Found instead: **`Timeout.timeout` with a raise in its block costs 152-164 us against CRuby's 3.1**
+  (9.2 / 2.0 without the raise). Its own ensure (`request.finished`) has no jump; the path has
+  `return yield(sec)` from a Proc inside a begin/ensure, and `Error.handle_timeout`'s `rescue
+  ExitException => e` with `raise` again (a class list by constant, so a catch and a backtrace, then a
+  re-raise). Pieces of it measured alone: a `rescue E2 => e` frame 12.3 us, a Proc with `return
+  yield` and an ensure 15-31, the two together 44: they do not add up to 155, so the rest is still to
+  be found. That is the next step here, not the ensure rethrow.
+
+- **perf/jitbind (2026-11-26) - binding a call on another receiver (a parameter, an ivar, a local
+  whose class the profile knows) to the callee's typed body, with a generic call as the fallback:
+  counted, not built - nothing it would take stops there.** The three methods gap 1 names: DeltaBlue's
+  and Havlak's `Dictionary#at` is specialized already on 9040b98 (`IdEntry#match`, the call on the
+  loop's `e`, `hash` and `get_bucket` are inlined into it: perf/havlak's inlining on an unsampled
+  local; the gap's "declines at `match`" was out of date). Richards' `queue_packet` is refused at
+  `t.add_input_and_check_priority`, but that callee has no typed body to bind to: it is declined
+  itself at `append` (the effect rule). CD's `RedBlackTree#get` waits for `find_node`, which is
+  declined at `current.key`, an attribute read on the local its `while` loop reassigns (the
+  `key.compare_to` on the parameter is inlined there already). Then every "call:" rejection in
+  app-shapes and the fourteen AWFY traces (3 x 10), with whether its callee had a typed body in the
+  same run: 24 in app-shapes and 23 in AWFY, of which the callee has none in all but a handful;
+  those are calls on self (`is_digit`, `is_white_space`, `set_is_root`, `is_shorter_than`,
+  `internal_init`: `-X:JITCalls`' already), the "no typed body yet" rejections of methods
+  specialized later in the run (`at`, `add`, `hash_slot_for`), and Towers' `pop_disk_from` at
+  `top.next`, an attribute reader on a local read from an Array (the callee "specialized" was
+  `Random#next`, a name match). One call on another receiver to a typed callee is left: Bounce's
+  `Ball#initialize`, `random.next` on a parameter, a constructor run once per ball, whose callee
+  writes `@seed` - so each bound call is an effect before the next one that could fail its class
+  check, and it needs the generic-call fallback after an effect this gap describes, for one cold
+  method. Not built.
+  What the walls are now, then: callees without typed bodies (the effect rule: `append`,
+  `read_string_internal`, `move_top_disk`/`push_disk`, `is_input`, `value` at `new`), and
+  attribute reads and writes on locals that hold an element or a loop's value (`current.key`,
+  `top.next`, `x.right` in `successor`). The latter is gap 3's, and the next step for CD and
+  Towers.
+
+- **perf/jitplain (2026-11-26) - the per-receiver test of perf/jitaref for the typed body's other
+  core operations: nothing to take.** The other operations (`Array#[]=`, `fetch`, `size`, `first`,
+  `last`, `push`/`<<`, `==`, `Hash#[]`/`[]=`/`fetch`/`key?`, `String#size`/`==`/`[]`, the
+  Integer and Float operators) still use the class-wide `HasPlainInstances`, so the question was
+  which of them a real run turns off. `Util/perf/plain-probe.rb` (new) prints, at exit, every core
+  class whose `ClrSingletonMethods` or `HasAdoptedInstances` is set. In app-shapes, `gem list`, a
+  run requiring csv, json, set, optparse, uri, net/http, erb and logger, and all fourteen AWFY
+  benchmarks: only Array is ever touched, with the names `[]` (CSV's `NO_QUOTED_FIELDS`, which
+  perf/jitaref took), `getopts`, `initialize`, `options`, `options=`, `order!`, `parse!`,
+  `permute!` (optparse extends `ARGV` with `OptionParser::Arguable`) and `resolve_feature_path`
+  (`$LOAD_PATH`'s, in every process); no `method_missing`, no adopted instance, and Hash, String,
+  Symbol, Range, Proc, Time, Regexp, MatchData, nil, true, false, Integer and Float untouched. None
+  of those names is an operation the typed body takes, so no class-wide test fails for one in these
+  runs and a per-receiver test would change nothing they do. Not built. What would make it worth
+  building: a library that gives one String or Hash a singleton method of an operator's name, or a
+  `method_missing` (DelegateClass and SimpleDelegator do not: they are Ruby objects); the probe
+  finds it.
+
+- **perf/jitconst (2026-11-26) - "JIT maybe: constant without a scope" is the census's, not the
+  runtime's; nothing to let in.** The census's second "maybe" line (455 methods of Src/StdLib +
+  AWFY on 9d2c89a: ENV 19, Array 12, Integer 11, URI 11, AF_INET 8, BN 7) comes from
+  `ResolveConstant` bailing when `_constantScope` is null, and the census calls
+  `JitCompiler.TryCompile` with no scope at all (it runs no program, so there is no declaring
+  scope to look a constant up in). A real compile gets the stub's declaring scope and folds the
+  constant, revalidated at entry (perf/constrev). Traces: app-shapes calls 10 of these methods and
+  specializes 4 (`ERB#make_compiler`, `ERB::Compiler::Scanner#initialize`,
+  `Gem::Specification#platform`, `Shop::Product#tax_rate`); two are declined for something else
+  (`OptionParser.top` and `Gem::Requirement#none?`, both at "[] on a RubyArray": `@stack[-1]`,
+  `@requirements[0] == ...`), four never turn hot. Fourteen AWFY benchmarks (2 x 5): 118
+  specialized, and no rejection or decline anywhere names a constant, autoload or a deprecated
+  constant (`JitFoldedConstant.Resolve`'s failures).
+  What stands behind the constant, found with a census-only probe (not kept: an unresolved
+  constant emitted as an opaque object, and a body that then compiled reported as "constant
+  only"): of the 455, 221 still stop at the constant, using it where the value is needed (a class
+  for `new`, `when`, `::X`, a receiver such as `ENV[k]`), 183 have nothing else behind it - they
+  compile once a run resolves the constant to a value the body can type - and about 50 stop next at
+  a call or another profile question. So the line is a census blind spot, not a refusal: a step
+  that made the census resolve constants would change its verdicts, not what runs. The runtime
+  questions of gap 29 (a later constant shadowing a folded one, autoload in flight,
+  `const_missing`, private constants) were not touched.
+  Also found: two of app-shapes' methods are declined at "[] on a RubyArray" for an element read
+  with a negative index or of an Array instance variable compared with `==` - a typed-body
+  question for another step.
 
 - **perf/lexical3 (/perf-step, 2026-11-26, on 3cabf57) - bind the positionals of `def m(a, *r,
   k: 1)` in the calling convention instead of out of one splat** (the idea perf/lexical2's entry

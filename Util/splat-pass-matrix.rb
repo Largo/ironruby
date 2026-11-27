@@ -446,6 +446,54 @@ end
 t('a made splat recursing') { |i| deep_fresh(100 + i % 3, 0).size }
 t('a made splat a million deep', 1) { dfresh(1_000_000, 0) }
 
+# ---------------------------------------------------------------- 10b. a rest parameter passed on
+# `def w(*a) = n(*a)' where nothing can see `a' again gives n's rest parameter the Array itself
+# (ForwardedRest, RubyCallFlags.HasFreshSplat; IR_FORWARD_REST=0 turns it off). What n keeps or changes must
+# not reach the caller's own list, another call's, or a variable of w that something still reads.
+
+def f_own(*a) = own(*a)
+def f_keep(*a) = keep(*a)
+def f_chain2(*b) = own(*b)
+def f_chain(*a) = f_chain2(*a)
+def f_escape(*a) = ($esc = a; own(*a))
+def f_mut(*a) = (a << :mut; own(*a))
+def f_bind(*a) = (bd = binding; r = own(*a); [r, bd.local_variable_get(:a)])
+def f_loop(*a) = (i = 0; r = []; while i < 2; r << keep(*a); i += 1; end; [r, r[0].equal?(r[1])])
+def f_blk(*a) = own(*a).map { |x| x }
+def f_pass(*a, &b) = yielder(*a, &b)
+def yielder(*r) = (r << yield; r)
+def kwt(*r, **k, &b) = [r, k, b ? b.call : nil]
+def f_dots(...) = kwt(...)
+ruby2_keywords def f_r2(*a) = kwt(*a)
+def f_send(*a) = send(:own, *a)
+def f_pub(*a) = public_send(:own, *a)
+class FwA; def m(*r) = (r << :a; r); end
+class FwB < FwA; def m(*a) = super(*a); end
+class FwZ < FwA; def m(*a) = super; end
+class FwMM; def method_missing(n, *a) = own(*a); def respond_to_missing?(*) = true; end
+def f_ret(*a) = a.size
+t('forward into a rest that changes it') { |i| x = [i % 2]; r = f_own(*x); [r, x] }
+t('forward a made splat') { |i| r = f_own(i % 2, 3); r }
+t('two calls keep two Arrays') { $kept.clear; f_keep(1); f_keep(2); [$kept, $kept[0].equal?($kept[1])] }
+t('a chain of forwards') { |i| x = [i % 2]; [f_chain(*x), x] }
+t('the rest escaping first') { |i| r = f_escape(i % 2); [r, $esc] }
+t('the rest changed first') { |i| x = [i % 2]; [f_mut(*x), x] }
+t('a binding sees the rest') { |i| f_bind(i % 2) }
+t('in a loop') { |i| f_loop(i % 2) }
+t('with a block literal') { |i| f_blk(i % 2) }
+t('with a block passed on') { |i| f_pass(i % 2) { :y } }
+t('... with keywords and a block') { |i| f_dots(i % 2, k: 1) { :b } }
+t('... without keywords') { |i| f_dots(i % 2) }
+t('ruby2_keywords passes keywords on') { |i| f_r2(i % 2, k: 2) }
+t('ruby2_keywords, a Hash positional') { |i| f_r2(i % 2, {k: 2}) }
+t('send') { |i| x = [i % 2]; [f_send(*x), x] }
+t('public_send') { |i| x = [i % 2]; [f_pub(*x), x] }
+t('super(*a)') { |i| x = [i % 2]; [FwB.new.m(*x), x] }
+t('zsuper') { |i| x = [i % 2]; [FwZ.new.m(*x), x] }
+t('method_missing') { |i| x = [i % 2]; [FwMM.new.nothing(*x), x] }
+t('a callee without a rest') { |i| f_ret(i, 2) }
+t('an empty rest') { f_own }
+
 # ---------------------------------------------------------------- 11. refinements (last: `using' keeps every method
 # defined after it in this file out of light frames)
 

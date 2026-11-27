@@ -666,6 +666,50 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
+        /// <summary>`v + "lit"' or `v << "lit"' (EmitStringLiteralConcat): one argument, a String literal.</summary>
+        internal static bool IsStringLiteralConcat(MethodCall/*!*/ node) {
+            if (node.MethodName != "+" && node.MethodName != "<<") { return false; }
+            var args = node.Arguments;
+            return node.Target != null && node.Block == null && args != null && args.Expressions.Length == 1 &&
+                IsPlainStringLiteral(args.Expressions[0]);
+        }
+
+        /// <summary>
+        /// `v + "lit"', `v << "lit"': the generic code makes a new String for the literal on every evaluation and dispatches on
+        /// v. For a v that is a String (JitRuntime.StringConcatLiteral, StringAppendLiteral), String#+ and #&lt;&lt; being the
+        /// library methods - public, no String with a singleton method of that name, no subclass instance (those are another
+        /// CLR type), no refinement where the code was written - that is the library's own MutableString.Concat or Append of
+        /// the literal, which neither keeps nor changes. Anything else deopts before anything is done. `+' makes a new String
+        /// and has no effect; `&lt;&lt;' changes v: an effect, after its own deopt, and not one on self only.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitStringLiteralConcat(MethodCall/*!*/ node, out JT type) {
+            string name = node.MethodName;
+            bool append = name == "<<";
+            if (!_refinements.IsEmpty) { throw Bail("String#" + name + " where a refinement is active"); }
+            if (append && _loop != null) { throw Bail("String#<< in an outlined loop"); }
+            var stringClass = KindClass(JitRuntime.KindString);
+            if (!IsPlainLibraryMethod(stringClass, name) || !IsPublic(stringClass, name)) {
+                throw Bail("String#" + name + " is not the built-in one");
+            }
+            Type observed = ObservedType(node.Target);
+            if (observed != null && observed != MixedTypes && observed != typeof(MutableString)) {
+                throw Bail(name + " of a String literal on a " + ((observed == typeof(void)) ? "nil" : observed.Name));
+            }
+            JT vt;
+            var v = Emit(node.Target, out vt);
+            if (vt != JT.Obj) { throw Bail(name + " of a String literal on a " + vt); }
+
+            var literal = ((StringLiteral)node.Arguments.Expressions[0]).GetMutableString();
+            literal.Freeze();
+            _canDeopt = true;
+            if (append) {
+                _pure = false;
+                _effectNotOnSelf = true;
+            }
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M(append ? "StringAppendLiteral" : "StringConcatLiteral"), v, Ast.Constant(literal));
+        }
+
         internal static bool IsStringLiteralComparison(MethodCall/*!*/ node) {
             if (node.MethodName != "==" && node.MethodName != "!=") { return false; }
             var args = node.Arguments;
@@ -1203,11 +1247,34 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Call(JitRuntime.M("StringIndex"), recv, Ast.Convert(index, typeof(long)));
             }
             bool arrays, hashes;
+            if (!IsPlainLibraryMethod(ArrayClass, "[]") && IsArrayIndexCheckedPerReceiver()) {
+                // some Array has a singleton `[]' or method_missing (CSV's NO_QUOTED_FIELDS): this one is asked (IndexIntChecked)
+                hashes = IsPlainLibraryMethod(HashClass, "[]") && IsPublic(HashClass, "[]") && IsPlainLibraryMethod(HashClass, "default")
+                    && KeyLookupIsPlain();
+                RequireCollectionReceiver(receiver, true, hashes, "[]");
+                _canDeopt = true;
+                type = JT.Obj;
+                return Ast.Call(JitRuntime.M(helper + "Checked"), Ast.Constant(_context), recv, index, Ast.Constant(hashes));
+            }
             RequireElementMethod("[]", "default", out arrays, out hashes);
             RequireCollectionReceiver(receiver, arrays, hashes, "[]");
             _canDeopt = true;
             type = JT.Obj;
             return Ast.Call(JitRuntime.M(helper), recv, index, Ast.Constant(arrays), Ast.Constant(hashes));
+        }
+
+        /// <summary>
+        /// Array#[] is the public library method and no Array is adopted by a Ruby class, but some Array has had a singleton
+        /// `[]' or method_missing, so the class no longer answers for its instances (HasPlainInstances): each receiver is
+        /// asked whether it has a singleton class, as the generic call site asks it (RubyOps.IsClrNonSingletonRuleValid).
+        /// A singleton defined later moves Array's method version, which a body compiled before it checks at its entry.
+        /// </summary>
+        private bool IsArrayIndexCheckedPerReceiver() {
+            var array = ArrayClass;
+            if (!IsBuiltinMethod(array, "[]") || !IsPublic(array, "[]")) { return false; }
+            using (_context.ClassHierarchyLocker()) {
+                return !array.HasAdoptedInstances;
+            }
         }
 
         internal static bool IsHashQuery(string/*!*/ name, int argc) {
