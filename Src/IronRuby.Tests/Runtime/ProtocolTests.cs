@@ -735,5 +735,37 @@ ErrorMessages.rb:37: warning: Float -1e-400 out of range
 => -0.0
 ", OutputFlags.Match);
         }
+
+        /// <summary>
+        /// A respond_to? that claims a conversion method the object does not have, with the default method_missing: no conversion
+        /// (try_convert is nil, Array() wraps, + raises the conversion's TypeError), as MRI's rb_check_funcall has it, not a
+        /// NoMethodError; a method_missing that answers the conversion still does. Util/array2-matrix.rb's NoAry.
+        /// </summary>
+        public void Protocol_RespondToWithoutMethod1() {
+            TestOutput(@"
+class NoAry
+  def respond_to?(name, priv = false) = name == :to_ary || name == :to_str || name == :to_hash
+  def inspect = ""NoAry""
+end
+class MMAry
+  def respond_to?(name, priv = false) = name == :to_ary
+  def method_missing(n, *) = n == :to_ary ? [7] : super
+end
+o = NoAry.new
+[-> { Array.try_convert(o) }, -> { Array(o) }, -> { [1].concat(o) }, -> { [1] + o }, -> { [[1, 2], o].flatten },
+ -> { String.try_convert(o) }, -> { ""a"" + o }, -> { Hash.try_convert(o) }, -> { [1] + MMAry.new }, -> { Array(MMAry.new) }].each { |l| p((l.call rescue $!)) }
+", @"
+nil
+[NoAry]
+#<TypeError: no implicit conversion of NoAry into Array>
+#<TypeError: no implicit conversion of NoAry into Array>
+[1, 2, NoAry]
+nil
+#<TypeError: no implicit conversion of NoAry into String>
+nil
+[1, 7]
+[7]
+");
+        }
     }
 }

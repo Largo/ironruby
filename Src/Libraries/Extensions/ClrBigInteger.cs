@@ -703,11 +703,16 @@ namespace IronRuby.Builtins {
         /// </example>
         /// <returns>Float</returns>
         [RubyMethod("remainder")]
-        public static double Remainder(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+        public static object Remainder(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
             // Converted (and warned about) before the zero check, as MRI's coercion does.
             double dividend = Protocols.ConvertToDouble(context, self);
             if (other == 0.0) {
                 throw new DivideByZeroException("divided by 0");
+            }
+            // A Fixnum's remainder is MRI's num_remainder, which answers the dividend itself - an Integer - for an infinite
+            // divisor of the other sign: -3.remainder(Float::INFINITY) is -3.
+            if (Double.IsInfinity(other) && self >= FixnumMin && self <= FixnumMax && !self.IsZero && (self.Sign < 0) != (other < 0)) {
+                return Protocols.Normalize(self);
             }
             return dividend % other;
         }
@@ -724,7 +729,14 @@ namespace IronRuby.Builtins {
         /// prelude, under its alias): the coerced dividend's % and its sign, not its #remainder.
         /// </remarks>
         [RubyMethod("remainder")]
-        public static object Remainder(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
+        public static object Remainder(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            BinaryOpStorage/*!*/ coercedRemainderStorage, object/*!*/ self, object other) {
+            // A Bignum's is rb_big_remainder, which coerces and calls #remainder: (2**70).remainder(Complex(1, 1)) is "undefined
+            // method 'remainder' for an instance of Complex", where a Fixnum's num_remainder asks for '%'.
+            if (self is BigInteger big && (big < FixnumMin || big > FixnumMax) || self is long l && (l < (long)FixnumMin || l > (long)FixnumMax)) {
+                // (a storage of its own: one holds a single site, and binaryOpSite's is __ir_num_remainder__)
+                return Protocols.CoerceAndApply(coercionStorage, coercedRemainderStorage, "remainder", self, other);
+            }
             var site = binaryOpSite.GetCallSite("__ir_num_remainder__");
             return site.Target(site, self, other);
         }

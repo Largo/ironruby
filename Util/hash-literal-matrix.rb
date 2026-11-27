@@ -122,8 +122,8 @@ t('duplicate keys keep the last value') { o_dup(:x) }
 t('duplicate keys keep the first key') { a = +"k"; b = +"k"; r = o_dup_str(a, b); [r, r.keys[0].equal?(a)] }
 t('a String key is a frozen copy') { s = +"key"; r = h_key(s, 1); k = r.keys[0]; [k.frozen?, k.equal?(s), s.frozen?, (s << "!")] }
 t('a frozen String key is kept') { s = "fk".freeze; h_key(s, 1).keys[0].equal?(s) }
-# (not whether it is frozen: IronRuby freezes a String subclass key, CRuby 4.0 does not, light frame or not)
-t('a String subclass key') { c = Class.new(String); h_key(c.new("x"), 1).keys[0].class == c }
+t('a String subclass key is kept, unfrozen') { c = Class.new(String); k = c.new("x"); r = h_key(k, 1).keys[0]; [r.class == c, r.equal?(k), r.frozen?] }
+t('a String subclass key by []=') { c = Class.new(String); k = c.new("x"); h = {}; h[k] = 1; [h.keys[0].equal?(k), k.frozen?] }
 t('an Array key') { a = [1]; r = h_key(a, 2); [r, r.keys[0].equal?(a)] }
 t('a NaN key') { r = h_key(Float::NAN, 1); [r.size, r.key?(Float::NAN)] }
 t('0 and 0.0 keys') { h_keys(0, 0.0) }
@@ -237,8 +237,9 @@ def e_key(x) = { x.fetch(9) => 1 }
 def e_loud(k) = { k => 1 }
 def e_four(x) = { a: 1, b: 2, c: 3, d: x.fetch(9) }
 def e_str(x) = { "s" => x.fetch(9) }
-# (not of a literal whose value calls a missing method: CRuby answers nil, IronRuby "expression", light frame or not)
 def d_lit(x) = defined?({ a: x })
+def d_missing(x) = defined?({ a: x.nope })
+def d_missing_key(x) = defined?({ x.nope => 1, b: 2 })
 def d_empty = defined?({})
 def traced(x) = { tr: x }
 
@@ -250,6 +251,7 @@ t('raise in a String-keyed value') { begin; e_str([]); rescue IndexError => e; [
 t('raise line') { begin; e_value([]); rescue IndexError => e; e.backtrace_locations[1].lineno - __LINE__; end }
 t('defined? of a literal') { d_lit(1) }
 t('defined? {}') { d_empty }
+t('defined? of a literal whose value is a missing method') { [d_missing(1), d_missing_key(1)] }
 t('TracePoint :call sees it') do
   seen = []
   tp = TracePoint.new(:call) { |e| seen << e.method_id if e.method_id == :traced }

@@ -379,9 +379,13 @@ namespace IronRuby.Builtins {
             }
 
             if (encoding.IsSingleByteCharacterSet || encoding.StrictEncoding.IsSingleByte) {
-                // onigenc_single_byte_code_to_mbc
+                // onigenc_single_byte_code_to_mbc. CRuby 4.0's codelen has no length for a code above 0xFF (ONIGERR_INVALID_CODE_POINT_VALUE):
+                // "invalid character", but for BINARY and US-ASCII, whose %c rb_str_format writes as a byte ("256 out of char range").
                 if (code > 0xff) {
-                    throw OutOfCharRange(code);
+                    if (encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) {
+                        throw OutOfCharRange(code);
+                    }
+                    return null;
                 }
                 return new[] { (byte)code };
             }
@@ -417,17 +421,8 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageUTF32BE:
                 case RubyEncoding.CodePageUTF32LE:
                     // A UTF-32 character is four bytes whatever the number, so one that is too
-                    // large is an invalid codepoint, not one out of range. MRI compares the
-                    // number as a signed one, though: from 0x80000000 up it passes for a small
-                    // one, and comes out as its four bytes.
-                    if (codepoint >= 0x80000000) {
-                        bool bigEndian = encoding.CodePage == RubyEncoding.CodePageUTF32BE;
-                        var raw = new byte[4];
-                        for (int i = 0; i < 4; i++) {
-                            raw[bigEndian ? i : 3 - i] = (byte)(codepoint >> (8 * (3 - i)));
-                        }
-                        return MutableString.CreateBinary(raw, resultEncoding);
-                    }
+                    // large is an invalid codepoint, not one out of range - from 0x80000000 up too in
+                    // CRuby 4.0 (older MRIs compared the number as a signed one and let it through).
                     if (codepoint > 0x10ffff || codepoint >= 0xd800 && codepoint <= 0xdfff) {
                         throw InvalidCodePoint(encoding, codepoint);
                     }
@@ -487,9 +482,7 @@ namespace IronRuby.Builtins {
                     return MutableString.CreateMutable(Tokenizer.UnicodeCodePointToString((int)codepoint), resultEncoding);
 
                 case RubyEncoding.CodePageAscii:
-                    if (codepoint > 0xff) {
-                        throw OutOfCharRange(codepoint);
-                    }
+                    // (any code above 0x7F, 0x100 too: see the default case)
                     if (codepoint > 0x7f) {
                         throw InvalidCodePoint(encoding, codepoint);
                     }
@@ -574,19 +567,22 @@ namespace IronRuby.Builtins {
                         }
                         throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
                     }
-                    // Everything else - single byte encodings, dummy encodings, and anything whose
-                    // structure we don't model - has no character this wide. MRI's rb_enc_uint_chr
-                    // reports exactly that rather than refusing to answer: rb_enc_codelen returns
-                    // ONIGERR_TOO_BIG_WIDE_CHAR_VALUE and it raises "out of char range".
-                    throw OutOfCharRange(codepoint);
+                    // Everything else - single byte encodings (BINARY too), dummy encodings, and anything
+                    // whose structure we don't model - has no character this wide. CRuby 4.0's onigmo
+                    // answers ONIGERR_INVALID_CODE_POINT_VALUE for it (a single byte encoding's
+                    // code_to_mbclen), so rb_enc_uint_chr raises "invalid codepoint 0x100 in US-ASCII".
+                    // (String#<< onto a BINARY or US-ASCII string says "256 out of char range": see
+                    // MutableStringOps.Append.)
+                    throw InvalidCodePoint(encoding, codepoint);
             }
         }
 
         /// <summary>
         /// MRI distinguishes two RangeErrors: a code point that is wider than the encoding's
         /// longest character is "out of char range", while one that fits but is not assigned is
-        /// "invalid codepoint". So 0x100.chr("US-ASCII") is "256 out of char range" but
-        /// 0x80.chr("US-ASCII") is "invalid codepoint 0x80 in US-ASCII".
+        /// "invalid codepoint". A single byte encoding calls a code above 0xFF invalid in CRuby
+        /// 4.0, as it does an unassigned one: 0x100.chr("US-ASCII") and 0x80.chr("US-ASCII") are both
+        /// "invalid codepoint ... in US-ASCII".
         /// </summary>
         private static Exception/*!*/ InvalidCodePoint(RubyEncoding/*!*/ encoding, uint codepoint) {
             return RubyExceptions.CreateRangeError("invalid codepoint 0x{0:X} in {1}", codepoint, encoding.Name);

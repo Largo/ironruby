@@ -1858,5 +1858,37 @@ p t.map(&:value).uniq
 [4002000]
 ");
         }
+
+        /// <summary>
+        /// __callee__ in a method define_method made answers the name it was called by, an alias's, as in CRuby, on the first
+        /// calls and on a compiled rule alike, through Method#call and send too; __method__ answers the definition's name.
+        /// </summary>
+        public void DefineMethodCallee1() {
+            TestOutput(@"
+class C
+  define_method(:dm) { __callee__ }
+  alias_method :am, :dm
+  alias am2 dm
+  define_method(:dm2) { |x = 1| [__method__, __callee__] }
+  alias_method :am3, :dm2
+  def m = __callee__
+  alias_method :ma, :m
+end
+c = C.new
+p c.dm, c.am, c.am2, c.dm2, c.am3, c.ma, c.method(:am).call, c.send(:am), c.public_send(:am3, 2)
+r = nil; 3000.times { r = [c.am, c.am3] }; p r
+", @"
+:dm
+:am
+:am2
+[:dm2, :dm2]
+[:dm2, :am3]
+:ma
+:am
+:am
+[:dm2, :am3]
+[:am, [:dm2, :am3]]
+");
+        }
     }
 }

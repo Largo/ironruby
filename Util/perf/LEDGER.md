@@ -1163,8 +1163,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     two parameters).
     Round thirty-four (see Landed, perf/inv2): `Data.new`, `#with` and Data readers are direct;
     the invoice shapes are at CRuby's time. Left: initializers taking keywords (`Product.new(sku:
-    ...)`) at about 2x CRuby, `Hash#dup`, and Struct `keyword_init` as above. And
-    `Data.singleton_methods` lists `:allocate`, which CRuby's does not (as on the baseline).
+    ...)`) at about 2x CRuby, `Hash#dup`, and Struct `keyword_init` as above. (`Data.singleton_methods`
+    listed `:allocate`, which CRuby's does not: fixed in perf/crubydiff, see Landed.)
     perf/struct (see Landed, not gated): Struct keyword creation is stored in C#, `kw_new` 1017 ->
     198 ns against CRuby's 299 (`kw_hash` 147 against 196, `sub_kw` 379 against 356). Left from this
     gap: keyword initializers (`kwinit` 236 against 132) and `Hash#dup`.
@@ -1534,6 +1534,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     without a scope. A TracePoint `:line` event is reported for the body of an endless
     `def`, CRuby reports none. And with a refinement of `Symbol#to_s` in use, `"#{:s}"` asks
     the refined `to_s`; CRuby answers `"s"` without asking it.
+    Round thirty-seven (see Landed, perf/crubydiff): the endless `def` and the Symbol are fixed, and
+    the frame's line already matched CRuby on the branch (with and without a scope); the matrix has
+    rows for all three now. Left: in a heredoc, a part that is a local variable (`#{x}` on a line
+    below the statement) still names the statement's line - the bridge maps the part to the
+    variable's shared node, which carries the declaration's span, so the conversion gets no line of
+    its own (it would take a node that carries the part's span, and walker support for it). And a
+    parenthesized parameter default (`def f(x = (1))`) is a `:line` event to CRuby, none here.
 34. **Two differences from CRuby in Hash literals**, found by the probes of
     `Util/hash-literal-matrix.rb` on the build before perf/hashlit and left as they were
     (the matrix leaves them out, with a comment); not speed gaps. A key that is an
@@ -1541,6 +1548,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `h.keys[0].frozen?` is true and it is not `k`); CRuby 4.0 keeps `k` itself, unfrozen,
     and copies only a plain String. The same with `h[k] = 1`. And `defined?({a: 1.nope})`
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
+    Closed (see Landed, perf/crubydiff): the String subclass key is fixed; `defined?` already said
+    nil on the round-37 branch. The matrix has rows for both now.
 
 35. **`Enumerator#next` and every other fiber switch cost 40 to 80 times CRuby's**: a fiber is
     a thread here, and a switch is a handoff between two threads (about 20-40 us against 0.5).
@@ -1602,6 +1611,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     through `super`. And `Module#dup`/`clone` copies the constants in `super` of
     `initialize_copy`, where CRuby has copied them before it (a `const_get` in an
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
+    Closed (see Landed, perf/crubydiff): both are fixed. Found on the way, left: CRuby's copy of a
+    singleton class makes `initialize`, `initialize_copy` and `respond_to_missing?` private in the copy;
+    and an explicit `obj.method_missing(:w)` after a private call's error says "private method 'w'
+    called" in CRuby (its method_missing_reason is never cleared), "undefined method" here.
 
 38. **A keyword call into a method with a rest parameter, and the keyword prologue, outside
     the method JIT** (perf/lexical3, measured with `Util/perf/callgrind/count.sh`, instructions
@@ -1622,6 +1635,99 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/crubydiff (round thirty-seven, 2026-11-26) - differences from CRuby, not speed** - not
+  gated; one commit each, every one with CRuby 4.0's output as a registered IronRuby.Tests case.
+  - `Class#new` handed a library `initialize` (Struct's, Array's) the caller's scope, whose
+    refinements then reached it: `Util/struct-matrix.rb`'s `UsingRefine.make` (after 200 calls, when
+    the rule was compiled) and an Array subclass from the first call. The inner site now takes no scope
+    (`CallArguments.GetBoundCallSiteArguments`). struct-matrix: CRuby's output in full. Refinements16.
+  - `Data.singleton_methods` listed `:allocate` (gap 24), and so did ArithmeticSequence's and
+    Continuation's: the prelude's singleton `allocate` gave way to `Class#__ir_undef_alloc__`, MRI's
+    `rb_undef_alloc_func` (`RubyClass.UndefineAllocator`, checked in the allocate rule of that class
+    only). Prelude_DataUndefinedAllocator1.
+  - `frozen << x` raised Encoding::CompatibilityError (the three lines of hot-shapes-matrix that
+    differed from CRuby), `<< -1` / `<< 2**80` RangeError, `prepend(1)` TypeError: CRuby checks
+    frozenness first. The checks are on the error paths only (MutableString.MutateAppend when the
+    encodings clash, Append(int) before ToChr). hot-shapes-matrix: CRuby's output. Left: `frozen <<
+    Object.new` is TypeError (the binder converts first), `tr!` checks frozenness before the
+    encodings where CRuby does the opposite. String_AppendFrozenFirst1.
+  - A String subclass's instance as a Hash key (gap 34): stored as it is, unfrozen, as CRuby's
+    RHASH_STRING_KEY_P has it (SetHashElement and the JIT's HashStoreObj). hash-literal-matrix: two
+    new rows, baseline before; a third for `defined?({a: x.nope})`, already same. Hash_StringSubclassKey1.
+  - A private or protected method's call reaching BasicObject#method_missing through a user's
+    `super` (gap 37): the visibility now travels with the method_missing reason
+    (`RubyOps.SetMethodMissingReasonVisibility`, a MethodInfo field, not a new [Emitted] helper), and
+    the error says "private method 'x' called". One more thread-static write per call that reaches a
+    user's method_missing. SuperAndMethodMissing3.
+  - Module#dup / #clone (gap 37): the members are copied in IDuplicable.Duplicate, before
+    initialize_copy, as MRI 4.0's init_copy does; Module's and Class's own initialize_copy are gone
+    (CRuby's owner is Kernel). ModuleCopyBeforeInitializeCopy1.
+  - An endless def's expression is no TracePoint `:line` event (gap 33): the bridge adds it with
+    Statements.NoLine unless it holds parenthesized statements; a rescue modifier there keeps no line
+    either. interpolation-matrix: new row, baseline before. TracePoint_EndlessDefLine1.
+  - `"#{sym}"` under a refinement of Symbol#to_s is the name while Symbol#to_s is the built-in
+    (gap 33, vm_objtostring). interpolation-matrix: new row. Refinements17.
+  - `__callee__` in a define_method body called through an alias answered the definition's name
+    (found by perf/lframe): an alias call runs a copy of the method's lambda that carries the name
+    (Proc.CalleeName in its rare state; RubyLambdaMethodInfo.GetLambdaFor), in the rule and the
+    first-call dispatcher; such a call skips the method JIT's stub. light-entry-matrix (claude/perf-lsite)
+    "define_method body by alias": CRuby's output. DefineMethodCallee1.
+  Not fixed: `42.compare_to(o)` in inline-matrix's `tree_int_key` answers Int32#CompareTo's
+  "Object must be of type Int32." where CRuby has no such method. That is IronRuby's interop
+  (RubyModule.IsUnmangledBuiltin: snake_case CLR names on Integer and Float, `5.to_string("X")`,
+  which ClrTests asserts), not a leak; matching CRuby means dropping those names, or mapping them
+  only on request. Already matching on the branch when the round began: refinement before prepend on
+  Integer#+ (f7679a1), the frame line of a raising interpolation part, `defined?({a: x.nope})`.
+  Checked per fix (see each commit): the named IronRuby.Tests and the ruby/spec files around each
+  change on both trees, results as before (refine_spec 38/0, prepend_spec 55/0, spec/core/module
+  1050 examples with the 4 known errors, struct, data, class, kernel dup/clone, string, hash,
+  tracepoint, coverage, basicobject, nomethoderror, language def/method/send/private/protected).
+  For the gate: the two changes on dispatch-adjacent paths - Class#new's rule for a library
+  initialize (no scope argument now, so a light-scope site's `Struct.new`/`Array.new` rule no longer
+  sets ScopeRead) and method_missing's reason - and Module#dup/#clone, which now copies before
+  initialize_copy (anything that relied on Module#initialize_copy copying, e.g. a re-run
+  initialize_copy, gets Kernel's).
+  Second round (2026-11-27, on b887bc1): the causes of the gate's "baseline" rows. All matrices,
+  as built, this branch against b887bc1: lines differing from CRuby 14,255 -> 414, baseline
+  matrices 28 -> 19 (chr, format-c, format-c-bytes, format, pack, unpack, ungetc, encode,
+  string-methods, value-object, hash-literal, interpolation, hot-shapes, light-entry, struct now
+  same). One commit per cause, each with CRuby 4.0's output as a registered IronRuby.Tests case:
+  - Integer#chr and String#<< of a code above 0xFF in a single byte encoding: "invalid codepoint
+    0x100 in US-ASCII" (CRuby 4.0's onigmo), and UTF-32 from 0x80000000 up invalid too; "out of
+    char range" stays for << onto BINARY/US-ASCII and argument-less chr. chr-matrix 9,011 lines.
+    Integer_ChrSingleByte1 (Integer_ChrMultibyte1's expectation regenerated from 4.0.10).
+  - %c of such a code: "invalid character" (BINARY and US-ASCII keep "out of char range").
+    format-c and format-c-bytes, 4,682 lines. Sprintf_CharacterSingleByte1.
+  - Math.log(x, base) as rb_math_log (pole first, log2 quotient plus the shifted bits, a size_t),
+    atan2/hypot converting the second argument first, Math.sqrt of a Complex. math-matrix 97 -> 37.
+    Math_LogBaseAndOrder1.
+  - A respond_to? that claims to_ary/to_str/to_hash without the method, default method_missing:
+    no conversion (rb_check_funcall), in the binder's rule and the prelude's try_convert.
+    array2 19 rows. Protocol_RespondToWithoutMethod1.
+  - Integer#fdiv of a coerced result as a Float; Integer#remainder (dividend for an infinite
+    divisor, Bignum coercing with remainder); Float::INFINITY.divmod's "Infinity"; Rational#coerce's
+    class name and Numeric#divmod's modulo first. coerce-matrix 22 -> 4. Four tests.
+  - Kernel#Integer: sign-only strings "invalid value" before the radix, message via rb_inspect;
+    Rational()/Complex() naming true/false. numeric-conversion 18 -> 2. Two tests.
+  - sprintf directives cut short: "malformed format string", after fetching %1$ / %<name>'s
+    argument. format-matrix 16 -> 0. Sprintf_MalformedEnd1.
+  - Array#pack floats take a Numeric only (rb_to_float); unpack's "@" at the end counts 1;
+    String#undump passes \s and \0 through; String#encode's options keywords only; String#tr!
+    checks encodings before frozenness (a leftover of the first round). Five tests.
+  Left, with the reason: the "from nil to integer" / "gives NilClass" wording ruby/spec pins the
+  other way (array2 63, math 37, numeric-conversion 2); `x << 2**64`, a NoMemoryError in CRuby
+  (coerce 4); 42.compare_to (deliberate interop); ffi-matrix (CRuby does not exit 0);
+  regexp-binary-ctype's ISO-8859-1 column (25 rows: the regexp translator would need Onigmo's
+  ISO-8859-1 ctype table beside its ASCII one); emacs-mule (CRuby's own oddities); strftime
+  (%:% and friends), strptime, caller and thread-backtrace frames, marshal, converter and
+  io-conversion messages, stdre's URI regexp, eval's regexp warning, Enumerator::Lazy's prepended
+  helper in its ancestors, int-matrix's (2**100).equal?, the heredoc part's frame line and
+  `frozen << Object.new` (the binder converts first) - each a cause of its own, one or a few rows.
+  For the gate: callable-parameters-matrix shows a DIFF only because ruby4.rb's lines moved
+  (method(:puts).to_proc.source_location; CRuby says nil on both); Kernel#Integer(String) now
+  takes the context (one more argument on that fast path); the binder's conversion rule for an
+  overridden respond_to? resolves to_xxx and method_missing at build time.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
@@ -2444,7 +2550,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   three alternating runs: 26-27 us a class on master, 20-21 here, CRuby 4.1-4.4.
   `Util/struct-matrix.rb` (new, 110 rows, each cold, again and warm) prints CRuby's output but for
   `UsingRefine.make`, a refined `initialize` that Class#new sees on every IronRuby build (master
-  too); master differs in eight more rows. Matrices through gate-matrices.rb, as built, `-X:NoJIT
+  too; fixed in perf/crubydiff, see Landed); master differs in eight more rows. Matrices through gate-matrices.rb, as built, `-X:NoJIT
   -X:NoOSR`, `-X:NoJITCalls`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, R2R and `IR_FAST_STRUCT=0`:
   struct, hash-struct, hash-order, keyword-light, jit, jit-calls `same` or `baseline -16`,
   hot-shapes `baseline`: PASS. spec/core/struct: 170 examples, 1 error (the known deconstruct_keys
@@ -2695,7 +2801,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   work on the light-frame compile path, not binding: perf by DSO puts it in libcoreclr, libclrjit,
   CoreLib, Microsoft.Dynamic and System.Linq.Expressions.
   Found in passing, not fixed: CRuby calls a refinement of Integer#+ before a module prepended to
-  Integer; IronRuby calls the prepended module's method (light frames on and off).
+  Integer; IronRuby calls the prepended module's method (light frames on and off). (Fixed since by
+  f7679a1, "Search a refinement ahead of the modules prepended to what it refines": perf/crubydiff
+  found it matching CRuby in every mode, and `Util/shared-rule-light-matrix.rb` covers it.)
   Gate, the branch at 5b464e8c against b76d3a6f, Release net10.0: **PASS**. IronRuby.Tests
   PASSED on both (1,334). 36 matrices in five modes: 180 same, 0 differ. ruby/spec, all five
   suites: no failure the known list does not name. `ab.rb -i` on the rescue, keyword, loop and

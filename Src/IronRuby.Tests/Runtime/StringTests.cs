@@ -357,6 +357,34 @@ p t.chars.map(&:ord)
         /// through the selector's sets and ranges as before.
         /// </summary>
         /// <summary>
+        /// String#<<, #concat and #prepend check that the receiver can be modified before they look at what they are given
+        /// (MRI's rb_str_concat, rb_str_update): a frozen string raises FrozenError rather than the encoding, range or
+        /// conversion error the argument would bring. #insert checks the encodings first, as MRI's does.
+        /// </summary>
+        public void String_AppendFrozenFirst1() {
+            TestOutput(@"
+require 'ruby4'
+c = ""b"".encode(""UTF-16LE"").freeze
+[-> { c << ""x"" }, -> { c.concat(""x"") }, -> { c.prepend(""x"") }, -> { c.prepend(1) }, -> { c << -1 },
+ -> { c << 2**80 }, -> { c << 0x110000 }, -> { ""b"".freeze.prepend(Object.new) }, -> { c.insert(0, ""x"") },
+ -> { c.dup << ""x"" }].each { |l| p((l.call rescue $!)) }
+d = +""ab""; d << ""c"" << 0x64; p d
+", @"
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+""abcd""
+");
+        }
+
+        /// <summary>
         /// A carry out of a wrapped digit or letter skips over a separator to the next
         /// alphanumeric only when the two are of the same kind (rb_str_succ).
         /// </summary>
@@ -732,6 +760,72 @@ UTF-8 f09f9880: [128512, Integer, [128512], [128512, 128512], 128512]
         }
 
         /// <summary>
+        /// A code above 0xFF in a single byte encoding is "invalid codepoint 0x100 in US-ASCII" to Integer#chr and to
+        /// String#&lt;&lt; (CRuby 4.0's onigmo: ONIGERR_INVALID_CODE_POINT_VALUE), but "256 out of char range" for #&lt;&lt; onto a BINARY or
+        /// US-ASCII string (rb_str_concat) and for #chr with no argument and no default_internal (Util/chr-matrix.rb).
+        /// </summary>
+        public void Integer_ChrSingleByte1() {
+            TestOutput(@"
+[-> { 256.chr(""US-ASCII"") }, -> { 0x110000.chr(""UTF-8"") }, -> { -1.chr }, -> { 256.chr }, -> { (2**32).chr(""UTF-8"") },
+ -> { 0xd800.chr(""UTF-8"") }, -> { """".b << 256 }, -> { ""a"".encode(""ISO-8859-1"") << 300 }, -> { (2**40).chr(""UTF-8"") },
+ -> { 256.chr(""ISO-8859-1"") }, -> { 0x80.chr(""US-ASCII"") }, -> { 0x100.chr(""Windows-1252"") }, -> { 0x81.chr(""Windows-1252"") },
+ -> { 0xffff_ffff.chr(""ISO-8859-1"") }, -> { 0x1_0000_0000.chr(""ISO-8859-1"") }, -> { 0x8140.chr(""Shift_JIS"") }, -> { 0xffff.chr(""Shift_JIS"") },
+ -> { $VERBOSE = nil; Encoding.default_internal = ""US-ASCII""; 256.chr }, -> { 0x80.chr }].each { |l| p((l.call rescue $!)) }
+", @"
+#<RangeError: invalid codepoint 0x100 in US-ASCII>
+#<RangeError: 1114112 out of char range>
+#<RangeError: -1 out of char range>
+#<RangeError: 256 out of char range>
+#<RangeError: 4294967296 out of char range>
+#<RangeError: invalid codepoint 0xD800 in UTF-8>
+#<RangeError: 256 out of char range>
+#<RangeError: invalid codepoint 0x12C in ISO-8859-1>
+#<RangeError: 1099511627776 out of char range>
+#<RangeError: invalid codepoint 0x100 in ISO-8859-1>
+#<RangeError: invalid codepoint 0x80 in US-ASCII>
+#<RangeError: invalid codepoint 0x100 in Windows-1252>
+""\x81""
+#<RangeError: invalid codepoint 0xFFFFFFFF in ISO-8859-1>
+#<RangeError: 4294967296 out of char range>
+""\x{8140}""
+#<RangeError: invalid codepoint 0xFFFF in Shift_JIS>
+#<RangeError: invalid codepoint 0x100 in US-ASCII>
+""\x80""
+");
+        }
+
+        /// <summary>
+        /// #tr! and #tr_s! (MRI's tr_trans): an empty string is nil, frozen or not; the sets' encodings are checked
+        /// against the string's before the string is required to be modifiable.
+        /// </summary>
+        public void String_TranslateCheckOrder1() {
+            TestOutput(@"
+f = ""abc"".freeze; e = """".freeze; u = ""b"".encode(""UTF-16LE"").freeze
+[-> { f.tr!(""x"", ""y"") }, -> { f.tr!(""a"", ""y"") }, -> { e.tr!(""a"", ""b"") }, -> { u.tr!(""b"", ""x"") },
+ -> { f.tr_s!(""x"", ""y"") }, -> { e.tr_s!(""a"", ""b"") }, -> { u.tr_s!(""b"", ""x"") }, -> { f.tr!("""", ""y"") },
+ -> { f.delete!(""x"") }, -> { e.delete!(""x"") }, -> { f.squeeze! }, -> { e.squeeze! }, -> { u.delete!(""x"") }, -> { u.squeeze!(""x"") },
+ -> { u.count(""x"") }, -> { f.tr!(1, 2) }].each { |l| p((l.call rescue $!)) }
+", @"
+#<FrozenError: can't modify frozen String: ""abc"">
+#<FrozenError: can't modify frozen String: ""abc"">
+nil
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<FrozenError: can't modify frozen String: ""abc"">
+nil
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<FrozenError: can't modify frozen String: ""abc"">
+#<FrozenError: can't modify frozen String: ""abc"">
+nil
+#<FrozenError: can't modify frozen String: ""abc"">
+#<FrozenError: can't modify frozen String: """">
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<TypeError: no implicit conversion of Integer into String>
+");
+        }
+
+        /// <summary>
         /// Integer#chr and String#&lt;&lt; with an Integer, in the multibyte encodings: MRI's rb_enc_uint_chr takes the
         /// bytes of the number and accepts them when they are exactly one well formed character of the encoding -
         /// "invalid codepoint" when they are not, "out of char range" when the number is wider than the encoding's
@@ -920,16 +1014,16 @@ UTF-32BE 110000 chr: RangeError: invalid codepoint 0x110000 in UTF-32BE
 UTF-32BE 110000 <<: RangeError: invalid codepoint 0x110000 in UTF-32BE
 UTF-32BE 7fffffff chr: RangeError: invalid codepoint 0x7FFFFFFF in UTF-32BE
 UTF-32BE 7fffffff <<: RangeError: invalid codepoint 0x7FFFFFFF in UTF-32BE
-UTF-32BE 80000000 chr: 80000000
-UTF-32BE 80000000 <<: 80000000
+UTF-32BE 80000000 chr: RangeError: invalid codepoint 0x80000000 in UTF-32BE
+UTF-32BE 80000000 <<: RangeError: invalid codepoint 0x80000000 in UTF-32BE
 UTF-32BE 100000000 chr: RangeError: 4294967296 out of char range
 UTF-32BE 100000000 <<: RangeError: 4294967296 out of char range
 UTF-32BE 10000000000000000 chr: RangeError: bignum out of char range
 UTF-32BE 10000000000000000 <<: RangeError: bignum out of char range
 UTF-32BE -1 chr: RangeError: -1 out of char range
 UTF-32BE -1 <<: RangeError: -1 out of char range
-UTF-32LE 81308130 chr: 30813081
-UTF-32LE 81308130 <<: 30813081
+UTF-32LE 81308130 chr: RangeError: invalid codepoint 0x81308130 in UTF-32LE
+UTF-32LE 81308130 <<: RangeError: invalid codepoint 0x81308130 in UTF-32LE
 UTF-32LE 100000000 chr: RangeError: 4294967296 out of char range
 UTF-32LE 100000000 <<: RangeError: 4294967296 out of char range
 UTF-32LE 10000000000000000 chr: RangeError: bignum out of char range
@@ -948,7 +1042,7 @@ UTF-16LE -1 chr: RangeError: -1 out of char range
 UTF-16LE -1 <<: RangeError: -1 out of char range
 US-ASCII 80 chr: RangeError: invalid codepoint 0x80 in US-ASCII
 US-ASCII 80 <<: 80
-US-ASCII 100 chr: RangeError: 256 out of char range
+US-ASCII 100 chr: RangeError: invalid codepoint 0x100 in US-ASCII
 US-ASCII 100 <<: RangeError: 256 out of char range
 US-ASCII 100000000 chr: RangeError: 4294967296 out of char range
 US-ASCII 100000000 <<: RangeError: 4294967296 out of char range
@@ -1291,6 +1385,27 @@ then %s: [Encoding::CompatibilityError, ""incompatible character encodings: Shif
 then %s US-ASCII: [Encoding::CompatibilityError, ""incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8""]
 %s then %c: US-ASCII 65333831383263326131
 bytes kept: [""3c8fa2b73e"", ""3cedb2803e""]
+");
+        }
+
+        /// <summary>
+        /// String#encode and #encode! take their options as keywords only: a positional Hash, or an object with #to_hash, is an
+        /// encoding (TypeError), and a third positional argument too many; a keyword hash, **obj included, is the options. Util/encode-matrix.rb.
+        /// </summary>
+        public void String_EncodeKeywordOptionsOnly1() {
+            TestOutput(@"
+require 'ruby4'
+class ToHashOptions; def to_hash = {undef: :replace}; end
+s = ""あ""
+[-> { s.encode(""US-ASCII"", ToHashOptions.new) }, -> { s.encode(""US-ASCII"", ""UTF-8"", ToHashOptions.new) }, -> { s.encode(""US-ASCII"", **ToHashOptions.new) },
+ -> { s.encode(""US-ASCII"", {undef: :replace}) }, -> { s.encode(ToHashOptions.new) }, -> { s.dup.encode!(""US-ASCII"", ToHashOptions.new) }].each { |l| p((l.call rescue $!)) }
+", @"
+#<TypeError: no implicit conversion of ToHashOptions into String>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+""?""
+#<TypeError: no implicit conversion of Hash into String>
+#<TypeError: no implicit conversion of ToHashOptions into String>
+#<TypeError: no implicit conversion of ToHashOptions into String>
 ");
         }
     }

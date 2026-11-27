@@ -845,7 +845,7 @@ namespace IronRuby.Runtime.Jit {
             // a new key while the hash is iterated is the generic code's RuntimeError
             if (hash.IsIterating) { throw Deopt(); }
             var str = key as MutableString;
-            if (str != null && !str.IsFrozen && !hash.ComparesByIdentity) {
+            if (str != null && !str.IsFrozen && str.GetType() == typeof(MutableString) && !hash.ComparesByIdentity) {
                 key = str.Duplicate(context, false, str.Clone()).Freeze();
                 hashCode = key.GetHashCode();
             }

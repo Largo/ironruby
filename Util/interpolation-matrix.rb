@@ -210,9 +210,20 @@ def b_frames(x) = "#{caller(0, 3).map { |l| label(l) }}"
 
 t('nested calls') { b_outer(1) }
 t('a raise in a part') { begin; b_raise_outer(1); rescue TypeError => e; [e.message, e.backtrace[0, 2].map { |l| label(l) }]; end }
-# (not the line: IronRuby names the method's first line for a frame whose interpolated part's #to_s raised,
-# with or without its scope)
 t('to_s raises in a heredoc') { begin; b_heredoc(ToSRaises.new); rescue IndexError => e; e.backtrace[0, 2].map { |l| label(l) }; end }
+def b_line(x)
+  y = 1
+  "a#{x}#{y}"
+end
+def b_line_scope(x)
+  y = binding.local_variable_get(:x)
+  "a#{y}"
+end
+t('to_s raises: the frame names the line') do
+  [b_line(ToSRaises.new), b_line_scope(ToSRaises.new)] rescue $!.backtrace_locations[1].lineno - __LINE__
+end
+# (not the line of a heredoc's part that is a local variable: IronRuby names the heredoc's statement, CRuby the
+# part's own line)
 t('a frame list in a part') { b_frames(1) }
 
 class Deep; def to_s = deep_s(self); end
@@ -223,7 +234,14 @@ t('recursion') { r_count(50) }
 
 # ---------------------------------------------------------------- 6. tracing and threads
 
-# (not an endless def: IronRuby reports a :line event for its body, CRuby none)
+def traced_endless(x) = "t#{x}"
+def traced_endless_parens(x) = ("t#{x}")
+t('TracePoint :line, an endless def') do
+  seen = []
+  tp = TracePoint.new(:line) { |e| seen << [e.method_id, e.lineno - __LINE__] if e.method_id.to_s.start_with?("traced_endless") }
+  tp.enable { traced_endless(1); traced_endless_parens(2) }
+  seen
+end
 def traced(x)
   "t#{x.fdiv(1)}"
 end
@@ -283,8 +301,8 @@ def r_after(x) = "#{x}"
 t('defined before using') { [r_before(1), r_before(:s), r_before(nil), r_before(Shown.new)] }
 t('defined before, subclass') { r_before(ShownSub.new) }
 t('a nested def run again after using') { r_nested(1) }
-# (not a Symbol: CRuby interpolates one without asking a refined #to_s, IronRuby asks it)
 t('defined after using') { [r_after(1), r_after(nil), r_after(Shown.new)] }
+t('a Symbol, defined after using (no refined #to_s asked)') { [r_after(:s), "#{:s}", (x = :t; "#{x}")] }
 t('defined after, subclass') { r_after(ShownSub.new) }
 t('a refinement that exists but is not used') { r_after(1.5) }
 t('at the call site') { [r_before(2), "#{2}"] }

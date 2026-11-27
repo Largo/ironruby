@@ -38,21 +38,19 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateTypeError("already initialized class");
         }
 
-        // MRI's order: frozen, then the same class of object, then a copy only into the class #dup or
-        // #clone made - an existing class is left as it is (#138).
-        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
-        public static RubyClass/*!*/ InitializeCopy(RubyClass/*!*/ self, object other) {
-            if (self.IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
-            }
-            var otherClass = other as RubyClass;
-            if (otherClass == null || self.Context.GetClassOf(otherClass) != self.Context.GetClassOf(self)) {
-                throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
-            }
-            self.InitializeClassCopy(otherClass);
-            return self;
-        }
+        // No initialize_copy: #dup and #clone fill in a class's copy before they call it (RubyClass's IDuplicable.Duplicate),
+        // as MRI 4.0's init_copy does, and Kernel#initialize_copy is what a class has.
         
+        /// <summary>
+        /// MRI's rb_undef_alloc_func, for a core class the prelude writes in Ruby: allocate of this class (not of a subclass)
+        /// raises "allocator undefined", as Data.allocate does, without a singleton method allocate that Data.singleton_methods
+        /// would list.
+        /// </summary>
+        [RubyMethod("__ir_undef_alloc__", RubyMethodAttributes.PrivateInstance)]
+        public static void UndefineAllocator(RubyClass/*!*/ self) {
+            self.UndefineAllocator();
+        }
+
         [RubyMethod("allocate")]
         public static RuleGenerator/*!*/ Allocate() {
             return new RuleGenerator(RuleGenerators.InstanceAllocator);

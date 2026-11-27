@@ -346,6 +346,18 @@ namespace IronRuby.Runtime.Conversions {
                     args.TargetExpression
                 );
 
+                // MRI's rb_check_funcall: when respond_to? says yes but the class has no to_xxx and its method_missing is the
+                // default one, there is no conversion (check_funcall_missing), not a NoMethodError. Whether it has either is
+                // known here: the rule's type test covers to_xxx and method_missing.
+                bool callable;
+                using (targetClass.Context.ClassHierarchyLocker()) {
+                    callable = targetClass.ResolveMethodForSiteNoLock(toMethodName, VisibilityContext.AllVisible).Found ||
+                        IsOverridden(targetClass.ResolveMethodForSiteNoLock(Symbols.MethodMissing, VisibilityContext.AllVisible).Info,
+                            targetClass.Context.BasicObjectClass);
+                }
+                var noConversion = (i < conversions.Length - 1) ? metaBuilder.Result :
+                    conversions[i].MakeErrorExpression(args, targetClassNameConstant, resultType);
+
                 metaBuilder.Result = Ast.Condition(
                     // If
 
@@ -367,15 +379,14 @@ namespace IronRuby.Runtime.Conversions {
                     // Then
 
                     // to_xxx():
-                    ConvertResult(
+                    callable ? ConvertResult(
                         conversions[i].MakeValidatorCall(args, targetClassNameConstant, conversionCallSite),
                         resultType
-                    ),
+                    ) : noConversion,
 
                     // Else
 
-                    (i < conversions.Length - 1) ? metaBuilder.Result : 
-                        conversions[i].MakeErrorExpression(args, targetClassNameConstant, resultType)
+                    noConversion
                 );
             }
         }

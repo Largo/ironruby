@@ -186,5 +186,48 @@ p o.foo
 :m1
 ");
         }
+
+        /// <summary>
+        /// #dup and #clone of a module or class copy its constants, methods and class variables before they call
+        /// initialize_copy, as MRI 4.0's init_copy does: an initialize_copy reading a constant before super reads the copy's,
+        /// one that never calls super still gets them. Module and Class have no initialize_copy of their own (Kernel's),
+        /// which leaves a module that already exists as it is.
+        /// </summary>
+        public void ModuleCopyBeforeInitializeCopy1() {
+            TestOutput(@"
+K = :outer
+module M
+  K = :inner
+  def self.initialize_copy(o)
+    p [const_get(:K), constants, instance_methods(false)]
+    super
+  end
+  def im = 1
+end
+M.dup; M.clone
+module N; X = 1; @@v = 2; def self.initialize_copy(o) = nil; def a = 1; end
+n = N.dup; p n.constants, n.instance_methods(false), n.class_variables
+class Q; Y = 1; def self.initialize_copy(o) = nil; def q = 1; end
+q = Q.clone; p q.constants, q.instance_methods(false), q.superclass, q.name
+p Module.instance_method(:initialize_copy).owner, Class.instance_method(:initialize_copy).owner
+e = Module.new { def z = 1 }; c = Module.new
+p c.send(:initialize_copy, e).equal?(c), c.instance_methods(false), (Module.new.send(:initialize_copy, Class.new) rescue $!)
+", @"
+[:inner, [:K], [:im]]
+[:inner, [:K], [:im]]
+[:X]
+[:a]
+[:@@v]
+[:Y]
+[:q]
+Object
+nil
+Kernel
+Kernel
+true
+[]
+#<TypeError: initialize_copy should take same class object>
+");
+        }
     }
 }

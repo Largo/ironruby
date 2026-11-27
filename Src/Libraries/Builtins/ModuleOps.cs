@@ -42,32 +42,8 @@ namespace IronRuby.Builtins {
             return (block != null) ? RubyUtils.EvaluateInModule(self, block, new object[] { self }) : null;
         }
 
-        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ InitializeCopy(RubyModule/*!*/ self, object other) {
-            // no class can be reinitialized:
-            if (self.IsClass) {
-                throw RubyExceptions.CreateTypeError("already initialized class");
-            }
-            
-            if (self.IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
-            }
-
-            // self could be a meta-module:
-            RubyClass selfClass = self.Context.GetClassOf(self);
-            RubyClass otherClass = self.Context.GetClassOf(other);
-            if (otherClass != selfClass) {
-                throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
-            }
-
-            // a module that already exists is left as it is; only #dup's and #clone's copy is filled in (#138)
-            if (!self.TakeUninitializedModuleCopy()) {
-                return self;
-            }
-
-            self.InitializeModuleCopy((RubyModule)other);
-            return self;
-        }
+        // No initialize_copy: as in MRI 4.0, #dup and #clone fill in a module's copy before they call it (RubyModule's
+        // IDuplicable.Duplicate), and Kernel#initialize_copy is what a module has (gap 37 of Util/perf/LEDGER.md).
         
         #endregion
 

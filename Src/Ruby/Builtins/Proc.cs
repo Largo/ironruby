@@ -83,6 +83,7 @@ namespace IronRuby.Builtins {
             public RefinementActivation RefinementOverride;
             public string SymbolName;
             public bool IsIsolated;
+            public string CalleeName;
         }
 
         private RareState _rare;
@@ -248,6 +249,16 @@ namespace IronRuby.Builtins {
         public string SymbolName {
             get { var r = _rare; return (r != null) ? r.SymbolName : null; }
             internal set { if (value != null || _rare != null) { Rare.SymbolName = value; } }
+        }
+
+        /// <summary>
+        /// The name a method define_method made is called by when it is not the method's own (an alias), for
+        /// __callee__; null otherwise. Only on the copy of the method's lambda that such a call runs
+        /// (RubyLambdaMethodInfo.GetLambdaFor).
+        /// </summary>
+        internal string CalleeName {
+            get { var r = _rare; return (r != null) ? r.CalleeName : null; }
+            set { if (value != null || _rare != null) { Rare.CalleeName = value; } }
         }
 
         /// <summary>
