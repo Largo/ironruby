@@ -601,29 +601,27 @@ module Enumerable
   # Sorts by the block's key, keeping input order for equal keys so that
   # `min_by(n)` and `max_by(n)` agree with MRI on ties.
   #
-  # An Array whose #each is the built-in one is sorted by the C# Array#sort_by, taken under a
-  # private name when the prelude loads (a program's own Array#sort_by does not change
-  # min_by): it is a stable merge sort, so equal keys keep their input order as here. The
-  # Ruby comparison block below cost more than everything else for a short Array.
+  # Every receiver is sorted by the C# Array#sort_by, taken under a private name when the
+  # prelude loads (a program's own Array#sort_by does not change min_by): it is a stable merge
+  # sort, so equal keys keep their input order. An Array whose #each is the built-in one is
+  # walked with a one-value block (__list_sort_by_key__); anything else - a Hash, a Range, an
+  # Enumerator - with the generic `|*values|` block, and the elements it gathered go to the
+  # same sort, which takes their keys by position. Sorting [key, index, element] triples with
+  # a Ruby comparison block and taking the elements out again was more than half of
+  # {a: 1, b: 2, c: 3, d: 4}.sort_by { |k, v| -v }.
   def __sort_by_key__(block)
     return __list_sort_by_key__(&block) if __plain_list__?
-    decorated = []
-    index = 0
+    items = []
+    keys = []
     each do |*values|
       item = __enum_item__(values)
-      decorated << [values.size == 1 ? block.call(item) : __enum_yield__(values, &block), index, item]
-      index += 1
+      keys << (values.size == 1 ? block.call(item) : __enum_yield__(values, &block))
+      items << item
       # the block #each was given answers nil, as MRI's does, should #each keep it and call it
       nil
     end
-    decorated.sort do |a, b|
-      c = (a[0] <=> b[0])
-      # the keys that will not compare are named, not the triples carrying them
-      if c.nil?
-        raise ArgumentError, "comparison of #{a[0].class} with #{::Comparable.__cmp_operand__(b[0])} failed"
-      end
-      c == 0 ? (a[1] <=> b[1]) : c
-    end.map { |triple| triple[2] }
+    i = -1
+    items.__send__(:__list_sort_by__) { keys[i = i.succ] }
   end
   private :__sort_by_key__
 

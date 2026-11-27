@@ -3210,7 +3210,9 @@ namespace IronRuby.Builtins {
             int left = start, right = start + half, target = start;
             int leftEnd = start + half, rightEnd = start + length;
             while (left < leftEnd && right < rightEnd) {
-                if (fixnumKeys ? (int)keys[right] < (int)keys[left] : Protocols.Compare(comparisonStorage, keys[right], keys[left]) < 0) {
+                // the earlier key is the receiver of #<=>, as in MRI's sort_by_cmp: keys that do not
+                // compare are named in that order ("comparison of Integer with String failed")
+                if (fixnumKeys ? (int)keys[left] > (int)keys[right] : Protocols.Compare(comparisonStorage, keys[left], keys[right]) > 0) {
                     keyBuffer[target] = keys[right];
                     itemBuffer[target++] = items[right++];
                 } else {
