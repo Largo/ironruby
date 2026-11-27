@@ -106,5 +106,33 @@ require 'digest'
             }
             Assert(RubyStackTraceBuilder.ReadCopyingClasses(typeof(IronRuby.Builtins.ArrayOps).Assembly).Count >= 6);
         }
+    
+        /// <summary>
+        /// A CLR member lookup asks whether a type declares a field or event of the name (RubyClass.MayDeclareFieldOrEvent),
+        /// and the answer comes from the assembly's metadata. A name the metadata misses would hide a member, so the names
+        /// must be exactly those reflection lists, for every type the metadata answers for.
+        /// </summary>
+        public void ClrFieldAndEventNamesFromMetadata1() {
+            int compared = 0;
+            foreach (var assembly in new[] { typeof(RubyClass).Assembly, typeof(IronRuby.Builtins.ArrayOps).Assembly, typeof(object).Assembly,
+                typeof(Microsoft.Scripting.Utils.ReflectionUtils).Assembly, typeof(System.Collections.Generic.LinkedList<>).Assembly }) {
+                foreach (var type in assembly.GetTypes()) {
+                    var read = RubyClass.ReadFieldAndEventNames(type);
+                    if (read == null) {
+                        continue;
+                    }
+                    var reflected = RubyClass.ReflectFieldAndEventNames(type);
+                    Assert(read.SetEquals(reflected), type.FullName + ": metadata " + String.Join(",", read) + " / reflection " + String.Join(",", reflected));
+                    compared++;
+                }
+            }
+            // constructed generic types and nested types answer from their definitions' rows
+            foreach (var type in new[] { typeof(List<int>), typeof(Dictionary<string, object>), typeof(KeyValuePair<int, string>), typeof(Environment.SpecialFolder) }) {
+                var read = RubyClass.ReadFieldAndEventNames(type);
+                Assert(read != null && read.SetEquals(RubyClass.ReflectFieldAndEventNames(type)), type.FullName);
+            }
+            Assert(compared > 5000, "only " + compared + " types compared");
+            Assert(RubyClass.ReadFieldAndEventNames(typeof(int[])) == null);
+        }
     }
 }
