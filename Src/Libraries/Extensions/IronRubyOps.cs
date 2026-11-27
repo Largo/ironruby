@@ -68,6 +68,24 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// What rbconfig.rb asks the host: [the directory of the entry assembly (nil without one, as in a host that embeds IronRuby;
+        /// "" if it has no location), the .NET runtime's "major.minor"]. It asked through CLR interop
+        /// (System::Reflection::Assembly.get_entry_assembly.location and friends), whose six call sites bound rules of their own
+        /// and looked their members up by reflection: ~4 ms of every `ir -e 1'.
+        /// </summary>
+        [RubyMethod("__host_config__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray/*!*/ GetHostConfig(RubyContext/*!*/ context, RubyModule/*!*/ self) {
+            var entry = System.Reflection.Assembly.GetEntryAssembly();
+            object bindir = null;
+            if (entry != null) {
+                // UTF-8, as System::String#to_s made it
+                bindir = MutableString.Create(Path.GetDirectoryName(entry.Location) ?? "", RubyEncoding.UTF8);
+            }
+            Version clr = Environment.Version;
+            return new RubyArray(new object[] { bindir, MutableString.CreateAscii(clr.Major + "." + clr.Minor) });
+        }
+
         [RubyMethod("loaded_assemblies", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetLoadedAssemblies(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             return new RubyArray(context.DomainManager.GetLoadedAssemblyList());

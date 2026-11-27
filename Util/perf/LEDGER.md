@@ -1459,6 +1459,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     -1.8% on `gem list` / `require "irb"` / irb, and -2.8% on `-e 1` (release image). What is left of
     RubyGems' boot is its own class bodies (specification, requirement, platform: ~40 ms of `-e 1`)
     and rbconfig (~12 ms).
+    2026-11-27, perf/startup4 (Landed, not gated): RubyGems' boot files are all in the startup
+    library. Their self time is first binds, two `super` rules, specification.rb's string `eval`
+    and the R2R host's JIT. rbconfig.rb no longer uses CLR interop: -0.3 to -0.9% main-thread
+    instructions on all five commands. Next leads: the 4,989 CLR member lookups of ruby4.rb in `-e 1`
+    (5.9 ms), and eval'd strings in the startup library.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -2300,6 +2305,64 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   `erb-escape-matrix`: CRuby's output on base, new and off. spec/core/string (3,963),
   spec/library/stringscanner (240), spec/library/csv (33): the same on base, new and off, 0
   failures (the one `String.try_convert` error on all three).
+
+- **perf/startup4 (2026-11-27) - RubyGems' boot files are precompiled already; rbconfig asks the host
+  instead of CLR interop (gap 26)** - not gated. Base c7cb16e (15285eb with perf/startup3).
+  Asked: are specification.rb, requirement.rb, platform.rb, specification_record.rb and rbconfig.rb
+  compiled at every boot? No. The startup library (`Util/aot/startup-files.txt`, written by
+  `Util/aot/startup-files.rb` from what `-e 1`, the gem commands and irb load; built by
+  `Util/aot/build-startup.sh` in the R2R publish and in `package-release.sh`) holds all 214 files a
+  boot loads, and `IR_STARTUP_DLL_TRACE=1` reports none stale. What a boot still parses is the method
+  JIT's re-parse of 11 `def`s, and specification.rb's string `eval` (line 1937, 906 chars, which
+  defines set_nil_attributes_to_nil and set_not_nil_attributes_to_default_values).
+  What their self time is (per-file load timer extended with PhaseTimer's bind and CLR-lookup counters,
+  R2R host, `-e 1`, ms; self = time in the file's own code, nested loads excluded):
+  | file | self | .NET JIT | binds | CLR lookups | rest |
+  |---|---|---|---|---|---|
+  | requirement | 13.7 | 5.9 | 3.8 (50) | 0.1 (99) | 4.0 |
+  | specification | 12.7 | 0.9 | 3.1 (101) | 0.2 (381) | 8.7 |
+  | rbconfig | 11.0 | 2.0 | 5.9 (34) | 1.4 (19) | 1.7 |
+  | platform | 8.5 | 3.0 | 2.3 (25) | 0.1 (68) | 3.2 |
+  | specification_record | 5.5 | 0.4 | 0.7 (17) | 0.0 (48) | 4.4 |
+  - Clock marks in specification.rb's class body: the `eval` ~3.7 ms (the process's first eval);
+    INITIALIZE_CODE_FOR_DEFAULTS (strings built with `inspect`) ~2.9; `Time.now.utc` ~1; the
+    @@attributes partition ~1. The ~15 ms around `@@default_value` is `Gem::Requirement`'s autoload,
+    requirement.rb itself.
+  - requirement.rb's JIT is BCL generics that the R2R host lacks: ConcurrentDictionary over
+    ValueTuple<int, RubyCallSignature> (8 methods), span helpers, and the members of
+    `IronRuby.Classes.Object$2`, a CLR type emitted at run time (2-3 such types per command, 10-28 JIT'd
+    methods). The release image precompiles the generics.
+  - The two dearest binds are `super` rules: Gem::Version.new 1.2 ms, Gem::Platform.new 0.7 ms.
+  - rbconfig.rb's binds are CLR interop: Assembly.get_entry_assembly.location 1.0 ms, get_entry_assembly
+    0.5, Path.get_directory_name 0.4, Environment.Version / Major / Minor 0.2-0.3 each, plus their
+    reflection lookups.
+  Taken (f6a75af): rbconfig.rb reads the entry assembly's directory and the runtime's major.minor from
+  `IronRuby.__host_config__`, a private singleton method. Its bindir is a UTF-8 string, as
+  System::String#to_s gave it (a first try with EncodePath gave US-ASCII). rbconfig's self time
+  ~11 -> ~7-7.9 ms; its binds 34 -> 28, 5.9 -> 2.2 ms; its CLR lookups 19 -> 16 at ~0 ms.
+  Main-thread instructions (callgrind, TieredCompilation=0, base and new side by side), M:
+  | command | release image | R2R host |
+  |---|---|---|
+  | `-e 1` | 1,162.3 -> 1,151.8 (-0.90%) | 2,012.3 -> 2,001.8 (-0.52%) |
+  | `gem --version` | 1,337.2 -> 1,325.3 (-0.88%) | 2,273.7 -> 2,263.5 (-0.45%) |
+  | `gem list` | 2,242.6 -> 2,234.1 (-0.38%) | 3,378.4 -> 3,369.2 (-0.27%) |
+  | `require "irb"` | 2,358.3 -> 2,348.4 (-0.42%) | 3,424.6 -> 3,411.9 (-0.37%) |
+  | irb 1+1 | 2,527.4 -> 2,516.5 (-0.43%) | 3,684.9 -> 3,671.1 (-0.37%) |
+  ~10 M fewer on every command, none more.
+  Wall, best of 10 alternating, base / new, ms: release image 344 / 345, 399 / 347, 693 / 765,
+  766 / 825, 843 / 852; R2R host 483 / 440, 586 / 538, 917 / 1000, 941 / 891, 1040 / 1036. Swings of
+  +-8-13% both ways on a machine that had just restarted: noise, far above the effect.
+  Checked: every RbConfig::CONFIG value, its encoding and frozenness, and RbConfig.ruby print the same
+  as the base on the R2R host and the Release build. So do Gem.loaded_specs, $LOADED_FEATURES and its
+  order, and default-gem lookups (perf/startup3's probe). -w prints nothing, and
+  `IronRuby.__host_config__` is private.
+  AWFY verifying: at 3 s CD was killed at the deadline before one iteration on both trees, on a slow
+  machine. At 8 s in both orders CD, NBody, Sieve and Bounce verify, and none is slower in both orders
+  (Bounce +16% / 0%, NBody +9% / -1%).
+  Left in RubyGems' boot, all of it spread thin: the `super` rules; the first `eval` (~3.7 ms; the
+  startup library could hold eval'd strings keyed by their exact text, a general mechanism);
+  ruby4.rb's 4,989 CLR member lookups in `-e 1` (5.9 ms, core prelude, not RubyGems: worth finding
+  out what asks); and JIT that only the R2R host pays.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
