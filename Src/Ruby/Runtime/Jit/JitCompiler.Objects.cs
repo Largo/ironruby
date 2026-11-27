@@ -1749,7 +1749,8 @@ namespace IronRuby.Runtime.Jit {
             // to is as good a profile, and as above an attr read of it checks the class it finds. So is an instance
             // variable of self, `current = @root' before `current = current.left' (CD's RedBlackTree#find_node).
             var from = (_firstSources.TryGetValue(local.Name, out source) && !_singleSources.ContainsKey(local.Name)) ? source : null;
-            if (from is LocalVariable && ((LocalVariable)from).Name != local.Name || from is InstanceVariable) {
+            // (and so is self, `x = self' before `x = y' walking up a tree: CD's Node#successor)
+            if (from is LocalVariable && ((LocalVariable)from).Name != local.Name || from is InstanceVariable || from is SelfReference) {
                 _sampleDepth++;
                 try {
                     return TrySample(from, out sample);
@@ -1826,6 +1827,7 @@ namespace IronRuby.Runtime.Jit {
                 // and deopts unless the name is the same variable's reader there. Its value is an object.
                 string name = UnsampledAttrVariable(target as LocalVariable, node.MethodName, false);
                 if (name == null || CanFallBack(target)) { return null; }
+                NoteUnsampledObject(target as LocalVariable);
                 JT lt;
                 var localReceiver = Coerce(Emit(target, out lt), lt, JT.Obj);
                 _canDeopt = true;
@@ -1872,6 +1874,27 @@ namespace IronRuby.Runtime.Jit {
         /// must be one (AgreedAccessorVariable). Null otherwise. Only the name is decided here: the read or write checks the class of the object it
         /// meets, and deopts where the accessor is not that variable's (a private one, method_missing, another class's).
         /// </summary>
+        // The locals nothing samples that an attribute of was read or written, or a call on was inlined, as an object of a Ruby
+        // class (UnsampledAttrVariable, UnsampledCallees): `==' on one is taken for BasicObject#== (IsLocalObject).
+        private HashSet<string> _unsampledObjects;
+
+        private void NoteUnsampledObject(LocalVariable local) {
+            if (local != null) { (_unsampledObjects ?? (_unsampledObjects = new HashSet<string>())).Add(local.Name); }
+        }
+
+        /// <summary>
+        /// A local of the method, not a parameter, that is taken to hold an object of a Ruby class: its sample is one
+        /// (TrySampleOfLocal), or an attribute of it was read or written or a call on it inlined on that assumption before
+        /// (_unsampledObjects). Only a profile: what `==' does with it checks the receiver's class (IsIdentical).
+        /// </summary>
+        private bool IsLocalObject(RExpr/*!*/ node) {
+            var local = node as LocalVariable;
+            if (local == null || local.DefinitionLexicalDepth != _scopeDepth || Array.IndexOf(_paramNames, local.Name) >= 0) { return false; }
+            if (_unsampledObjects != null && _unsampledObjects.Contains(local.Name)) { return true; }
+            object sample;
+            return TrySample(local, out sample) && sample is RubyObject;
+        }
+
         private string UnsampledAttrVariable(LocalVariable local, string/*!*/ name, bool writer) {
             if (!JitRuntime.InlineUnsampled || local == null || local.DefinitionLexicalDepth != _scopeDepth || !_refinements.IsEmpty) { return null; }
             RubyClass[] inlinedFor;
@@ -1929,6 +1952,7 @@ namespace IronRuby.Runtime.Jit {
                 sample = null;
                 variableName = UnsampledAttrVariable(target as LocalVariable, node.Name, true);
                 if (variableName == null) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
+                NoteUnsampledObject(target as LocalVariable);
             } else {
                 variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
             }

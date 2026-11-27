@@ -765,6 +765,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    through the JIT's state: a probe that meets an invalidated method, or meets a compiled
    one and does not deopt, fails (exit status 1). Today every such probe reports "not
    compiled, semantics only" on stderr. See Rejected.
+   perf/cdtree (2026-11-27, see Landed) compiled `Node#successor` and stopped `get`'s deopt
+   storm; `tree_insert`'s four changes were not attempted in that step (each needs the
+   effect rule changed for a construction, and the gain estimated above is 2-4% of CD).
+   They are still the next thing here, in that order, with jit-construct-matrix as the gate
+   of each.
 4. **Permute: the `downto` block in `permute`** (the method is 15% self). `permute` is a
    light frame (`IR_LIGHT_FRAMES=why` says so; an earlier version of this entry said it
    was not, from the `RubyMethodScope::.ctor` line of the profile alone), and the method
@@ -1900,6 +1905,51 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
+
+- **perf/cdtree (/perf-step, 2026-11-27, on f67ac44) - CD's `Node#successor` compiles (an identity
+  `==` on a local nothing samples), and a body bound to a callee that was compiled again is compiled
+  again instead of being put back (gap 3)** - not gated. (1) `x = self; ...; while y && x == y.right`:
+  `TrySampleOfLocal` takes a local whose first value is `self` from self's sample, as it does one from
+  another local or an instance variable; and the `==`/`equal?` decision takes a method local (not a
+  parameter) for an object of a Ruby class when its sample is one or an unsampled attribute access or
+  inlined call on it was compiled (`IsLocalObject`, `_unsampledObjects`), so it emits `IsIdentical`,
+  which checks the receiver's `==` against BasicObject#== and deopts otherwise. (2) Found on the way:
+  since perf/havlak2 compiled `RedBlackTree#get`, which calls `find_node`'s typed body directly, CD's
+  trace showed `get` retired eight times in three iterations, then for good. CD looks its voxel map
+  (Vector2D keys) and its call-sign map (CallSign keys) up in turns, so `find_node` was first compiled
+  for one class and later profiled again and compiled for both; `get` had bound the first body, and a
+  retired body is only put back (`CoolDownCheck`), deopting as before. `JitCode.BoundCallees` now
+  records the callee specializations a body bound (its own and theirs), and `CoolDownCheck` compiles
+  the body again (`Respecialize`) when one of them is no longer its stub's current one.
+  Census: 0 changed (it sees neither a profile nor a callee's body). CD traced (3 x 100): `successor`
+  specialized (`tree_minimum` bound), its OSR loop no longer offered, retirements 8 -> 0 (on f67ac44
+  `get` ends retired for good; here it is compiled again once and stays), deopts 432 -> 304; the other
+  thirteen make the same JIT and OSR decisions, all fourteen verify; app-shapes and `gem list` the
+  same counts and checksums. `Util/bench/cdtree-shapes.rb` (new; cd.rb's tree on 64 Vector2D keys),
+  instructions a call (callgrind, two rounds, new/base): `successor` 0.769, `phases` (get with the key
+  class changing every 4,096 calls) 0.946, `get64` and `put_new` 1.000; `put64` 1.262 with a 6.5%
+  spread in the full file and 1.000 alone in two rounds - in the tiered run it is 699 against 995 ns,
+  so under callgrind the retry timers (in ms) fall in its sections and count `get`'s recompile there.
+  Time (tiered, ns): `phases` 384 -> 194, `put64` 995 -> 699, `successor` and `get64` level. AWFY, ten
+  processes per build, alternating, mean new/base: CD 0.996 (best 0.962), DeltaBlue 0.980, Havlak
+  1.002, Richards 1.001 - within their spread.
+  Checked: `Util/unsampled-matrix.rb` 32 -> 39 cases (successor with `==` redefined, a singleton `==`
+  on a left child, a subclass with its own `==`, method_missing; `get` over `find` with the key class
+  changing by phase, and with `cmp` redefined in phase five) prints CRuby's output on the unchanged
+  build and on the new one with the JIT on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`, `IR_JIT_UNSAMPLED=0`
+  and `IR_JIT_NESTED=0`; jit-construct (its probes still "not compiled, semantics only"), jit,
+  jit-calls, jit-const, ivar, hot-shapes, deadconst print CRuby's in all modes, inline the base's
+  (`tree_int_key`). ruby/spec language/def, core/class/new, core/basicobject/equal and equal_value,
+  core/kernel/equal_value: no failures on either build. IronRuby.Tests, the whole suite on a Debug
+  build after merging f67ac44 (`Util/parallel-tests.sh`): 81 processes, 1,402 tests, all PASSED, no
+  failed or flaky (the script's "listed but never run: Current culture:" is the driver's banner taken
+  for a test name). The battery before the merge ran with a temporary deopt trace (behind an
+  environment variable, off) compiled in; the rechecks after the merge (unsampled in five modes,
+  jit-construct, jit, jit-calls, deadconst, CD's trace) ran on the final build.
+  For the gate: `HasReplacedCallee` reads another stub's state without its lock (a hint: a wrong
+  answer recompiles once or puts the body back as before); `Respecialize` counts against
+  `MaxRespecializations`, so a body whose callees keep being recompiled settles on its generic body.
+  Not done: `tree_insert`'s four changes (see gap 3).
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,

@@ -51,6 +51,9 @@ namespace IronRuby.Runtime.Jit {
 
     /// <summary>The result of a successful specialization.</summary>
     internal sealed class JitCode {
+        // The specializations of the callees this body calls directly, its own and theirs (EmitDirectCall): a retired body
+        // whose callee has been compiled again since is compiled again too, not put back (JitStub.CoolDownCheck).
+        internal JitStub.Specialization[] BoundCallees;
         internal MSA.LambdaExpression/*!*/ Lambda;
         internal StrongBox<Delegate>/*!*/ SelfCell;
         internal JT ReturnType;
@@ -108,6 +111,8 @@ namespace IronRuby.Runtime.Jit {
         // What the caller invokes with (self, typed arguments): the typed body's delegate, as a
         // constant. -X:JITMethods emits a call of the method behind it (JitMethodEmitter.Lifter).
         internal MSA.Expression/*!*/ Target;
+        // the callee's specialization the body was bound from (JitStub.BindCallee)
+        internal JitStub.Specialization Spec;
     }
 
     internal sealed partial class JitCompiler {
@@ -198,6 +203,8 @@ namespace IronRuby.Runtime.Jit {
         private bool _directCalls;
         // a body called directly has a loop (JitCode.HasLoop)
         private bool _calleeLoop;
+        // the specializations of the bodies called directly (JitCode.BoundCallees)
+        private List<JitStub.Specialization> _boundCallees;
 
         // Explicit `return'. The label is created on the first one met, typed by the return type
         // the round is compiling under (_selfReturn); _returnUnion is what the values actually
@@ -802,6 +809,7 @@ namespace IronRuby.Runtime.Jit {
                     GlobalsRead = c._globalsRead,
                     GlobalsWritten = c._globalsWritten,
                     DirectCalls = c._directCalls,
+                    BoundCallees = (c._boundCallees != null) ? c._boundCallees.ToArray() : null,
                     Inlinable = c._pure && !c._selfCall && !c._directCalls && !c._hasLoop && !c._construction && !c._ivarWrite && !c._usesConstants &&
                         !c._hashWrite && c._undoLog == null && c._arrayLoads == null && keywords == null && supplied < 0 &&
                         ast.Parameters.Optional.Length == 0 && ast.Parameters.Unsplat == null && ast.Parameters.Block == null &&
@@ -2574,6 +2582,10 @@ namespace IronRuby.Runtime.Jit {
                     // number, an Array) would deopt on every call. An instance variable is typed by the receiver
                     // that turned the method hot (ObservedType).
                     Type observed = ObservedType(node.Target);
+                    // A local of the method taken to hold an object of a Ruby class (`x == y.right' in CD's Node#successor,
+                    // x = self or a node walked to): IsIdentical checks the receiver's `==' and deopts where it is not
+                    // BasicObject's, as for a profiled one.
+                    if (observed == null && JitRuntime.InlineUnsampled && IsLocalObject(node.Target)) { observed = typeof(RubyObject); }
                     if (observed == typeof(void) && node.Target is ConstantVariable && node.MethodName != "equal?" && _refinements.IsEmpty) {
                         // `NO_WORK == x' (Richards), NO_WORK a constant whose value is nil, which the constant
                         // version guard keeps: NilClass#== (and BasicObject#!=, which calls it) being the public
@@ -2662,6 +2674,11 @@ namespace IronRuby.Runtime.Jit {
             // runs them - its deopts come before its effects, or TryCompile would not have accepted
             // it (_deoptAfterEffect).
             if (code.Deopts) { _canDeopt = true; }
+            if (callee.Spec != null || code.BoundCallees != null) {
+                if (_boundCallees == null) { _boundCallees = new List<JitStub.Specialization>(); }
+                if (callee.Spec != null) { _boundCallees.Add(callee.Spec); }
+                if (code.BoundCallees != null) { _boundCallees.AddRange(code.BoundCallees); }
+            }
             if (code.IvarWrite) {
                 // The callee's self is this body's, so its first instance variable write is still
                 // the first one that could meet a frozen object - unless this body has already done
