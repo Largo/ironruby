@@ -1045,6 +1045,14 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>The dependent classes (DependentClasses) without making the list: null if there are none.</summary>
+        internal WeakList<RubyClass/*!*/> DependentClassesOrNull {
+            get {
+                Context.RequiresClassHierarchyLock();
+                return _dependentClasses;
+            }
+        }
+
         /// <summary>
         /// The classes that name this one as their direct superclass, excluding singleton
         /// classes -- Ruby 3.1's Class#subclasses. The dependent-class list exists to
