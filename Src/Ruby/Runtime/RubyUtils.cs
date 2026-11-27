@@ -1846,7 +1846,15 @@ namespace IronRuby.Runtime {
         [ThreadStatic]
         private static bool _reclaimingFiber;
 
-        public static bool IsReclaimingFiber { get { return _reclaimingFiber; } }
+        // Every ensure clause asks, on every run (Body.TransformExceptionHandling), and the [ThreadStatic] is a call into the
+        // runtime from a compiled body. A thread reclaiming a fiber has a safe point requested for as long as it does
+        // (BeginFiberReclamation, EndFiberReclamation): while no thread has, the count says no without the thread-static.
+        // IR_LAZY_ERRINFO=0 reads the thread-static every time.
+        private static readonly bool ReclaimingTestsCount = Environment.GetEnvironmentVariable("IR_LAZY_ERRINFO") != "0";
+
+        public static bool IsReclaimingFiber {
+            get { return (!ReclaimingTestsCount || Volatile.Read(ref Requests) != 0) && _reclaimingFiber; }
+        }
 
         public static void BeginFiberReclamation() {
             if (!_reclaimingFiber) {

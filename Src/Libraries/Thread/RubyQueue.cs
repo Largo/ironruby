@@ -109,6 +109,7 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         private bool WaitOnQueue(int milliseconds) {
+            string previous = IronRuby.Builtins.ThreadOps.EnterBlockingMethod(this is SizedQueue ? "Thread::SizedQueue#pop" : "Thread::Queue#pop");
             try {
                 using (RubyUtils.BlockingWait.Enter()) {
                     return milliseconds == Timeout.Infinite ? Monitor.Wait(_queue) : Monitor.Wait(_queue, milliseconds);
@@ -116,6 +117,8 @@ namespace IronRuby.StandardLibrary.Threading {
             } catch (ThreadInterruptedException) {
                 RubyUtils.TranslateThreadInterrupt();
                 return true;
+            } finally {
+                IronRuby.Builtins.ThreadOps.ExitBlockingMethod(previous);
             }
         }
 

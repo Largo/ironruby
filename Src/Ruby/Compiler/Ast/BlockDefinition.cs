@@ -523,6 +523,11 @@ namespace IronRuby.Compiler.Ast {
                 // a literal nested in a block whose Proc may be reused (see reusesProc above): its Proc reaches that one
                 instance = Methods.KeepEnclosingProcs.OpCall(instance, gen.CurrentScopeVariable);
             }
+            // a block of an eval'd text whose literals are kept per eval takes the eval's with it (AstGenerator.GetEvalLiterals)
+            var evalLiterals = gen.GetEvalLiterals();
+            if (evalLiterals != null) {
+                instance = Methods.AttachEvalLiterals.OpCall(instance, evalLiterals);
+            }
             return reusesProc ? Ast.Assign(previousProc, instance) : instance;
         }
 

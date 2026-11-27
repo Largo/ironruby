@@ -379,7 +379,7 @@ namespace IronRuby.Builtins {
                 // universal_newline is ["universal_newline", [UTF-8, UTF-16BE]].
                 int at = (path != null && !path[path.Length - 1].IsAsciiIdentity) ? result.Count - 1 : result.Count;
                 foreach (string name in DecoratorPathNames(flags)) {
-                    result.Insert(at++, MutableString.CreateAscii(name).Freeze());
+                    result.Insert(at++, MutableString.CreateBinary(Encoding.ASCII.GetBytes(name)).Freeze());
                 }
                 return result;
             }
@@ -1650,7 +1650,7 @@ namespace IronRuby.Builtins {
                     TryGetDecoratorFlag(destinationString.ToString(), out decorator)) {
                     var named = new RubyConverter(null, flags | decorator);
                     string name = destinationString.ToString();
-                    named._explicitConvPath = new RubyArray { MutableString.CreateAscii(name).Freeze() };
+                    named._explicitConvPath = new RubyArray { MutableString.CreateBinary(Encoding.ASCII.GetBytes(name)).Freeze() };
                     named._explicitDescription = name;
                     return named;
                 }
@@ -1722,7 +1722,7 @@ namespace IronRuby.Builtins {
                         throw RubyExceptions.CreateArgumentError("decoration failed: {0}", name);
                     }
                     flags |= decorator;
-                    reported.Add(MutableString.CreateAscii(name).Freeze());
+                    reported.Add(MutableString.CreateBinary(Encoding.ASCII.GetBytes(name)).Freeze());
                 }
 
                 var result = new RubyConverter(path.Count != 0 ? path.ToArray() : null, flags);

@@ -166,6 +166,7 @@ namespace IronRuby.StandardLibrary.Threading {
                         if (!RubyUtils.PrepareNudgeableWait()) {
                             interrupted = true;
                         } else {
+                            string previous = IronRuby.Builtins.ThreadOps.EnterBlockingMethod("Thread::Mutex#lock");
                             try {
                                 using (RubyUtils.BlockingWait.Enter()) {
                                     Monitor.Wait(_syncRoot);
@@ -173,6 +174,7 @@ namespace IronRuby.StandardLibrary.Threading {
                             } catch (ThreadInterruptedException) {
                                 interrupted = true;
                             } finally {
+                                IronRuby.Builtins.ThreadOps.ExitBlockingMethod(previous);
                                 RubyUtils.NudgeableWaitDone();
                             }
                         }

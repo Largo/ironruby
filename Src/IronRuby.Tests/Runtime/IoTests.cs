@@ -840,6 +840,45 @@ puts 'f'
         }
 
         /// <summary>
+        /// Text written to an IO whose external encoding is not ASCII-compatible goes to that encoding's
+        /// ASCII-compatible one (UTF-8) first, as in MRI's do_writeconv, so a byte that cannot get there is
+        /// reported on that leg alone.
+        /// </summary>
+        public void Io_WriteViaAsciiCompat1() {
+            TestOutput(@"
+require 'ruby4'
+p((""\xFF"".b.encode(""UTF-16BE"") rescue $!))
+p((""\xFF"".b.encode(""EUC-JP"") rescue $!))
+p((""\xFF"".b.encode(""UTF-8"") rescue $!))
+_r, w = IO.pipe
+w.set_encoding(""UTF-16BE"")
+p((w.write(""\xFF"".b) rescue $!))
+p((w.write(""\xFF"".dup.force_encoding(""ISO-8859-1"")) rescue $!))
+w.set_encoding(""EUC-JP"")
+p((w.write(""\xFF"".b) rescue $!))
+r, w = IO.pipe
+w.set_encoding(""UTF-16LE"")
+w.write(""ab"", ""\u00e9"".encode(""ISO-8859-1""), ""\xA4\xA2"".dup.force_encoding(""EUC-JP""))
+w.close
+p r.read.b
+r, w = IO.pipe
+w.set_encoding(""UTF-16BE"", invalid: :replace, undef: :replace)
+w.write(""\xFF"".b, ""a\xFFb"".dup.force_encoding(""UTF-8""))
+w.close
+p r.read.b
+", @"
+#<Encoding::UndefinedConversionError: ""\xFF"" to UTF-8 in conversion from ASCII-8BIT to UTF-8 to UTF-16BE>
+#<Encoding::UndefinedConversionError: ""\xFF"" to UTF-8 in conversion from ASCII-8BIT to UTF-8 to EUC-JP>
+#<Encoding::UndefinedConversionError: ""\xFF"" from ASCII-8BIT to UTF-8>
+#<Encoding::UndefinedConversionError: ""\xFF"" from ASCII-8BIT to UTF-8>
+2
+#<Encoding::UndefinedConversionError: ""\xFF"" to UTF-8 in conversion from ASCII-8BIT to UTF-8 to EUC-JP>
+""a\x00b\x00\xE9\x00B0""
+""\xFF\xFD\x00a\xFF\xFD\x00b""
+");
+        }
+
+        /// <summary>
         /// IO#ungetc on a stream that converts what it reads - text mode, or an internal encoding - puts the text in
         /// a buffer of characters already converted, as MRI's rb_io_ungetc puts it in fptr->cbuf: the readers of
         /// characters hand it back as it is ("\r" stays "\r", and what #getc gave of a UTF-16 file is not decoded

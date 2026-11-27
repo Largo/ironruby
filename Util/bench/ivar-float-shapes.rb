@@ -9,6 +9,8 @@
 $stdout.sync = true
 N = (ENV['N'] || 2_000_000).to_i
 BYTES = ENV['BYTES'] == '1'
+# INSTR=1 (Util/perf/ab.rb -i): instructions per operation as well, the least of the repetitions
+INSTR = ENV['INSTR'] && (require_relative '../perf/instructions'; Instructions.open || warn('no instruction counter (perf_event_open)'))
 
 A = Object.new
 B = Object.new
@@ -65,11 +67,13 @@ def run_shape(name)
   op, kind = name.split('_')
   cls, x, vx, m = KINDS[kind]
   best = nil
+  fewest = nil
   r = nil
   6.times do
     o = cls.new
     b = IvBody.new(x, vx, m)
     c = IvBody.new(vx, x, m)
+    c0 = INSTR && INSTR.read
     t = BYTES ? System::GC.get_total_allocated_bytes(true) : Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID)
     i = 0
     r = case op
@@ -80,6 +84,8 @@ def run_shape(name)
         when 'read' then read_op(kind, b, c, i)
         end
     d = BYTES ? System::GC.get_total_allocated_bytes(true) - t : Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) - t
+    c1 = INSTR && INSTR.read
+    fewest = c1 - c0 if c0 && c1 && (fewest.nil? || c1 - c0 < fewest)
     best = d if best.nil? || d < best
   end
   r = r.round(6) if r.is_a?(Float)
@@ -87,7 +93,7 @@ def run_shape(name)
   if BYTES
     puts format('%s %.1f B %s', name, best.to_f / N, r)
   else
-    puts format('%s %.1f ns %s', name, best * 1e9 / N, r)
+    puts format('%s %.1f ns %s%s', name, best * 1e9 / N, r, fewest ? format('  %.1f instr', fewest.to_f / N) : '')
   end
 end
 

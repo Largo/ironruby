@@ -76,6 +76,32 @@ namespace IronRuby.Compiler.Ast {
         // keeps (a Regexp literal, `/.../o', an Integer Range literal): two compilations of it answer two objects.
         internal bool HasLiteralState { get; set; }
 
+        // A plain string eval whose text has a regexp or Integer range literal (IR_EVAL_LITERALS): the top level's hidden
+        // variable that holds the eval's literals (IronRuby.Runtime.EvalLiterals), and how many slots the code takes.
+        internal MSA.ParameterExpression EvalLiteralsVariable { get; set; }
+        internal int EvalLiteralCount { get; set; }
+
+        /// <summary>
+        /// The eval's literals as the code being transformed reaches them: the top level's variable, or in a block of the text
+        /// the Proc its BlockParam belongs to; null outside such a text, in a def or a class body in it (which the eval cache
+        /// refuses), where a literal keeps its object in the compiled code as before.
+        /// </summary>
+        internal MSA.Expression GetEvalLiterals() {
+            if (EvalLiteralsVariable == null || CurrentMethod != TopLevelScope || GetEnclosingModuleFrame() != null) {
+                return null;
+            }
+            return (CurrentBlock == null) ? (MSA.Expression)EvalLiteralsVariable : Methods.GetBlockEvalLiterals.OpCall(CurrentBlock.BfcVariable);
+        }
+
+        /// <summary>The cache box of a regexp literal: one per eval of a shared text (<see cref="GetEvalLiterals"/>), else one of the code.</summary>
+        internal MSA.Expression/*!*/ RegexCacheBox() {
+            var literals = GetEvalLiterals();
+            if (literals != null) {
+                return Methods.GetEvalRegexBox.OpCall(literals, AstUtils.Constant(EvalLiteralCount++));
+            }
+            return AstUtils.Constant(new StrongBox<RubyRegex>(null));
+        }
+
         public RubyCompilerOptions/*!*/ CompilerOptions { 
             get { return _compilerOptions; } 
         }

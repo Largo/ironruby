@@ -401,6 +401,7 @@ namespace IronRuby.Builtins {
                 RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
                 info.IsFiberWorker = true;
                 info.InFiberRun = true;
+                EnterFiberRun();
                 // Interrupts wait until __run__ opens Thread.handle_interrupt(Object => :immediate)
                 // around the fiber's block. Its own handle_interrupt(Object => :never) is not up
                 // yet at the safe point of the call to __run__: one raised there, before the
@@ -418,6 +419,7 @@ namespace IronRuby.Builtins {
                     Terminate();
                     IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
                 } finally {
+                    LeaveFiberRun(RubyUtils.IsReclaimingFiber);
                     RubyUtils.PopInterruptMask();
                     info.InFiberRun = false;
                     RubyUtils.EndFiberReclamation();
@@ -539,6 +541,84 @@ namespace IronRuby.Builtins {
         [ThreadStatic]
         private static RubyContext _currentFiberContext;
 
+        #region the bound on fibers that hold a thread
+
+        // A fiber holds a thread - its stack, a megabyte or more of address space and the pages it has touched - from its start
+        // until it finishes or its handle is collected (FiberRegistration). The collector knows nothing of that: an abandoned
+        // suspended fiber is a few small objects to it, and a program that abandons fiber-backed enumerators (`e.next` and
+        // never the end) piled up a thread for each until a collection happened to run - 3,017 threads after 3,000 of them,
+        // three collections in all, where MRI's fibers are garbage like any other object.
+        //
+        // So the number of fibers that hold a thread is counted (FiberCore.Run, from start to finish or reclamation), and when
+        // it has grown by _fiberBound since the lowest it has been since the last collection, a fiber about to start collects
+        // first: the handles of the abandoned ones are found, and their threads unwind (RequestReclaim) and park, the pool
+        // being as large as the bound, for the fibers that start next - a reclaimed thread that ended instead made the next
+        // start make a new one, and bounding cost 15-25% per abandoned enumerator; parked, it costs nothing. The baseline makes
+        // the bound relative: a program that keeps many fibers alive on purpose collects once for every _fiberBound more of
+        // them, and one whose fibers finish never does. The count is the process's, as threads are. GC.AddMemoryPressure for
+        // each fiber's stack was tried instead: fewer collections, and twice the threads at the peak.
+        // A collection that finds nothing to reclaim - the fibers are alive, or held by a block on their own thread that closes
+        // over them, which no collector can see past - doubles the interval to the next, so a program that keeps that many
+        // fibers pays a handful of collections and not one per _fiberBound: each one stops every thread. One that reclaims
+        // brings the interval back. IR_FIBER_BOUND=0 turns the bound off (and the pool back to 8).
+        private static int _fibersRunning;
+        private static int _fibersRunningBaseline;
+        private static readonly int _fiberBound = ReadFiberBound();
+        private static readonly object _fiberBoundLock = new object();
+        private static int _fiberBoundInterval = _fiberBound;
+        // fibers that ended by being reclaimed, in all, and at the last collection
+        private static int _fibersReclaimed;
+        private static int _fibersReclaimedAtCollection;
+
+        private static int ReadFiberBound() {
+            int value;
+            return Int32.TryParse(Environment.GetEnvironmentVariable("IR_FIBER_BOUND"), out value) && value >= 0 ? value : 256;
+        }
+
+        private static void EnterFiberRun() {
+            Interlocked.Increment(ref _fibersRunning);
+        }
+
+        private static void LeaveFiberRun(bool reclaimed) {
+            Interlocked.Decrement(ref _fibersRunning);
+            if (reclaimed) {
+                Interlocked.Increment(ref _fibersReclaimed);
+            }
+        }
+
+        private static void BoundSuspendedFibers() {
+            if (_fiberBound == 0) {
+                return;
+            }
+            int running = Volatile.Read(ref _fibersRunning);
+            int baseline = Volatile.Read(ref _fibersRunningBaseline);
+            if (running < baseline) {
+                // fibers have finished or been reclaimed since: the bound counts from here
+                Interlocked.CompareExchange(ref _fibersRunningBaseline, running, baseline);
+                return;
+            }
+            if (running - baseline < Volatile.Read(ref _fiberBoundInterval)) {
+                return;
+            }
+            lock (_fiberBoundLock) {
+                baseline = _fibersRunningBaseline;
+                if (running - baseline < _fiberBoundInterval) {
+                    return;
+                }
+                // what the last collection reclaimed, counted as the threads unwound (asynchronously: the finalizers, then each
+                // thread), an interval of fiber starts later; a quarter of the interval says it found abandoned fibers
+                int reclaimed = Volatile.Read(ref _fibersReclaimed);
+                bool effective = reclaimed - _fibersReclaimedAtCollection >= _fiberBoundInterval / 4;
+                _fiberBoundInterval = effective ? _fiberBound : Math.Min(_fiberBoundInterval * 2, 1 << 20);
+                _fibersReclaimedAtCollection = reclaimed;
+                Volatile.Write(ref _fibersRunningBaseline, running);
+            }
+            // the reclaimed threads unwind on their own, and park for the fibers that start next
+            GC.Collect();
+        }
+
+        #endregion
+
         #region the pool of fiber threads
 
         // Starting a CLR thread waits until the OS has scheduled it, which is most of what creating
@@ -557,7 +637,8 @@ namespace IronRuby.Builtins {
         }
 
         private static readonly List<FiberWorker>/*!*/ _idleFiberWorkers = new List<FiberWorker>();
-        private const int MaxIdleFiberWorkers = 8;
+        // as many as the bound on fibers that hold a thread lets pile up, so that the threads it reclaims are used again
+        private static readonly int MaxIdleFiberWorkers = Math.Max(8, _fiberBound);
         private const int FiberWorkerIdleMilliseconds = 2000;
 
         [ThreadStatic]
@@ -569,6 +650,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("__fiber_reuse__", RubyMethodAttributes.PublicSingleton)]
         public static Thread ReuseFiberThread(RubyContext/*!*/ context, object self, object fiber) {
+            BoundSuspendedFibers();
             FiberWorker worker;
             while (true) {
                 using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {

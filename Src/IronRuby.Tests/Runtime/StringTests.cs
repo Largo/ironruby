@@ -352,6 +352,44 @@ p t.chars.map(&:ord)
         }
 
         /// <summary>
+        /// A frozen String raises FrozenError from #<< whatever it is given, before any conversion of the
+        /// argument: an object with no #to_str, nil, a Float, a Symbol.
+        /// </summary>
+        public void String_AppendFrozenAnyArgument1() {
+            TestOutput(@"
+require 'ruby4'
+s = ""a"".freeze
+[Object.new, nil, 1.5, :sym, [1]].each { |x| begin; s << x; rescue => e; p [e.class, e.message]; end }
+begin; s.concat(Object.new); rescue => e; p [e.class, e.message]; end
+begin; s.prepend(Object.new); rescue => e; p [e.class, e.message]; end
+begin; s.replace(Object.new); rescue => e; p [e.class, e.message]; end
+begin; s.insert(0, Object.new); rescue => e; p [e.class, e.message]; end
+t = +""a""
+o = Object.new; def o.to_str = ""Z""
+[o, ""b"", 99, 2**40 % 0x110000].each { |x| t << x }
+p t.bytes
+[Object.new, nil, 1.5].each { |x| begin; t << x; rescue => e; p [e.class, e.message]; end }
+class S < String; end
+p((+""q"") << S.new(""r""))
+", @"
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[FrozenError, ""can't modify frozen String: \""a\""""]
+[TypeError, ""no implicit conversion of Object into String""]
+[97, 90, 98, 99, 240, 144, 128, 128]
+[TypeError, ""no implicit conversion of Object into String""]
+[TypeError, ""no implicit conversion of nil into String""]
+[TypeError, ""no implicit conversion of Float into String""]
+""qr""
+");
+        }
+
+        /// <summary>
         /// #count, #delete and #squeeze answer an ASCII character from a bitmask CharacterSelector
         /// computes when it is parsed, negation and intersection included; anything else goes
         /// through the selector's sets and ranges as before.
