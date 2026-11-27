@@ -2032,7 +2032,7 @@ ArgumentError: invalid character
 GB18030 [1, 0, 0] true
 Emacs-Mule [16, 255] false
 ISO-8859-1 [255] true
-RangeError: 256 out of char range
+ArgumentError: invalid character
 ASCII-8BIT [128] true
 RangeError: 256 out of char range
 UTF-8 [227, 129, 130] true
@@ -2051,6 +2051,46 @@ UTF-8 [65] true
 TypeError: no implicit conversion of true into Integer
 TypeError: no implicit conversion of false into Integer
 UTF-8 [65] true
+");
+        }
+
+        /// <summary>
+        /// %c of a code above 0xFF in a single byte encoding: CRuby 4.0's codelen has no length for it, so format raises
+        /// "invalid character", but for BINARY and US-ASCII, which put a byte ("256 out of char range"). Util/format-c-matrix.rb.
+        /// </summary>
+        public void Sprintf_CharacterSingleByte1() {
+            TestOutput(@"
+%w[ISO-8859-1 Windows-1252 IBM437 KOI8-R US-ASCII BINARY].each do |e|
+  [0x41, 0xe9, 0x100, 0x3042].each do |c|
+    r = begin; s = ""%c"".encode(e) % c; [s.encoding.name, s.bytes]; rescue => x; ""#{x.class}: #{x.message}""; end
+    puts ""#{e} #{c.to_s(16)}: #{r.inspect}""
+  end
+end
+", @"
+ISO-8859-1 41: [""ISO-8859-1"", [65]]
+ISO-8859-1 e9: [""ISO-8859-1"", [233]]
+ISO-8859-1 100: ""ArgumentError: invalid character""
+ISO-8859-1 3042: ""ArgumentError: invalid character""
+Windows-1252 41: [""Windows-1252"", [65]]
+Windows-1252 e9: [""Windows-1252"", [233]]
+Windows-1252 100: ""ArgumentError: invalid character""
+Windows-1252 3042: ""ArgumentError: invalid character""
+IBM437 41: [""IBM437"", [65]]
+IBM437 e9: [""IBM437"", [233]]
+IBM437 100: ""ArgumentError: invalid character""
+IBM437 3042: ""ArgumentError: invalid character""
+KOI8-R 41: [""KOI8-R"", [65]]
+KOI8-R e9: [""KOI8-R"", [233]]
+KOI8-R 100: ""ArgumentError: invalid character""
+KOI8-R 3042: ""ArgumentError: invalid character""
+US-ASCII 41: [""US-ASCII"", [65]]
+US-ASCII e9: [""ASCII-8BIT"", [233]]
+US-ASCII 100: ""RangeError: 256 out of char range""
+US-ASCII 3042: ""RangeError: 12354 out of char range""
+BINARY 41: [""ASCII-8BIT"", [65]]
+BINARY e9: [""ASCII-8BIT"", [233]]
+BINARY 100: ""RangeError: 256 out of char range""
+BINARY 3042: ""RangeError: 12354 out of char range""
 ");
         }
 
@@ -2119,6 +2159,53 @@ p Math.cbrt(-27.0), Math.cbrt(27.0), Math.gamma(3.0), Math.gamma(23.0), Math.erf
 1.1240007277776077e+21
 0.0
 1.0
+");
+        }
+
+        /// <summary>
+        /// Math.log of two arguments as MRI's rb_math_log: both converted and checked, the pole first (a zero x is -Infinity,
+        /// NaN for a zero base; a zero base -0.0), then log2(x) / log2(base) plus the shifted-out bits over log2(base) - so a base
+        /// of 1 is NaN, and the bits are a size_t. atan2 converts its second argument first, and so does hypot (gcc's order of
+        /// its arguments). Math.sqrt of a Complex is its principal root. Util/math-matrix.rb.
+        /// </summary>
+        public void Math_LogBaseAndOrder1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l) = (puts ""#{l}: #{(yield rescue ""#{$!.class}: #{$!.message}"").inspect}"")
+[[0, Float::NAN], [0, 2], [0, 0], [2, 1], [0.5, 0], [0.5, Float::INFINITY], [10.0, 2.0], [1.0e-16, 2.0],
+ [Float::INFINITY, 0], [Float::NAN, 0], [Float::NAN, -1], [Float::NAN, ""1""], [2**2000, 2], [2, 2**2000], [8, 2]].each do |x, b|
+  t(""log(#{x.inspect[0, 12]}, #{b.inspect[0, 12]})"") { Math.log(x, b) }
+end
+t(""atan2('1', nil)"") { Math.atan2(""1"", nil) }
+t(""atan2(nil, '1')"") { Math.atan2(nil, ""1"") }
+t(""hypot('1', nil)"") { Math.hypot(""1"", nil) }
+t(""hypot(:s, '1')"") { Math.hypot(:s, ""1"") }
+[Complex(1, 0), Complex(1, 1), Complex(-4, 0), Complex(-4, -0.0), Complex(3, 4)].each { |c| t(""sqrt(#{c})"") { Math.sqrt(c) } }
+", @"
+log(0, NaN): -Infinity
+log(0, 2): -Infinity
+log(0, 0): NaN
+log(2, 1): NaN
+log(0.5, 0): -0.0
+log(0.5, Infinity): 0.0
+log(10.0, 2.0): 3.321928094887362
+log(1.0e-16, 2.0): -53.150849518197795
+log(Infinity, 0): -0.0
+log(NaN, 0): -0.0
+log(NaN, -1): ""Math::DomainError: Numerical argument is out of domain - log""
+log(NaN, ""1""): ""TypeError: can't convert String into Float""
+log(114813069527, 2): 2000.0
+log(2, 114813069527): 3.5474507834056826e+17
+log(8, 2): 3.0
+atan2('1', nil): ""TypeError: can't convert nil into Float""
+atan2(nil, '1'): ""TypeError: can't convert String into Float""
+hypot('1', nil): ""TypeError: can't convert nil into Float""
+hypot(:s, '1'): ""TypeError: can't convert String into Float""
+sqrt(1+0i): (1.0+0.0i)
+sqrt(1+1i): (1.09868411346781+0.4550898605622274i)
+sqrt(-4+0i): (0.0+2.0i)
+sqrt(-4-0.0i): (0.0-2.0i)
+sqrt(3+4i): (2.0+1.0i)
 ");
         }
     
@@ -8719,6 +8806,208 @@ tp.enable { e1; e2(1); e3; e4; e5; e6; e7; n1 }
 p lines
 ", @"
 [[4, :e3], [6, :e5], [7, :e6], [9, :e7], [11, :n1]]
+");
+        }
+
+        /// <summary>
+        /// Float#divmod of an infinite dividend by a finite divisor: MRI's flodivmod takes the quotient as the dividend itself,
+        /// so Float::INFINITY.divmod(-2) is FloatDomainError "Infinity".
+        /// </summary>
+        public void Float_DivmodInfinite1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { Float::INFINITY.divmod(-2) }, -> { (-Float::INFINITY).divmod(2) }, -> { Float::INFINITY.divmod(2.5) }, -> { Float::NAN.divmod(2) },
+ -> { Float::INFINITY.div(-2) }, -> { Float::INFINITY % -2 }, -> { 7.5.divmod(-2) }].each { |l| p((l.call rescue $!)) }
+", @"
+#<FloatDomainError: Infinity>
+#<FloatDomainError: -Infinity>
+#<FloatDomainError: Infinity>
+#<FloatDomainError: NaN>
+#<FloatDomainError: -Infinity>
+NaN
+[-4, -0.5]
+");
+        }
+
+        /// <summary>
+        /// Rational#coerce of what it cannot take names the class (nurat_coerce: "NilClass can't be coerced into Rational"); and
+        /// Numeric#divmod computes the modulo first (gcc's order of num_divmod's arguments), so a coerce is asked once before the error.
+        /// </summary>
+        public void Rational_CoerceAndDivmod1() {
+            TestOutput(@"
+require 'ruby4'
+class C1
+  @@log = []
+  def self.log = @@log
+  def coerce(o) = (@@log << :coerce; [o, 2])
+end
+p((Rational(3, 4).divmod(C1.new) rescue $!.class), C1.log)
+p((Rational(3, 4).coerce(nil) rescue $!), (Rational(3, 4).coerce(""x"") rescue $!), (Rational(3, 4).coerce(:s) rescue $!), Rational(3, 4).coerce(2))
+", @"
+NoMethodError
+[:coerce]
+#<TypeError: NilClass can't be coerced into Rational>
+#<TypeError: String can't be coerced into Rational>
+#<TypeError: Symbol can't be coerced into Rational>
+[(2/1), (3/4)]
+");
+        }
+
+        /// <summary>
+        /// Kernel#Integer: a string of only whitespace and a sign is "invalid value" before the radix is looked at (rb_int_parse_cstr),
+        /// and the message quotes the string with rb_inspect, which escapes non-ASCII for a US-ASCII default external. Util/numeric-conversion-matrix.rb.
+        /// </summary>
+        public void Kernel_IntegerSignOnlyAndInspect1() {
+            TestOutput(@"
+require 'ruby4'
+v, $VERBOSE = $VERBOSE, nil; Encoding.default_external = Encoding::US_ASCII; $VERBOSE = v
+[-> { Integer(""-"", 1) }, -> { Integer(""+"", 37) }, -> { Integer("" - "", 2) }, -> { Integer(""1"", 1) }, -> { Integer("""", 1) },
+ -> { Integer("" "", 37) }, -> { Integer("" 1"") }, -> { Integer(""1 "", 16) }, -> { Integer(""é1"") }, -> { Integer(""1\xff"".b) },
+ -> { Integer(""-"", exception: false) }, -> { Integer(""+-1"") }].each { |l| p((l.call rescue $!)) }
+", @"
+#<ArgumentError: invalid value for Integer(): ""-"">
+#<ArgumentError: invalid value for Integer(): ""+"">
+#<ArgumentError: invalid value for Integer(): "" - "">
+#<ArgumentError: invalid radix 1>
+#<ArgumentError: invalid radix 1>
+#<ArgumentError: invalid value for Integer(): "" "">
+#<ArgumentError: invalid value for Integer(): ""\u00A01"">
+#<ArgumentError: invalid value for Integer(): ""1\u00A0"">
+#<ArgumentError: invalid value for Integer(): ""\u00E91"">
+#<ArgumentError: invalid value for Integer(): ""1\xFF"">
+nil
+#<ArgumentError: invalid value for Integer(): ""+-1"">
+");
+        }
+
+        /// <summary>
+        /// Rational() and Complex() of something with no to_r / to_c name nil, true and false by value (convert_type_err):
+        /// "can't convert true into Rational". Util/numeric-conversion-matrix.rb.
+        /// </summary>
+        public void Kernel_RationalComplexSpecialMessage1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { Rational(true) }, -> { Complex(false) }, -> { Rational(nil) }, -> { Complex(nil) }, -> { Rational(:s) }, -> { Complex(Object.new) }].each { |l| p((l.call rescue $!).message.sub(/0x\h+/, ""XX"")) }
+", @"
+""can't convert true into Rational""
+""can't convert false into Complex""
+""can't convert nil into Rational""
+""can't convert nil into Complex""
+""can't convert Symbol into Rational""
+""can't convert Object into Complex""
+");
+        }
+
+        /// <summary>
+        /// A directive the format string ends in after flags, or after a %1$ or %<name> whose argument MRI has fetched by then
+        /// (too few arguments, one hash required first), is "malformed format string"; so is one a newline or NUL ends. Util/format-matrix.rb.
+        /// </summary>
+        public void Sprintf_MalformedEnd1() {
+            TestOutput(@"
+require 'ruby4'
+[""%-"", ""%#"", ""% "", ""%+"", ""%0"", ""%5"", ""%."", ""%*"", ""%"", ""%1$"", ""%<a>"", ""%{"", ""%\n"", ""%\0"", ""% \n"", ""a%\nb""].each do |f|
+  p [f, (format(f) rescue $!.message), (format(f, 1) rescue $!.message), (format(f, a: 1) rescue $!.message)]
+end
+", @"
+[""%-"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%#"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""% "", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%+"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%0"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%5"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]""]
+[""%."", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]""]
+[""%*"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]""]
+[""%"", ""incomplete format specifier; use %% (double %) instead"", ""incomplete format specifier; use %% (double %) instead"", ""incomplete format specifier; use %% (double %) instead""]
+[""%1$"", ""too few arguments"", ""malformed format string"", ""malformed format string""]
+[""%<a>"", ""one hash required"", ""one hash required"", ""malformed format string""]
+[""%{"", ""malformed name - unmatched parenthesis"", ""malformed name - unmatched parenthesis"", ""malformed name - unmatched parenthesis""]
+[""%\n"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%\u0000"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""% \n"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""a%\nb"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+");
+        }
+
+        /// <summary>
+        /// Array#pack's float directives take a Numeric only (MRI's rb_to_float): an object with #to_f that is not one is
+        /// "can't convert ToF into Float", nil and true by value. Util/pack-matrix.rb.
+        /// </summary>
+        public void Pack_FloatOfNonNumeric1() {
+            TestOutput(@"
+require 'ruby4'
+class ToF; def to_f = 1.5; end
+class N < Numeric; def to_f = 2.5; end
+[-> { [ToF.new].pack(""D"") }, -> { [N.new].pack(""g"") }, -> { [nil].pack(""D"") }, -> { [true].pack(""e"") }, -> { [""1""].pack(""D"") },
+ -> { [2**70].pack(""D"") }, -> { [Rational(1, 2)].pack(""E"") }, -> { [:s].pack(""f"") }].each { |l| p((l.call rescue $!)) }
+", @"
+#<TypeError: can't convert ToF into Float>
+""@ \x00\x00""
+#<TypeError: can't convert nil into Float>
+#<TypeError: can't convert true into Float>
+#<TypeError: can't convert String into Float>
+""\x00\x00\x00\x00\x00\x00PD""
+""\x00\x00\x00\x00\x00\x00\xE0?""
+#<TypeError: can't convert Symbol into Float>
+");
+        }
+
+        /// <summary>
+        /// String#unpack's "@" with no count seeks to 0, but at the end of the format it counts 1, as every directive does there
+        /// (MRI's p >= pend: len = 1): "".unpack("@") is "@ outside of string", "".unpack("@C") [nil]. Util/unpack-matrix.rb.
+        /// </summary>
+        public void Unpack_AtEnd1() {
+            TestOutput(@"
+require 'ruby4'
+["""", ""a"", ""ab""].each { |s| [""@"", ""C@"", ""@C"", ""x@"", ""@0"", ""C@0"", ""@*"", ""C@*""].each { |f| puts ""#{s.inspect} #{f} #{(s.unpack(f) rescue $!.message).inspect}"" } }
+", @"
+"""" @ ""@ outside of string""
+"""" C@ ""@ outside of string""
+"""" @C [nil]
+"""" x@ ""x outside of string""
+"""" @0 []
+"""" C@0 [nil]
+"""" @* []
+"""" C@* [nil]
+""a"" @ []
+""a"" C@ [97]
+""a"" @C [97]
+""a"" x@ []
+""a"" @0 []
+""a"" C@0 [97]
+""a"" @* []
+""a"" C@* [97]
+""ab"" @ []
+""ab"" C@ [97]
+""ab"" @C [97]
+""ab"" x@ []
+""ab"" @0 []
+""ab"" C@0 [97]
+""ab"" @* []
+""ab"" C@* [97]
+");
+        }
+
+        /// <summary>
+        /// String#undump passes \s and \0 through as they are, as MRI's str_undump does with every escape #dump does not write.
+        /// Util/string-methods-matrix.rb.
+        /// </summary>
+        public void String_UndumpUnknownEscapes1() {
+            TestOutput(@"
+require 'ruby4'
+['""\\s""', '""\\0""', '""\\e""', '""\\a\\b\\t\\n\\v\\f\\r""', '""\\q""', '""\\1""', '""\\x41""', '""\\u0041""', '""\\#""', '""\\""""'].each { |s| p((s.undump rescue $!)) }
+p ""a\0b\e あ"".dump.undump == ""a\0b\e あ""
+", @"
+""\\s""
+""\\0""
+""\e""
+""\a\b\t\n\v\f\r""
+""\\q""
+""\\1""
+""A""
+""A""
+""#""
+""\""""
+true
 ");
         }
     }

@@ -282,7 +282,8 @@ class Rational < Numeric
       real = other.real
       [::Float === real ? real.to_r : ::Rational.__new_internal__(real, 1), self]
     else
-      ::Kernel.raise(::TypeError, "#{__ir_coerce_name__(other)} can't be coerced into #{self.class}")
+      # (nurat_coerce names the class, rb_obj_classname: "NilClass can't be coerced into Rational")
+      ::Kernel.raise(::TypeError, "#{other.class} can't be coerced into #{self.class}")
     end
   end
 
@@ -550,7 +551,8 @@ class Rational < Numeric
         __ir_responds_to__(value, :to_r)
       end
     unless responds
-      name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
+      # (rb_convert_type's convert_type_err names nil, true and false by value)
+      name = (nil.equal?(value) || true.equal?(value) || false.equal?(value)) ? value.inspect : __ir_class_of__(value)
       ::Kernel.raise(::TypeError, "can't convert #{name} into Rational")
     end
     result = value.to_r

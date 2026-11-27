@@ -1257,7 +1257,8 @@ namespace IronRuby.Builtins {
                 }
 
                 if (Double.IsInfinity(self) && !Double.IsInfinity(other)) {
-                    div = self / other;
+                    // flodivmod: div = x, whatever the divisor's sign - Float::INFINITY.divmod(-2) is "Infinity"
+                    div = self;
                 } else {
                     div = Math.Round((self - mod) / other, MidpointRounding.AwayFromZero);
                 }

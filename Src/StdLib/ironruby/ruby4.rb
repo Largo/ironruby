@@ -9,7 +9,7 @@ module Kernel
   # asks of an implementation other than CRuby's - "into", where CRuby still says "to".
   private def __ir_try_convert__(obj, method, klass, name)
     return obj if klass === obj
-    return nil unless __ir_responds_to__(obj, method)
+    return nil unless __ir_responds_to__(obj, method) && __ir_conversion_callable__(obj, method)
     converted = obj.__send__(method)
     return nil if converted.nil?
     return converted if klass === converted
@@ -3459,8 +3459,11 @@ class Numeric
   end
   alias :% :modulo
 
+  # MRI's num_divmod is rb_assoc_new(num_div(x, y), num_modulo(x, y)), whose arguments gcc evaluates right
+  # to left: the modulo first, which is what a coerce or an error in between shows.
   def divmod(other)
-    [div(other), modulo(other)]
+    m = modulo(other)
+    [div(other), m]
   end
 
   # The modulo moved back across zero when the two point in opposite
@@ -3999,11 +4002,10 @@ class String
         when "b" then out << "\b"
         when "a" then out << "\a"
         when "e" then out << "\e"
-        when "s" then out << " "
         when "\\" then out << "\\"
         when '"' then out << '"'
         when "#" then out << "#"
-        when "0" then out << "\0"
+        # (not \s nor \0: #dump writes neither, and MRI's undump passes them through as they are)
         when "x"
           hex = body[(i + 1), 2]
           ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/
@@ -8412,8 +8414,9 @@ module Math
   end
 
   def __ir_atan2__(y, x)
-    y = __flt__(y)
+    # x first, as MRI's math_atan2 converts them
     x = __flt__(x)
+    y = __flt__(y)
     return y if y.nan?
     return x if x.nan?
     ::System::Math.Atan2(y, x)
@@ -8474,6 +8477,17 @@ module Math
   end
 
   def __ir_sqrt__(x)
+    # MRI's rb_math_sqrt takes a Complex as one: sqrt((|x| + re) / 2), sqrt((|x| - re) / 2) with the sign of
+    # the imaginary part (its sign bit: -0.0 counts)
+    if x.is_a?(::Complex)
+      i = x.imaginary
+      neg = i.is_a?(::Float) ? (i < 0.0 || (i == 0.0 && 1.0 / i < 0.0)) : i < 0
+      re = __flt__(x.real)
+      d = __flt__(x.abs)
+      im = ::System::Math.Sqrt((d - re) / 2.0)
+      re = ::System::Math.Sqrt((d + re) / 2.0)
+      return ::Complex.rect(re, neg ? -im : im)
+    end
     x = __flt__(x)
     return x if x.nan?
     __dom__("sqrt") if x < 0.0
@@ -8515,14 +8529,20 @@ module Math
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
     end
     x, bits = __log_split__(x)
-    r = __log__(x, "log")
-    return r if r
-    v = ::System::Math.Log(x) + bits * ::System::Math.Log(2.0)
-    return v if rest.empty?
+    if rest.empty?
+      r = __log__(x, "log")
+      return r if r
+      return ::System::Math.Log(x) + bits * ::System::Math.Log(2.0)
+    end
+    # MRI's rb_math_log of two: both converted and checked (a NaN is not negative), the pole, then
+    # log2(x) / log2(base) + (bits - base's bits, a size_t) / log2(base) - see RubyMath.LogBase
+    __dom__("log") if x < 0.0
     b, bbits = __log_split__(rest[0])
-    r = __log__(b, "log")
-    return r if r
-    v / (::System::Math.Log(b) + bbits * ::System::Math.Log(2.0))
+    __dom__("log") if b < 0.0
+    return (b != 0.0 ? -::Float::INFINITY : ::Float::NAN) if x == 0.0
+    return -0.0 if b == 0.0
+    lb = ::System::Math.Log2(b)
+    ::System::Math.Log2(x) / lb + ((bits - bbits) & 0xFFFF_FFFF_FFFF_FFFF).to_f / lb
   end
 
   def __ir_log2__(x)
@@ -8573,8 +8593,9 @@ module Math
   end
 
   def __ir_hypot__(x, y)
-    x = __flt__(x).abs
+    # y first: MRI's hypot(Get_Double(x), Get_Double(y)) converts its arguments right to left (gcc's order)
     y = __flt__(y).abs
+    x = __flt__(x).abs
     # An infinity wins over a NaN, which is what C's hypot() promises.
     return ::Float::INFINITY if x.infinite? || y.infinite?
     return ::Float::NAN if x.nan? || y.nan?

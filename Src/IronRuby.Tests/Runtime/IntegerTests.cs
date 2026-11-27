@@ -1605,5 +1605,55 @@ p((3 & o rescue $!), ((2**70) ^ o rescue $!), (3 | nil rescue $!), ((2**70) & 1.
 #<TypeError: 1.5 can't be coerced into Integer>
 ");
         }
+
+        /// <summary>
+        /// Integer#fdiv of what is coerced takes the result as a Float, as MRI's rb_int_fdiv_double (NUM2DBL): of a Complex
+        /// a RangeError, not the Complex. Util/coerce-matrix.rb.
+        /// </summary>
+        public void Integer_FDivCoerced1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { 1.fdiv(Complex(1, 1)) }, -> { -3.fdiv(Complex(2, 0)) }, -> { (2**64).fdiv(Complex(1, 1)) }, -> { 1.fdiv(Rational(3, 2)) },
+ -> { 1.fdiv(""x"") }].each { |l| p((l.call rescue $!)) }
+", @"
+#<RangeError: can't convert 0.5-0.5i into Float>
+#<RangeError: can't convert -1.5+0.0i into Float>
+#<RangeError: can't convert 9.223372036854776e+18-9.223372036854776e+18i into Float>
+0.6666666666666666
+#<TypeError: String can't be coerced into Integer>
+");
+        }
+
+        /// <summary>
+        /// Integer#remainder: a Fixnum's is num_remainder, which answers the dividend itself for an infinite divisor of the other
+        /// sign (-3, not -3.0); a Bignum's is rb_big_remainder, which coerces and calls #remainder (Complex has none).
+        /// </summary>
+        public void Integer_RemainderCoerced1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { (2**70).remainder(Complex(1,1)) }, -> { 3.remainder(Complex(1,1)) }, -> { -3.remainder(Float::INFINITY) }, -> { 3.remainder(-Float::INFINITY) },
+ -> { (2**70).remainder(Float::INFINITY) }, -> { -3.remainder(2.5) }, -> { (-(2**70)).remainder(-Float::INFINITY) }, -> { 3.remainder(Rational(1,2)) },
+ -> { -3.remainder(Rational(1,2)) }, -> { -3.0.remainder(Float::INFINITY) }, -> { 0.remainder(Float::INFINITY) }].each { |l| p((l.call rescue $!)) }
+[2**64, -(2**64), 2**63 - 1].each { |x| [Complex(1, 1), 2].each { |a| p((x.__send__(:remainder, a) rescue $!)) } }
+", @"
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+#<NoMethodError: undefined method '%' for an instance of Complex>
+-3
+3
+1.1805916207174113e+21
+-0.5
+-1.1805916207174113e+21
+(0/1)
+(0/1)
+-3.0
+0.0
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+0
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+0
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+1
+");
+        }
     }
 }
