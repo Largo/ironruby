@@ -555,20 +555,20 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ GetSlice(int start, int count) {
-                if (Utils.IsSharedSlice(_data.Length, Utils.NormalizeCount(_count, start, count))) {
-                    // see Utils.IsSharedSlice; checked again while holding the content
-                    bool shared = ContentState.Enter(ref _state);
-                    try {
-                        int sliceCount = Utils.NormalizeCount(_count, start, count);
-                        if (Utils.IsSharedSlice(_data.Length, sliceCount)) {
-                            shared = true;
-                            return new BinaryContent(_data, _start + start, sliceCount, _owner);
-                        }
-                    } finally {
-                        ContentState.Exit(ref _state, shared);
+                // Held for the copy too: unheld, a copy read the array, its start and its count while a writer on another thread
+                // moved them (a slice racing #slice! came out with characters of the string twice).
+                bool shared = ContentState.Enter(ref _state);
+                try {
+                    int sliceCount = Utils.NormalizeCount(_count, start, count);
+                    if (Utils.IsSharedSlice(_data.Length, sliceCount)) {
+                        // see Utils.IsSharedSlice
+                        shared = true;
+                        return new BinaryContent(_data, _start + start, sliceCount, _owner);
                     }
+                    return Create(Utils.GetSlice(GetDataSpan(), start, count), _owner);
+                } finally {
+                    ContentState.Exit(ref _state, shared);
                 }
-                return Create(Utils.GetSlice(GetDataSpan(), start, count), _owner);
             }
 
             public override CharacterEnumerator/*!*/ GetCharacters() {
