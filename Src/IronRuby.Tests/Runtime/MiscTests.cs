@@ -7888,6 +7888,48 @@ false
         }
 
         /// <summary>
+        /// IR_LIGHT_MATCH_SINK: a light frame whose regex literals go to String and Regexp methods that store $~, in a method
+        /// that reads no $~ of its own (MethodDefinition.IsMatchSink): the caller's $~ is left as it was, in its thread too; a
+        /// method that reads its $~ ($~, Regexp.last_match, binding) sees its match.
+        /// </summary>
+        public void Method_LightFrameMatchSink1() {
+            TestOutput(@"
+require 'ruby4'
+def g(s) = s.gsub(/b/, ""x"")
+def sp(s) = s.split(/,/)
+def k(s)
+  case s
+  when /z/ then 1
+  when /b/ then 2
+  end
+end
+def e(s) = (s =~ /c/) || -1
+def t(s); s =~ /b+/; $~[0]; end
+def l(s); s.sub(/a/, """"); Regexp.last_match(0); end
+def b(s); s.index(/c/); binding.eval(""$~[0]""); end
+def caller_sees(s)
+  ""zz"" =~ /z/
+  r = [g(s), sp(s), k(s), e(s)]
+  [r, $~[0]]
+end
+p caller_sees(""abc,b""), 40.times.map { caller_sees(""ab"") }.uniq
+p t(""abbc""), l(""abc""), b(""abc"")
+$~ = nil
+p [g(""b""), e(""c""), $~]
+th = Thread.new { ""q"" =~ /q/; 30.times { g(""bb""); k(""b"") }; $~[0] }
+p th.value
+", @"
+[[""axc,x"", [""abc"", ""b""], 2, 2], ""z""]
+[[[""ax"", [""ab""], 2, -1], ""z""]]
+""bb""
+""a""
+""c""
+[""x"", 0, nil]
+""q""
+");
+        }
+
+        /// <summary>
         /// `recv.m op= v' in a light frame (IR_LIGHT_MEMBER_OPASSIGN): the read of m, the operator and the write of m= are calls of
         /// the frame's light sites; the value is the right-hand side whatever m= returns; a private accessor on self; `&.'; binding.
         /// </summary>

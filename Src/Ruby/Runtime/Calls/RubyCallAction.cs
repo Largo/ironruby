@@ -121,7 +121,7 @@ namespace IronRuby.Runtime.Calls {
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
             if (Context == null ||
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasFreshSplat | RubyCallFlags.HasLightScope)) != 0 ||
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasFreshSplat | RubyCallFlags.HasLightScope | RubyCallFlags.HasMatchSink)) != 0 ||
                 Signature.HasSplattedArgument && Signature.HasRhsArgument) {
                 return null;
             }
@@ -372,7 +372,7 @@ namespace IronRuby.Runtime.Calls {
 
         private const RubyCallFlags SharableCallFlags = RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasRhsArgument |
             RubyCallFlags.HasBlock | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSourceBlock |
-            RubyCallFlags.HasLightScope | RubyCallFlags.HasFreshSplat;
+            RubyCallFlags.HasLightScope | RubyCallFlags.HasFreshSplat | RubyCallFlags.HasMatchSink;
 
         private static readonly object _SharedRulesLock = new object();
         private SharedRule[] _sharedRules;
@@ -772,7 +772,20 @@ namespace IronRuby.Runtime.Calls {
                     return BuildCall(metaBuilder, sentName, args, defaultFallback, callClrMethods, false);
                 }
 
+                if (args.Signature.HasMatchSink && !args.ScopeRead && IsMatchSinkMethod(args.RubyContext, method.Info)) {
+                    args.MatchSink = true;
+                }
                 method.Info.BuildCall(metaBuilder, args, methodName);
+
+                // While a TracePoint is enabled its hooks may read the frame's $~ through their binding (a :line or :return
+                // event): the call then stores $~ in the frame's scope, made for it (RubyOps.LightScopeRequired).
+                if (args.MatchSink && !metaBuilder.Error && metaBuilder.Result != null) {
+                    metaBuilder.Result = Ast.Condition(
+                        Ast.Equal(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), AstUtils.Constant(0)),
+                        AstUtils.Convert(metaBuilder.Result, typeof(object)),
+                        AstUtils.Constant(RubyOps.LightScopeRequired, typeof(object))
+                    );
+                }
 
                 // MRI 3.4+: a block passed to a method that never uses it may be ignored
                 if (args.Signature.HasSourceBlock && RequiresUnusedBlockCheck(method.Info) && !metaBuilder.Error && metaBuilder.Result != null) {
@@ -965,6 +978,22 @@ namespace IronRuby.Runtime.Calls {
                 return new MethodResolutionResult(member, ownClass, true);
             }
             return notFound;
+        }
+
+        /// <summary>
+        /// A library method of String, Symbol or Regexp (MutableStringOps, SymbolOps, RubyRegexOps): one that takes its caller's
+        /// scope to store $~ in it and for the runtime, and for nothing else - not to resolve a call it makes, which goes through
+        /// a site of its own without the caller's refinements, as CRuby's rb_funcall does. A site with RubyCallFlags.HasMatchSink
+        /// gives it the runtime's empty scope (CallArguments.MatchSink). Not while c_call is traced: the rule then reports the
+        /// call with the caller's scope (RubyLibraryMethodInfo.AddCallTracing), and switching tracing rebinds every rule.
+        /// </summary>
+        internal static bool IsMatchSinkMethod(RubyContext/*!*/ context, RubyMemberInfo/*!*/ method) {
+            if (!(method is RubyLibraryMethodInfo) || TracePoint.CCallTracing) {
+                return false;
+            }
+            var owner = method.DeclaringModule;
+            return owner == context.GetClass(typeof(MutableString)) || owner == context.GetClass(typeof(RubySymbol)) ||
+                owner == context.GetClass(typeof(RubyRegex));
         }
 
         internal static MethodResolutionResult Resolve(MetaObjectBuilder/*!*/ metaBuilder, string/*!*/ methodName, CallArguments/*!*/ args,

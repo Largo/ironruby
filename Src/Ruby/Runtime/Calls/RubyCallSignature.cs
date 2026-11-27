@@ -77,13 +77,19 @@ namespace IronRuby.Runtime.Calls {
         // (ArgsBuilder.AddCallArguments). Not a site that splats an array of the program's own (`f(*a)'), which the callee
         // must not share.
         HasFreshSplat = 2048,
+
+        // CallAction only, with HasLightScope: a call in a method that runs without its scope and that nothing in its body
+        // reads $~ of (MethodDefinition.IsMatchSink). A library method of String, Symbol or Regexp, which takes the scope only to
+        // store $~ in it and for its runtime, is then given the runtime's empty scope instead of reading the frame's
+        // (CallArguments.MatchSink), and the frame makes no scope for it.
+        HasMatchSink = 4096,
     }
         
     /// <summary>
     /// RubyScope/RubyContext, (self), (argument){ArgumentCount}, (splatted-argument)?, (block)?
     /// </summary>
     public struct RubyCallSignature : IEquatable<RubyCallSignature> {
-        private const int FlagsCount = 12;
+        private const int FlagsCount = 13;
 
         private const int ResolveOnlyArgumentCount = (int)(UInt32.MaxValue >> FlagsCount);
         private const int MaxArgumentCount = ResolveOnlyArgumentCount - 1;
@@ -104,6 +110,7 @@ namespace IronRuby.Runtime.Calls {
         public bool HasSourceBlock { get { return (_countAndFlags & (uint)RubyCallFlags.HasSourceBlock) != 0; } }
         public bool HasLightScope { get { return (_countAndFlags & (uint)RubyCallFlags.HasLightScope) != 0; } }
         public bool HasFreshSplat { get { return (_countAndFlags & (uint)RubyCallFlags.HasFreshSplat) != 0; } }
+        public bool HasMatchSink { get { return (_countAndFlags & (uint)RubyCallFlags.HasMatchSink) != 0; } }
 
         // defined? ignores arguments hence we can use one argument number (max) to represent resolve only sites:
         public bool ResolveOnly { get { return ArgumentCount == ResolveOnlyArgumentCount; } }
@@ -191,7 +198,7 @@ namespace IronRuby.Runtime.Calls {
                 (HasImplicitSelf ? "." : "") +
                 (HasImplicitArguments ? "^" : "") +
                 (IsVirtualCall ? "V" : "") +
-                (HasLightScope ? "L" : HasScope ? "S" : "C") +
+                (HasLightScope ? (HasMatchSink ? "M" : "L") : HasScope ? "S" : "C") +
                 (ResolveOnly ? "?" : "," + ArgumentCount.ToString()) + 
                 (HasSplattedArgument ? (HasFreshSplat ? "*+" : "*") : "") + 
                 (HasBlock ? "&" : "") + 
