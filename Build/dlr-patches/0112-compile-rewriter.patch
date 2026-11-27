@@ -1,0 +1,33 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+@@ -13,6 +13,16 @@
+ using Microsoft.Scripting.Utils;
+ 
+ namespace Microsoft.Scripting.Interpreter {
++    /// <summary>
++    /// A hook for the language: <see cref="Rewriter"/>, if set, is given each interpreted lambda's tree just before it is
++    /// compiled to IL, and what it returns is compiled instead. It must return a lambda of the same type and parameters that
++    /// computes the same thing - for instance one whose constants are typed so that loading them is cheaper. The interpreter
++    /// keeps running the tree it was given. Process-wide: set it once, to something that holds no state of one runtime.
++    /// </summary>
++    public static class LightCompilation {
++        public static Func<LambdaExpression, LambdaExpression> Rewriter { get; set; }
++    }
++
+ 
+     /// <summary>
+     /// Manages creation of interpreted delegates. These delegates will get
+@@ -256,6 +266,12 @@
+                     lambda = Expression.Lambda(_compiledDelegateType, lambda.Body, lambda.Name, lambda.Parameters);
+                 }
+ 
++                // the language's last word on the tree before it is compiled to IL (LightCompilation.Rewriter)
++                var rewriter = LightCompilation.Rewriter;
++                if (rewriter is not null) {
++                    lambda = rewriter(lambda);
++                }
++
+                 if (HasClosure) {
+                     _compiled = LightLambdaClosureVisitor.BindLambda(lambda, Interpreter?.ClosureVariables ?? _closureVariables);
+                 } else {

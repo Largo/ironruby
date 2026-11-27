@@ -2373,6 +2373,126 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   spec/library/stringscanner (240), spec/library/csv, spec/library/erb: the same on base, new and
   off, 0 failures (one error in all three, `String.try_convert`, run as a directory).
 
+- **perf/lconst (/perf-frame, 2026-11-27) - a compiled body's constants without a cast helper**
+  (switch `IR_SEALED_CONSTANTS`, on unless `=0`; a DLR patch, `0112-compile-rewriter`) -
+  instructions only, not gated. Built on 79a2c30 with claude/perf-lsite merged (980e36c).
+  - **Counted first** (callgrind with `DOTNET_ReadyToRun=0`, so that CoreLib's cast helpers have
+    names, and a caller walk of the perf map): `CastHelpers.ChkCastClass` and
+    `ChkCastClassSpecial` are 9.2% of `fc`'s instructions (frame-cost, `-X:NoJIT`), 11.7% of
+    `tap`'s and 6.9% of `inject`'s (core-small). By caller: the Ruby bodies (`F#fc` 7 casts a
+    call, `tap`'s caller `H#m56` 24, `H#m3` 19, `Enumerable#inject` 8), the shape file's
+    compiled loop (~10, every shape alike), and the rules (`CallSite.Target`, 1-6). A cast
+    is ~17 instructions. In a body: `LambdaExpression.Compile` keeps object constants in its
+    closure's object[] and loads one with a bounds check and a `castclass`; every dynamic
+    call site is one (`CallSite<T>`, not sealed: `DOTNET_JitDisasm` of `F#fc3` shows 14
+    helper calls).
+  - **Why not a sealed holder.** First cut: each site in a sealed `SiteHolder<T>`, and every
+    constant typed as its own class where that is sealed. It counted more (up to 1.028): an
+    `ExpressionVisitor` sees a `DynamicExpression` as an extension node (`Accept` calls
+    `VisitDynamic` only for a `DynamicExpressionVisitor`), and reducing it gives
+    `Constant(site).Target(Constant(site), ...)`, two casts where the compiler emits one.
+    Fixed, the holder's cast was still the helper: in Ruby's bodies the JIT calls
+    `CORINFO_HELP_CHKCASTCLASS` even for a sealed class, where a probe lambda of the same
+    runtime (in its own process and inside `ir`; with a try/finally, a fault, a catch and
+    rethrow, 600 locals, 32 casts, `PrecompiledFrames.Current`) gets the one-compare inline
+    check. What makes the difference was not found.
+  - **What landed.** Just before an interpreted lambda is compiled to IL - the DLR's
+    `LightDelegateCreator`, through a hook the patch adds (`LightCompilation.Rewriter`), and
+    `-X:NoAdaptiveCompilation`'s compile - `CompiledConstantsRewriter` (a
+    `DynamicExpressionVisitor`) reduces the extension nodes, turns each dynamic expression into
+    the call the compiler would emit (the site, its Target, then the arguments), and loads
+    every constant of a class (not a string, a Type or a MethodBase, which the compiler emits
+    inline) as an object, which needs no cast, through `Unsafe.As<T>`, which is no code. Sound:
+    a ConstantExpression's value is of its type, and the rewriter makes the sites itself.
+    The interpreter keeps the tree it had; the method JIT's typed bodies and the rules are
+    compiled elsewhere and keep their casts. `F#fc3`: 14 helper calls -> 5, 622 -> 603 lines.
+  - **Numbers** (instructions a call, `Util/perf/callgrind/count.sh`, N=20,000, switch off ->
+    on). frame-cost `-X:NoJIT`: `f0` 0.984, `f1` 0.988, `fc` 0.989, `fc3` 0.991, `fy` 0.992,
+    `fbg` 0.983, `bytesplice` 0.984; default mode: `f0`/`f1` 1.000 (the method JIT's), the rest
+    0.983-0.992. core-small: `each` 0.979, `max_by` 0.979, `inject` 0.982, `sum_blk` 0.985,
+    `then` 0.985, `each_with_index` 0.987, `zip` 0.988, `minmax` 0.990, `inject_sym` 0.991,
+    `tap` 0.991. regex-shapes: 0.980-0.996, `size` 1.000. Two rows first read high and were
+    the process's history (counts move with the shapes run before in the same process):
+    `tap` 1.011 in a list of ten, 0.991 alone (two processes each, to the 0.1); `eqt` 0.781
+    after `kase`, 0.987 alone. Some callgrind processes of both arms stopped part way under
+    valgrind (the .NET process dies there now and then; the same shapes complete natively and
+    in a rerun): their rows were measured again. Start-up (wall clock, six alternating runs,
+    while a publish ran): `ir -e 1` 1,609-1,779 ms on, 1,678-1,814 off; `-S gem list`
+    3,244-3,443 on, 3,271-3,501 off - no worse.
+  - Checked: 18 matrices (light-entry, light-rest, block-given, global-light, lexical-light,
+    keyword-light, regex-light, rescue-light, super-light, parked-scope, light-remember, caller,
+    raise, jit, jit-calls, jit-scan, jit-strlit, hot-shapes) in seven modes (as built,
+    `IR_SEALED_CONSTANTS=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`,
+    `-X:NoAdaptiveCompilation`, and the R2R host with its precompiled startup library, rebuilt
+    from this tree): 108 of the six Release modes print what the baseline prints, and CRuby's
+    but where the baseline differs too (light-entry's `define_method` alias, caller's library
+    frames, raise, hot-shapes' FrozenError). The R2R host: what the Release candidate prints,
+    but regex-light's `raise label` (`Integer()` from a light frame is labelled "block in
+    <main>": the same with the switch off and with `IR_STARTUP_DLL=none`, the R2R host's own)
+    and one line of caller-matrix whose iteration counts move from run to run in both arms (when
+    the background compilation lands). `IR_CONFIG=R2R ./ir.sh -e ...` and `-S gem list`
+    run with the startup library, switch on and off. IronRuby.Tests (which compile up front):
+    71 named (Method_LightFrame*, Backtrace_*, Scenario_RubyBlocks/Eval/Exceptions/Closures/
+    MethodMissing/MethodAliases*, JitCore*, Dynamic*): PASSED. `Util/check-dlr-patches.sh`
+    passes on a `../dlr` with the patch applied. Not run: the suite, a sweep, AWFY, timing.
+  - Left: the method JIT's typed bodies and the rules (`CallSite.Target`, compiled by the
+    DLR's binder) could use the same rewrite; why the JIT expands no cast in these bodies.
+
+- **perf/lframe (/perf-frame, 2026-11-26) - a cheaper method entry: the alias name and the
+  traced test** (switch `IR_LIGHT_ENTRY`, on unless `=0`) - instructions only, not gated.
+  Built on 2f8c31c. What gap 16's profiles left on every light frame, looked at on its own
+  with `Util/bench/frame-cost.rb` (new: a method that does nothing, one, three calls, a yield,
+  `block_given?`, and `String#bytesplice`), `-X:NoJIT` so that the generic bodies run.
+  - **Not the prologue.** perf/lsite2 put the light lambda's +158 down to zeroing its locals;
+    `DOTNET_JitDisasm` of the light `H#gsub` says otherwise: two 64-byte stores. What the
+    lambda pays up front is its closure constants (each load a bounds check and a
+    `CHKCASTCLASS` helper call), the frame record (`PrecompiledFrames.Enter`) and the
+    entry's helpers. So no `SkipLocalsInit` (the runtime compiles with the BCL's
+    `LambdaExpression.Compile`, which has no such switch, and the DLR patch set has nothing
+    to patch) and no DLR patch.
+  - **The alias name.** A call through an alias leaves the name it was called by in a
+    thread-static for the method's entry to take (`MarkAliasCall`, `TakePendingCallee`,
+    `CreateMethodScope`). Every entry tested a flag first, `_aliasCallSeen`, which start-up
+    sets for good (RubyGems and the prelude call aliases), so every entry of every method,
+    light or scoped, read the thread-static - a call into the runtime from a DynamicMethod:
+    `TakePendingCallee` 26 + `TakePendingCalleeSlow` 34 instructions a call in the `fc`
+    profile. The flag is now a count of the threads that have a name pending: raised by the
+    alias call when its thread had none, lowered by the entry that takes one, so an entry
+    reads the thread-static only while some thread has a name pending. A thread that dies
+    with one pending leaves the count up, which only costs the reads it costs today.
+  - **The traced test.** A light frame without register locals called
+    `CreateMethodScopeIfTraced` (nine arguments) on every entry to learn that no TracePoint
+    listens; the test is now inline, as `EnterWithRegisterLocals` has it.
+  - Left as they were: `EnterLightMethod` and `LeaveLightMethodFrame` already inline their
+    fast paths (the slow exit only for a block or a scope), and the frame record is every
+    compiled frame's, tuned before (#168).
+  - **Numbers** (instructions a call, `Util/perf/callgrind/count.sh`, N=20,000; switch off ->
+    on). frame-cost, light frames: `f0` 1,572 -> 1,435 (0.913), `f1` 1,656 -> 1,591 (0.961),
+    `fc` 2,553 -> 2,314 (0.906), `fc3` 4,280 -> 3,693 (0.863), `fy` 2,412 -> 2,347 (0.973),
+    `fbg` 1,932 -> 1,795 (0.929), `bytesplice` 27,120 -> 26,907 (0.992); the same with
+    `IR_LIGHT_FRAMES=0` (the alias count only): 0.945-0.974, `bytesplice` 0.991. Default mode,
+    regex-shapes: 0.977-0.993, `size` 1.000; core-small: `tap` 0.931, `then` 0.945, `minmax`
+    0.969, `inject_sym` 0.973, `inject` 0.975, `sum_blk` 0.980, `zip` 0.985, `max_by` 0.984,
+    `each`/`each_with_index` 0.991. No shape counts more. No timing run (the counter is the
+    measure here; the gate owes the clock).
+  - Checked: `Util/light-entry-matrix.rb` (new: `__callee__` and `__method__` through `alias`
+    and `alias_method` into light and scoped methods, `define_method`, `send`, `public_send`,
+    `Method#call`, `bind_call`, method_missing; an alias call that raises ArgumentError before
+    its method is entered and then ordinary calls; alias calls as arguments of alias calls;
+    recursion through an alias; four threads calling aliases and names; TracePoint `:call`'s
+    `method_id`/`callee_id`; a million-deep recursion through a light frame, and through an
+    alias: SystemStackError, and the process goes on) and light-rest, block-given,
+    global-light, lexical-light, keyword-light, regex-light, rescue-light, super-light,
+    parked-scope, caller, light-remember and hot-shapes: the candidate prints what the
+    baseline prints in all 78 runs (each as built, `IR_LIGHT_ENTRY=0`, `IR_LIGHT_FRAMES=0`,
+    `IR_LIGHT_REGEX=all`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`), and CRuby's but where the
+    baseline differs too: caller's library frames, hot-shapes' FrozenError, and
+    light-entry's `define_method` body called through an alias, whose `__callee__` is the
+    definition's name on both builds (CRuby: the alias's) - a fault of master, not of this.
+    IronRuby.Tests: the 11 of AliasTests, `Backtrace_ArityCalleeFrame1` and the ten
+    `Method_LightFrame*`: PASSED. The census cannot see this (no method changes verdict).
+    Not run: `IR_CONFIG=R2R` start-up, the suite, a sweep, AWFY (owed to the gate).
+
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
   perf/jitbody's census fix): the branch `claude/happy-gauss-95wm2j` at 2f8c31c against master

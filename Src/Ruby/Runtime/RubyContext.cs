@@ -770,6 +770,9 @@ namespace IronRuby.Runtime {
 
             _runtimeId = Interlocked.Increment(ref _RuntimeIdGenerator);
 
+            // Compiled bodies load their call sites and sealed constants without a cast helper (CompiledConstantsRewriter).
+            CompiledConstantsRewriter.Install();
+
             // A lambda literal is light-compiled when it is first called, not with the method or file it is written in
             // (CompiledFrameExpression.IsCompiledOnFirstCall).
             Microsoft.Scripting.Interpreter.LightCompiler.CompileOnFirstCall = LazyLambdasAll ? (lambda => true) :
