@@ -8837,5 +8837,23 @@ nil
 #<ArgumentError: invalid value for Integer(): ""+-1"">
 ");
         }
+
+        /// <summary>
+        /// Rational() and Complex() of something with no to_r / to_c name nil, true and false by value (convert_type_err):
+        /// "can't convert true into Rational". Util/numeric-conversion-matrix.rb.
+        /// </summary>
+        public void Kernel_RationalComplexSpecialMessage1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { Rational(true) }, -> { Complex(false) }, -> { Rational(nil) }, -> { Complex(nil) }, -> { Rational(:s) }, -> { Complex(Object.new) }].each { |l| p((l.call rescue $!).message.sub(/0x\h+/, ""XX"")) }
+", @"
+""can't convert true into Rational""
+""can't convert false into Complex""
+""can't convert nil into Rational""
+""can't convert nil into Complex""
+""can't convert Symbol into Rational""
+""can't convert Object into Complex""
+");
+        }
     }
 }
