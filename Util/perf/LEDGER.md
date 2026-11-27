@@ -1368,6 +1368,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     RubyGems' own Ruby (binds ~100 ms inclusive in `-e 1`, the running of precompiled code), the
     files `gem list` requires, and the JIT, which the release image already halves. A next attempt
     should measure on the release image, or say why the R2R host stands in for it.
+    2026-11-27, perf/startup3 (Landed, not gated): measured on the release image as perf/startup2
+    asks. FindCopyingClasses' type scan is now generated attributes, and the default-spec cache is
+    validated without a glob or a File::Stat per gemspec. Main-thread instructions -2.0% / -2.0% /
+    -1.8% on `gem list` / `require "irb"` / irb, and -2.8% on `-e 1` (release image). What is left of
+    RubyGems' boot is its own class bodies (specification, requirement, platform: ~40 ms of `-e 1`)
+    and rbconfig (~12 ms).
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -1567,6 +1573,68 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/startup3 (2026-11-27) - start-up on the release image: a copied module's backtrace name
+  from generated attributes; the default-spec cache validated in one pass over the directory (gap
+  26)** - not gated. Base 79a2c30 (with the round's ledger, 973314a). Two commits:
+  - 86e85c0: `RubyStackTraceBuilder.FindCopyingClasses` read the `Includes(Copy = true)` attributes of
+    every type in IronRuby.Libraries the first time a backtrace named a copied module's method. That
+    cost ~9 ms once per process (`gem list`, `require "irb"` and irb, through optparse's rescued
+    exception in `Gem::Command#handles?`) and loaded AngleSharp.dll and System.Net.Sockets.dll. The
+    initializer generator now emits `[assembly: RubyCopiedModule(typeof(module), typeof(class))]`,
+    six pairs in IronRuby.Libraries and none in Libraries.Yaml. An assembly without
+    `RubyLibraryAttribute` is still scanned, and `IR_COPIED_TABLE=0` scans as before.
+    LibraryCopiedModuleAttributes1 compares the written table with the scan for both assemblies.
+  - 7fba338: `rubygems/defaults/ironruby.rb`'s `ironruby_load_default_specs` checks its cache's stamp
+    with `IronRuby.__gemspec_stamp__`: name, size and mtime of each `*.gemspec` entry, in one C# pass.
+    It used to glob the 62 default gemspecs and make a File::Stat and a Time for each. A boot that
+    hits the cache no longer globs. A miss and `IRONRUBY_NO_GEM_CACHE=1` work as before.
+    `rubygems/util` is still required at boot, as upstream's glob loads it, so `$LOADED_FEATURES` and
+    its order are unchanged. The cache format is version 2, so old caches miss once.
+    The helper first used a List of KeyValuePairs, a value-type instantiation that no R2R image
+    holds: its first call JIT-compiled 26 methods (~3 ms on the R2R host) and made `gem --version`
+    +1.3%. Over a List of FileSystemInfo it compiles 5 (~1 ms).
+  Where RubyGems' ~120 ms of `-e 1` goes (per-file load timer, R2R host, startup library):
+  rubygems.rb's top level 35-42 ms self, ~31 ms of it the default-spec cache (glob 7, stamp 5.7,
+  index file name 2.5, read 5.6, Marshal.load 3.2, activation 3, the rest ~3); specification.rb 13-16
+  self, plus requirement 13-16, platform 9-10 and specification_record 6-7 under it; rbconfig 11-14.
+  Only the cache is IronRuby's own code. `find_default_spec` cannot be made lazy: the runtime requires
+  ironruby/error_highlight, did_you_mean and syntax_suggest through RubyGems' require at every boot.
+  Main-thread instructions (callgrind, TieredCompilation=0), base and new run side by side, base ->
+  new, M:
+  | command | release image | R2R host |
+  |---|---|---|
+  | `-e 1` | 1,198.3 -> 1,165.0 (-2.77%) | 2,092.4 -> 2,013.4 (-3.78%) |
+  | `gem --version` | 1,339.5 -> 1,338.3 (-0.09%) | 2,272.6 -> 2,274.7 (+0.09%) |
+  | `gem list` | 2,293.6 -> 2,247.4 (-2.01%) | 3,424.3 -> 3,380.4 (-1.28%) |
+  | `require "irb"` | 2,412.4 -> 2,363.9 (-2.01%) | 3,469.6 -> 3,427.1 (-1.23%) |
+  | irb 1+1 | 2,577.6 -> 2,531.8 (-1.77%) | 3,725.5 -> 3,678.5 (-1.26%) |
+  The counts depend on load: under valgrind, the number of runs sharing the CPUs decides when
+  background compiles land, and so how long the main thread interprets. The same command moved
+  ~1-2% between batches of 2 and 4 runs. Compare only runs of one batch.
+  Split by `IR_COPIED_TABLE=0` (release image, a trio in one batch): `gem list` base 2,300.0, new
+  2,280.6, new with the scan 2,303.8; `require "irb"` 2,425.0, 2,378.3, 2,420.5. So in the tools the
+  saving is part 1's. Part 2 saves `-e 1`'s 33-79 M (release / R2R host). In `gem --version`, `gem
+  list` and irb, RubyGems globs and stats the specification directories later anyway, so the
+  first-use cost moves there instead of going away.
+  Wall, best of 10 alternating (`startup2.rb`), base / new, ms: release image `-e 1` 331 / 321,
+  `gem --version` 388 / 384, `gem list` 721 / 684, `require "irb"` 719 / 715, irb 796 / 774. New
+  first: 313 / 310, 371 / 377, 663 / 684, 700 / 704, 756 / 751 (that run lists new first). R2R host:
+  423 / 415, 484 / 488, 819 / 825, 864 / 861, 934 / 945. All within the machine's noise, which these
+  differences are under.
+  Checked: a probe of backtraces through each copied module's methods prints the same on base, new
+  and new with `IR_COPIED_TABLE=0`, on the Release build and the R2R host. That includes the three
+  lines where IronRuby already differs from CRuby: Integer#div shown as `Integer#/`, Integer#coerce
+  as `Numeric#coerce`, IO#printf's frame missing. The 30 backtrace and caller tests and the 18
+  require and prelude tests of IronRuby.Tests pass. caller, raise, jit-raise and set-backtrace
+  matrices print the same in 7 modes (the gate's five, R2R, `IR_COPIED_TABLE=0`).
+  caller-matrix on the R2R host prints its Kernel#eval frames in 1 of 6 runs on either tree, a flake.
+  thread-backtrace-matrix's main-thread row is the known 87/88. RubyGems' state is the same on both
+  trees, on a hit and with `IRONRUBY_NO_GEM_CACHE=1`, Release and R2R, and with -w:
+  `Gem.loaded_specs`, `$LOADED_FEATURES` and its order, `find_default_spec` of ten names, and the
+  map's size (1,484). A touched gemspec makes the next boot miss and rewrite the cache.
+  Steady state: AWFY verifying, no FAIL. At 3 s the geomean was 1.062, with Permute 2.4x. At 8 s in
+  both orders Permute, NBody and Sieve are within 2%, and Havlak is +4% and -8%: noise.
 
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
