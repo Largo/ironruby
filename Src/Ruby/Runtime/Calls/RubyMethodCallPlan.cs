@@ -176,12 +176,14 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyLambdaMethodInfo/*!*/ _method;
         private readonly Proc/*!*/ _lambda;
 
-        private LambdaMethodCall(RubyLambdaMethodInfo/*!*/ method) {
+        // name: what the call calls the method by; another name than its own (an alias) runs the copy of the lambda that
+        // answers it to __callee__ (RubyLambdaMethodInfo.GetLambdaFor), as the rule does
+        private LambdaMethodCall(RubyLambdaMethodInfo/*!*/ method, string name) {
             _method = method;
-            _lambda = method.Lambda;
+            _lambda = (name != null && name != method.DefinitionName) ? method.GetLambdaFor(name) : method.Lambda;
         }
 
-        internal static LambdaMethodCall TryCreate(RubyLambdaMethodInfo/*!*/ method, int count) {
+        internal static LambdaMethodCall TryCreate(RubyLambdaMethodInfo/*!*/ method, int count, string name) {
             var dispatcher = method.Lambda.Dispatcher;
             int arity = dispatcher.Arity;
             int mandatory = arity >= 0 ? arity : -arity - 1;
@@ -190,7 +192,7 @@ namespace IronRuby.Runtime.Calls {
             if (maximum == Int32.MaxValue && signature != null && signature.MaxArgumentCount >= 0) {
                 maximum = signature.MaxArgumentCount;
             }
-            return (count >= mandatory && count <= maximum) ? new LambdaMethodCall(method) : null;
+            return (count >= mandatory && count <= maximum) ? new LambdaMethodCall(method, name) : null;
         }
 
         internal override object Invoke(object self, Proc block, object[]/*!*/ args) {

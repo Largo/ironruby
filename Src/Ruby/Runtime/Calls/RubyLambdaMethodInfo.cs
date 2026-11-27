@@ -15,6 +15,7 @@
 
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Reflection;
 using Microsoft.Scripting.Utils;
@@ -108,6 +109,29 @@ namespace IronRuby.Runtime.Calls {
 
         public Proc/*!*/ Lambda {
             get { return _lambda; }
+        }
+
+        // The copies of the lambda for calls by other names (GetLambdaFor), made at the first rule built for each.
+        private Dictionary<string, Proc> _aliasLambdas;
+
+        /// <summary>
+        /// The lambda a call of this method by <paramref name="name"/> runs: a copy of <see cref="Lambda"/> whose
+        /// CalleeName is the name, so that __callee__ answers it; the same method, for super and __method__.
+        /// </summary>
+        internal Proc/*!*/ GetLambdaFor(string/*!*/ name) {
+            var lambdas = Volatile.Read(ref _aliasLambdas);
+            if (lambdas == null) {
+                lambdas = Interlocked.CompareExchange(ref _aliasLambdas, new Dictionary<string, Proc>(), null) ?? _aliasLambdas;
+            }
+            lock (lambdas) {
+                Proc result;
+                if (!lambdas.TryGetValue(name, out result)) {
+                    result = _lambda.ToLambda(this);
+                    result.CalleeName = name;
+                    lambdas[name] = result;
+                }
+                return result;
+            }
         }
 
         // -X:JIT: what the method JIT made of the block (JitBlockMethod), at the first call a rule was built for;
@@ -215,10 +239,14 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            // A call by another name than the method's own (an alias) runs a copy of the lambda that knows that name, for
+            // __callee__ (CRuby: the alias's name, as for a def), and not through the method JIT's stub.
+            bool aliasCall = name != _definitionName;
+
             // -X:JIT: plain arguments, as many as the block takes, go to the stub of the method JIT, whose generic body is
             // the call below (JitBlockMethod). An omitted optional argument is passed as the default sentinel, as to a def's.
             // The value of an assignment call (o.x = v, o[k] = v) is its last argument, as the rule passes it (Methods.Yield).
-            if (!args.Signature.HasBlock && !args.Signature.HasSplattedArgument) {
+            if (!aliasCall && !args.Signature.HasBlock && !args.Signature.HasSplattedArgument) {
                 var jit = GetJit();
                 if (jit.Trampoline != null) {
                     var simple = args.GetSimpleArgumentExpressions();
@@ -260,7 +288,7 @@ namespace IronRuby.Runtime.Calls {
 
             Proc.BuildCall(
                 metaBuilder,
-                AstUtils.Constant(_lambda),            // proc object
+                AstUtils.Constant(aliasCall ? GetLambdaFor(name) : _lambda),  // proc object
                 args.TargetExpression,                 // self
                 args
             );

@@ -556,6 +556,41 @@ false
         }
 
         /// <summary>
+        /// Only a key whose class is String is stored as a frozen copy (MRI's RHASH_STRING_KEY_P); an instance of a subclass of
+        /// String is stored as it is, unfrozen, by a literal, #[]=, #store and the JIT's hot #[]= alike, so a change to it
+        /// needs a #rehash, as for any other mutable key.
+        /// </summary>
+        public void Hash_StringSubclassKey1() {
+            TestOutput(@"
+class MyS < String; end
+def lit(k) = {k => 1}
+def aset(k) = (h = {}; h[k] = 1; h)
+def st(k) = (h = {}; h.store(k, 1); h)
+def hot(k) = (h = {}; i = 0; while i < 3000; h[k] = i; h.delete(k) if i < 2999; i += 1; end; h)
+res = nil
+3000.times do
+  k = MyS.new('k'); s = +'s'
+  res = [lit(k), aset(k), st(k), hot(k), Hash[k, 1]].map { |h| x = h.keys[0]; [x.equal?(k), x.frozen?, x.class] } +
+        [lit(s), aset(s), hot(s)].map { |h| x = h.keys[0]; [x.equal?(s), x.frozen?, x.class] }
+end
+res.each { |r| p r }
+k = MyS.new('k'); h = {k => 1}; k << '2'; p h.keys, h.key?('k2'), (h.rehash; h['k2'])
+", @"
+[true, false, MyS]
+[true, false, MyS]
+[true, false, MyS]
+[true, false, MyS]
+[true, false, MyS]
+[false, true, String]
+[false, true, String]
+[false, true, String]
+[""k2""]
+false
+1
+");
+        }
+
+        /// <summary>
         /// Hash#eql? asks an object that converts to a Hash the question the other way round (rb_hash_eql); an empty
         /// Hash does not hash to 0 ([Bug #9231]); and #rehash builds the new table before it lets go of the old one
         /// (rb_hash_rehash), so a hash that is its own key is still found after it.

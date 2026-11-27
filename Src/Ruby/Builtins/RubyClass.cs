@@ -18,6 +18,7 @@ using System.Linq.Expressions;
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
@@ -75,14 +76,22 @@ namespace IronRuby.Builtins {
         // if this class is a struct represents its layout:
         private readonly RubyStruct.Info _structInfo;
 
-        // TODO: thread safe?
-        // whether initialize_copy can be called (the class has just been duplicated):
-        private bool _isUninitializedCopy; 
-
         // Class.allocate: MRI's class has no superclass yet and can't be instantiated.
         private bool _isUninitializedAllocation;
 
         public bool IsUninitializedAllocation { get { return _isUninitializedAllocation; } }
+
+        // MRI's rb_undef_alloc_func on a class written in Ruby (Data, Enumerator::ArithmeticSequence): Class#allocate of this
+        // class, not of its subclasses, raises "allocator undefined" (ClassOps.UndefineAllocator).
+        private bool _isAllocatorUndefined;
+
+        public void UndefineAllocator() {
+            using (Context.ClassHierarchyLocker()) {
+                _isAllocatorUndefined = true;
+                // rules of allocate built for this class allocate
+                MethodsUpdated("allocator");
+            }
+        }
 
         // immutable:
         private readonly Delegate/*!*/[]/*!*/ _factories;
@@ -768,22 +777,13 @@ namespace IronRuby.Builtins {
 
             using (Context.ClassHierarchyLocker()) {
                 RubyClass result = Duplicate(null);
-                result._isUninitializedCopy = true;
+                // the members are copied before #dup or #clone calls initialize_copy, as MRI 4.0's init_copy does (see
+                // RubyModule's Duplicate); Class has no initialize_copy of its own, and Kernel's leaves a class that already
+                // exists as it is (#138). The copy has no name.
+                result.InitializeMembersFrom(this);
+                result.Name = null;
                 return result;
             }
-        }
-
-        public void InitializeClassCopy(RubyClass/*!*/ rubyClass) {
-            if (!_isUninitializedCopy) {
-                // MRI 4.0: a class that already exists is left as it is, no TypeError (#138)
-                return;
-            }
-            _isUninitializedCopy = false;
-
-            InitializeModuleCopy(rubyClass);
-
-            // MRI clears the name in initialize_copy:
-            Name = null;
         }
 
         /// <summary>
@@ -1692,6 +1692,9 @@ namespace IronRuby.Builtins {
             if (!metaBuilder.Error) {
                 if (_isUninitializedAllocation) {
                     metaBuilder.SetError(Methods.MakeUninitializedClassInstantiatedError.OpCall());
+                } else if (_isAllocatorUndefined && !IsHelperName(methodName)) {
+                    // (a prelude helper's alias of allocate, such as ArithmeticSequence's __allocate__, still allocates)
+                    metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 } else if (HasSealedClrBase() || !BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
                     metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 }
@@ -2036,14 +2039,21 @@ namespace IronRuby.Builtins {
                 initializer.BuildCallNoFlow(metaBuilder, args, Symbols.Initialize);
             } else {
                 // TODO: we need more refactoring of RubyMethodGroupInfo.BuildCall to be able to inline this:
+                // The call is Class#new's, not the caller's: MRI's rb_obj_call_init calls initialize with no refinement active,
+                // so the site does not take the caller's scope, whose refinements would reach initialize (a refined
+                // Struct#initialize did, once the rule was compiled). No library initialize takes the scope, and the action is
+                // bound to the context, so nothing takes the scope's place.
+                var flags = (args.Signature.Flags & ~RubyCallFlags.IsInteropCall) | RubyCallFlags.HasImplicitSelf;
+                ReadOnlyCollection<Expression> siteArguments;
+                if (args.Signature.HasScope) {
+                    siteArguments = args.GetBoundCallSiteArguments(instanceVariable);
+                    flags &= ~(RubyCallFlags.HasScope | RubyCallFlags.HasLightScope);
+                } else {
+                    siteArguments = args.GetCallSiteArguments(instanceVariable);
+                }
                 metaBuilder.Result = AstUtils.LightDynamic(
-                    RubyCallAction.Make(args.RubyContext, "initialize",
-                        new RubyCallSignature(
-                            args.Signature.ArgumentCount, 
-                            (args.Signature.Flags & ~RubyCallFlags.IsInteropCall) | RubyCallFlags.HasImplicitSelf
-                        )
-                    ),
-                    args.GetCallSiteArguments(instanceVariable)
+                    RubyCallAction.Make(args.RubyContext, "initialize", new RubyCallSignature(args.Signature.ArgumentCount, flags)),
+                    siteArguments
                 );
             }
 

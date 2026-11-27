@@ -3817,6 +3817,36 @@ E = Data.define(:a, :b)
         }
 
         /// <summary>
+        /// Data and Enumerator::ArithmeticSequence have no allocator (MRI's rb_undef_alloc_func), which the prelude says with
+        /// Class#__ir_undef_alloc__ rather than a singleton method allocate that singleton_methods would list. A class
+        /// Data.define makes, and a subclass of one, still allocates, through Class#allocate.
+        /// </summary>
+        public void Prelude_DataUndefinedAllocator1() {
+            TestOutput(@"
+require 'ruby4'
+D = Data.define(:a)
+# (a test's require of ruby4 lists the prelude's __helpers__, which the prelude proper does not)
+p Data.singleton_methods.sort, D.singleton_methods.sort, Enumerator::ArithmeticSequence.singleton_methods.grep_v(/\A__/).sort
+p((Data.allocate rescue $!), D.allocate, (Enumerator::ArithmeticSequence.allocate rescue $!))
+p D.method(:allocate).owner, Data.respond_to?(:allocate), 1.step(10, 4).to_a, (1..2).step(1).class
+E = Class.new(D); p E.allocate, E.new(5)
+", @"
+[:define]
+[:[], :inspect, :members, :new]
+[:produce, :product]
+#<TypeError: allocator undefined for Data>
+#<data D a=nil>
+#<TypeError: allocator undefined for Enumerator::ArithmeticSequence>
+Class
+true
+[1, 5, 9]
+Enumerator::ArithmeticSequence
+#<data E a=nil>
+#<data E a=5>
+");
+        }
+
+        /// <summary>
         /// #yield_self is an alias of #then, as in MRI, so the Enumerator and Method#original_name say :then; the prelude's
         /// aliases (collect_concat, Lazy#filter/collect, select!/filter!, ENV#filter/each_pair) name the Enumerator after the
         /// name they were called by, Array#rfind shows its argument only when given one, and String#each_line and
@@ -8620,6 +8650,33 @@ begin; 1 < nil; rescue => x; puts x.message; end
 comparison of Float with Labeled failed
 comparison of Integer with Labeled failed
 comparison of Integer with nil failed
+");
+        }
+
+        /// <summary>
+        /// The expression of an endless def is not a line to TracePoint :line (prism gives it no newline flag): CRuby reports
+        /// no event for it, with or without a rescue modifier, but does for statements in parentheses in it and in a block.
+        /// (The lines are one more than ruby's for the same text: the snippet starts on its second line.)
+        /// </summary>
+        public void TracePoint_EndlessDefLine1() {
+            TestOutput(@"
+def e1 = 42
+def e2(x) = x + 1
+def e3 = (y = 1; y + 1)
+def e4(x = 1) = x rescue 2
+def e5 = (42)
+def e6 = [1].map { _1 }
+def e7 = [1].map { |x|
+  x }
+def n1
+  42
+end
+lines = []
+tp = TracePoint.new(:line) { |t| lines << [t.lineno, t.method_id] if t.method_id }
+tp.enable { e1; e2(1); e3; e4; e5; e6; e7; n1 }
+p lines
+", @"
+[[4, :e3], [6, :e5], [7, :e6], [9, :e7], [11, :n1]]
 ");
         }
     }
