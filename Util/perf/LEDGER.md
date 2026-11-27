@@ -1624,6 +1624,42 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/forward (2026-11-27) - a rest parameter passed on where nothing can see it again is the callee's
+  rest parameter; a block-passing call's hoisted splat is fresh** (gap 36 and gap 16's second part;
+  `IR_FORWARD_REST=0` turns the first off) - timed, not gated. Bytes a call
+  (`Util/bench/forward-bytes.rb`, new), base -> new: `def w(...) = raw(...)` 212 -> 116,
+  `w(...) = rest_t(...)` (a callee with a rest) 309 -> 116, `w(*args, &b) = raw(*args, &b)` 227 -> 132,
+  with a rest callee 312 -> 120, `w(*args) = rest_t(*args)` 214 -> 120, `w_splat(1) { }` 420 -> 325;
+  `w(*args) = raw(*args)` (one Array, the rest itself) 119 -> 118.
+  Two copies went. (1) `f(*a, &b)` - and `n(...)`, which is `n(*?fwd?, &?fwdblk?)` - hoists its arguments
+  before the block argument (MRI's order) and expanded the splat into a new Array there that the site
+  did not call fresh, so a rest callee copied it again; it is fresh now (`MethodCall`, the hoisted
+  `#splat`), and a splat that is fresh already is not copied at all. (2) `ForwardedRest` (new, the
+  method's AST before its body is transformed): the one splat of the method's rest parameter that may
+  call its Array fresh - the only reference to the parameter (no other read, assignment or
+  `defined?`), not in a loop or a block, and nothing that can reach the frame: no block literal (a
+  Proc's `#binding`), no `binding`/`eval`/`local_variable_*` call, no zsuper, no `retry`/`redo`.
+  `Arguments` sets the site's fresh flag for that splat only. By the same rules (a prism count) it
+  takes 25 of the prelude's 137 methods with a rest or `(...)`, and 216 of 744 in `ironruby/` and
+  `ruby/4.0`.
+  Instructions a call (`count.sh`, `Util/bench/prelude-cost.rb`): `w_splat` (`*args, &block`) 6223 ->
+  5742 (0.92), `w_fwd` 6163 -> 5613 (0.91); controls `w_pass`, `w_anon`, `w_opt` move by +-70 between
+  runs in both directions (0.986-1.014), the counter's floor here. Time (`ab.rb`, six rounds):
+  `w_splat` 0.87, `w_fwd` 0.84, `w_pass` overlapping.
+  Checked: `Util/splat-pass-matrix.rb` section 10b (new, 21 rows: a rest callee changing and keeping
+  the Array, two calls keeping two Arrays, a chain of forwards, the rest escaping or changed first, a
+  binding, a loop, a block literal, a block passed on, `...` with keywords and a block and without,
+  ruby2_keywords with keywords and with a Hash positional, send, public_send, `super(*a)`, zsuper,
+  method_missing, an empty rest), block-pass, light-rest, keyword-light, block-given: CRuby's output
+  and the unchanged build's with the JIT on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`, and the unchanged
+  build's with `IR_LIGHT_FRAMES=0`, `IR_FORWARD_REST=0` and `IR_SPLAT_REST=0`; hot-shapes the unchanged
+  build's in every mode (its known row against CRuby). ruby/spec language/send, method, delegation,
+  super: the same on both builds (send's one error is the known `into`/`to` wording).
+  For the gate: the callee may keep the caller's rest Array; the analysis is what says the caller
+  cannot see it again - read `ForwardedRest`'s list of what can reach a frame. A block-passing call's
+  retry (Ruby 1.8's `retry` from the block) would run the call again with the hoisted Array; prism
+  refuses `retry` outside a rescue, so it cannot be written.
+
 - **perf/timeout (2026-11-27) - `Timeout.timeout` wakes its watcher thread only when it has to**
   (`Src/StdLib/ironruby/timeout.rb`, an override that loads CRuby's file as it is and redefines two
   methods of `Timeout::State`) - timed, not gated. A raise rescued through `Timeout.timeout` cost

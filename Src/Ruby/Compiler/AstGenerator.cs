@@ -432,6 +432,10 @@ namespace IronRuby.Compiler.Ast {
             // that makes it calls them, so a light frame of the method keeps its stack check (MethodDefinition.LightFrame.MakesCalls).
             internal bool HasHashCallingKeys;
 
+            // The splat that passes the method's rest parameter on where nothing can see the Array again (ForwardedRest): its site
+            // says the splat is fresh, and a rest parameter of the callee takes the Array itself.
+            internal SplattedArgument ForwardedRestSplat;
+
             // The slot the method's literals take their parked Procs from (BlockDefinition), set by MethodDefinition before the
             // body is transformed if the method may have one at all; it is disabled afterwards if the body turns out not to qualify.
             internal ParkedScopeSlot ParkSlot;
