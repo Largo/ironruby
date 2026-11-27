@@ -3321,6 +3321,36 @@ p Encoding::Converter.new(""UTF-8"", ""UTF-16BE"", xml: :text).convpath[0].encod
 ");
         }
 
+        /// <summary>
+        /// A module's name is a symbol's string in MRI, US-ASCII when it is ASCII, and so is the
+        /// description of a singleton class; an anonymous module's "#<Class:0x...>" is a binary string.
+        /// A temporary name keeps its own encoding.
+        /// </summary>
+        public void Module_NameEncoding1() {
+            TestOutput(@"
+module M; class K; end; end
+p Object.name.encoding, Object.to_s.encoding, M::K.name.encoding, M::K.inspect.encoding
+p Object.singleton_class.to_s.encoding, Object.new.singleton_class.to_s.encoding
+p Class.new.to_s.encoding, Module.new.inspect.encoding
+p [Object.name, ""a""].join.encoding, ""#{Object}"".encoding
+c = Class.new
+c.set_temporary_name(""fake<x>"")
+p c.name.encoding
+", @"
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:US-ASCII>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+");
+        }
+
         public void Encoding_Converter1() {
             TestOutput(@"
 def t

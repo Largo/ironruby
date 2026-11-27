@@ -1066,6 +1066,7 @@ namespace IronRuby.Tests {
                 Encoding_Converter2,
                 Encoding_ErrorMessageBinary1,
                 Encoding_ConvPathDecoratorBinary1,
+                Module_NameEncoding1,
                 Encoding_StatelessIso2022Jp1,
                 Encoding_AsciiIncompatible1,
                 Encoding_AsciiIncompatibleLines1,
