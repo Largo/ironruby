@@ -354,6 +354,9 @@ namespace IronRuby.Runtime.Jit {
         internal struct JitLoopFacts {
             // the body folded constants: the entry guards on the constant version
             internal bool UsesConstants;
+            // what it folded, for the entry to look up again when the constant version has moved
+            // (JitRuntime.LoopConstantsCurrent); null if it folded none, or some it did not record
+            internal JitFoldedConstant[] FoldedConstants;
             // the body writes Hash elements: the iteration's writes go into the undo log, which the
             // body commits at the top of each iteration (UndoLog) from the mark the entry sets (UndoMark)
             internal MSA.ParameterExpression UndoLog;
@@ -413,6 +416,7 @@ namespace IronRuby.Runtime.Jit {
             }
             slots = c._slots;
             facts.UsesConstants = c._usesConstants;
+            facts.FoldedConstants = (c._usesConstants && c._foldedConstants != null && !c._foldedIncomplete) ? c._foldedConstants.ToArray() : null;
             facts.UndoLog = c._undoLog;
             facts.UndoMark = c._undoMark;
             facts.Arrays = c._arrayLoads;

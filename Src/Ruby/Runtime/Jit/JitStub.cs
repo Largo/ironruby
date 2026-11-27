@@ -2000,22 +2000,65 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>A class that is a constant of Object defines a Ruby method of this name that may be inlined.</summary>
         internal static bool IsLeafMethodOfSomeClass(RubyContext/*!*/ context, string/*!*/ name) {
+            // Only the classes that are constants of Object: with every class (ClassesDefining's walk) the hint is more often
+            // yes for a receiver that is an Array or a Hash (some nested class has a leaf `push'), and such a caller is
+            // wrapped to be declined (app-shapes: CSV::Parser::Scanner#keep_start), with nothing more specialized.
+            // The method tables are read under the class hierarchy lock (another thread may be defining a method), the
+            // leaf test of what they hold outside it, as before ClassesDefining (round 6's gate: the Debug build's
+            // RequiresClassHierarchyLock aborted the TLS tests here).
             var candidates = new List<RubyMethodInfo>();
             using (context.ClassHierarchyLocker()) {
-                context.ObjectClass.EnumerateConstants((module, constantName, value) => {
-                    var cls = value as RubyClass;
+                foreach (var cls in ClassesDefining(context, name, false)) {
                     RubyMemberInfo method;
-                    if (cls != null && cls.Context == context && !cls.IsSingletonClass && cls.TryGetDefinedMethod(name, out method)) {
-                        var info = method as RubyMethodInfo;
-                        if (info != null) { candidates.Add(info); }
-                    }
-                    return false;
-                });
+                    if (cls.TryGetDefinedMethod(name, out method) && method is RubyMethodInfo info) { candidates.Add(info); }
+                }
             }
             foreach (var info in candidates) {
                 if (IsLeafMethod(info, true)) { return true; }
             }
             return false;
+        }
+
+        /// <summary>
+        /// The classes that define a Ruby method of the name themselves (not singleton classes): with IR_JIT_NESTED
+        /// (on unless =0) and <paramref name="nested"/> every subclass of Object, found down the subclass lists (RubyModule.DependentClasses, which
+        /// a class joins in its superclass's), so a class nested in a module (`Foo::Entry`) is one; without it the
+        /// classes that are constants of Object, as it was. Under the class hierarchy lock.
+        /// </summary>
+        internal static List<RubyClass>/*!*/ ClassesDefining(RubyContext/*!*/ context, string/*!*/ name, bool nested = true, bool anyMember = false) {
+            var result = new List<RubyClass>();
+            using (context.ClassHierarchyLocker()) {
+                if (!nested || !JitRuntime.NestedClasses) {
+                    context.ObjectClass.EnumerateConstants((module, constantName, value) => {
+                        var cls = value as RubyClass;
+                        if (cls != null && !result.Contains(cls) && Defines(context, cls, name, anyMember)) { result.Add(cls); }
+                        return false;
+                    });
+                    return result;
+                }
+                var seen = new HashSet<RubyClass>();
+                var work = new Stack<RubyClass>();
+                work.Push(context.ObjectClass);
+                while (work.Count > 0) {
+                    var cls = work.Pop();
+                    if (!seen.Add(cls)) { continue; }
+                    if (Defines(context, cls, name, anyMember)) { result.Add(cls); }
+                    var subs = cls.DependentClassesOrNull;
+                    if (subs == null) { continue; }
+                    foreach (var sub in subs) {
+                        // a class's list holds its subclasses (and, through them, nothing else: a mixin's holds its includers)
+                        if (sub != null && !sub.IsSingletonClass && ReferenceEquals(sub.SuperClass, cls)) { work.Push(sub); }
+                    }
+                }
+            }
+            return result;
+        }
+
+        // anyMember: an attr_reader or attr_writer counts too, not only a Ruby method
+        private static bool Defines(RubyContext/*!*/ context, RubyClass/*!*/ cls, string/*!*/ name, bool anyMember) {
+            RubyMemberInfo method;
+            return cls.Context == context && !cls.IsSingletonClass && cls.TryGetDefinedMethod(name, out method) &&
+                (anyMember ? !method.IsUndefined && !method.IsHidden : method is RubyMethodInfo);
         }
 
         /// <summary>

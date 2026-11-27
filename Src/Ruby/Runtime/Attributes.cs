@@ -342,6 +342,16 @@ namespace IronRuby.Runtime {
     public sealed class RubyStackTraceHiddenAttribute : Attribute {
     }
 
+    /// <summary>
+    /// Marks a library method that needs a Ruby caller's frame and that MRI refuses to run for a
+    /// caller that is not Ruby code: Kernel#binding called through a Method object
+    /// (Method#call, UnboundMethod#bind_call, Method#to_proc) raises RuntimeError "Cannot create
+    /// Binding object for non-Ruby caller". Checked when the Method's call rule is built.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class RequiresRubyCallerAttribute : Attribute {
+    }
+
     [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
     public class DefaultProtocolAttribute : Attribute {
     }

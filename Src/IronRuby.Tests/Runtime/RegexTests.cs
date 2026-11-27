@@ -896,12 +896,131 @@ translated: [RegexpError, ""unmatched close parenthesis: /\\xC3\\xA9)/""]
         }
 
         /// <summary>
+        /// From a scan pointer inside a character of a valid subject, MRI's strscan matches the rest as a
+        /// string of its own: the split character's bytes are characters there ("\xA9llo"). A subject that
+        /// is broken as a whole still raises.
+        /// </summary>
+        public void StringScanner_InsideCharacter1() {
+            TestOutput(@"
+require 'strscan'
+s = StringScanner.new(""h\u00e9llo w, x"")
+s.pos = 2
+p s.scan(/\S+/), s.pos, s.matched, s.pre_match.bytes, s[0]
+s.pos = 2
+p s.skip(/\s+/), s.exist?(/ /), s.match?(/\w+/), s.scan_until(/,/), s.pos
+e = StringScanner.new(""\xA4\xA2a b"".dup.force_encoding(""EUC-JP""))
+e.pos = 1
+p e.scan(/\S+/), e.pos, e.rest
+e.pos = 1
+p e.scan_until(/ /), e.charpos
+b = StringScanner.new(""ab\xE9c d"".dup.force_encoding(""UTF-8""))
+b.pos = 2
+p((b.scan(/\S+/) rescue $!))
+", @"
+""\xA9llo""
+6
+""\xA9llo""
+[104, 195]
+""\xA9llo""
+nil
+5
+nil
+""\xA9llo w,""
+9
+""\xA2a""
+3
+"" b""
+""\xA2a ""
+3
+#<ArgumentError: invalid byte sequence in UTF-8>
+");
+        }
+
+        /// <summary>
+        /// A subject replaced by a shorter one under the scan pointer: MRI's scans answer nil, #rest is
+        /// empty, #bol? is nil and #charpos counts the bytes beyond the end as characters.
+        /// </summary>
+        public void StringScanner_ShorterSubject1() {
+            TestOutput(@"
+require 'strscan'
+s = +""hello world""
+ss = StringScanner.new(s)
+ss.scan(/\S+/); ss.skip(/\s+/)
+s.replace(""a b"")
+p [ss.scan(/\S+/), ss[0], ss.pos, ss.matched, ss.pre_match, ss.rest, ss.charpos, ss.getch, ss.bol?, ss.eos?]
+p [ss.peek(2), ss.rest_size, ss.check(/x/), ss.skip(""a""), ss.exist?(/a/), ss.rest?, ss.inspect]
+", @"
+[nil, nil, 6, nil, nil, """", 6, nil, nil, true]
+["""", 0, nil, nil, nil, false, ""#<StringScanner fin>""]
+");
+        }
+
+        /// <summary>
+        /// A String pattern whose encoding is incompatible with the subject's is an error to MRI's strscan
+        /// (rb_enc_check), not a miss; an ASCII pattern, or an ASCII-only subject, is compatible.
+        /// </summary>
+        public void StringScanner_LiteralEncoding1() {
+            TestOutput(@"
+require 'strscan'
+b = StringScanner.new(""ab\xE9c"".b)
+p((b.scan(""\u00e9"") rescue $!), (b.scan(""a"") rescue $!), (b.skip_until(""\u00e9"") rescue $!))
+e = StringScanner.new(""\xA4\xA2a"".dup.force_encoding(""EUC-JP""))
+e.pos = 3
+p((e.scan(""\u00e9"") rescue $!), (e.check("""") rescue $!))
+a = StringScanner.new(""abc"")
+p((a.scan(""\u00e9"") rescue $!))
+u = StringScanner.new(""h\u00e9"")
+p((u.scan(""\xE9"".b) rescue $!))
+", @"
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+""a""
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: EUC-JP and UTF-8>
+""""
+nil
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)>
+");
+        }
+
+        /// <summary>
         /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
         /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
         /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET
         /// sees U+0080-U+00FF. ISO-8859-1 and UTF-8 subjects keep their own letters, and a BINARY
         /// regexp's \p{Punct} is [[:punct:]] even on ASCII text.
         /// </summary>
+        /// <summary>
+        /// Against an ISO-8859-1 subject Onigmo uses its ISO-8859-1 ctype table, not Unicode's:
+        /// the superscripts and vulgar fractions are word characters, U+00A7 and U+00B6 are not
+        /// punctuation but the soft hyphen is, U+0085 is neither a space nor a line break, and
+        /// /i folds no case pair onto U+00DF, U+00FF or U+00B5.
+        /// </summary>
+        public void Regex_Latin1Ctype1() {
+            TestOutput(@"
+def l(s) = s.dup.force_encoding(""ISO-8859-1"")
+s = l(""\xAA\xA7\xB2\xA0\xD7\xB6\xAD\xBC"")
+p s.scan(/[[:word:]]/).map(&:ord)
+p s.scan(/(?u)\w/).map(&:ord)
+p s.scan(/[[:punct:]]/).map(&:ord)
+p s.scan(/[[:space:]]|\s/).map(&:ord)
+p s.scan(/(?a)[[:alpha:]]/).map(&:ord)
+p s.scan(/\b./).map(&:ord)
+p l(""a\x85"").scan(/\R/).size
+p l(""\xDF\xFF\xB5\xC0"").scan(/[[:upper:]]/i).map(&:ord)
+p l(""abc"").scan(/\w/).size
+", @"
+[170, 178, 188]
+[170, 178, 188]
+[173]
+[160]
+[170]
+[170, 167, 178, 160, 188]
+0
+[192]
+3
+");
+        }
+
         public void Regex_BinaryCtype1() {
             TestOutput(@"
 require 'ruby4'
