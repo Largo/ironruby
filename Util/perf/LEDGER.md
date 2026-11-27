@@ -1193,6 +1193,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is raised**: `def r(x) begin; x + 1; rescue StandardError; 0; end end` 106 ns against
     CRuby's 24, the same with `ensure` 112 against 27 (`Util/bench/zjit-post-shapes.rb`,
     one loaded run: factors). Gap 9 seen from the caller: no light frame, no typed body.
+    Since then (perf/rescuelight, 2026-11-27, see Landed): such methods are light frames
+    (b72da7b), and with `$!` left alone on a run that raises nothing, `ensure` is 52 ns and
+    `rescue` 52 against a plain light frame's 45 and CRuby's 29-32 (`-X:NoJIT`); what is left
+    is the typed body the method JIT refuses (`Body`: 27 against 35 ns for `x + 1`) and the
+    read of `$!` at a rescue's entry.
     A .NET `try` costs nothing on the path that does not throw, so the experiment is to
     find what the method does around the handler (the scope, the saving of `$!`, the
     frame) and let a body whose handler is not entered run as light as one without.
@@ -1773,6 +1778,52 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     remain: 89 rows of readers that answer wrongly or raise.
 
 ## Landed
+
+- **perf/rescuelight (/perf-frame, 2026-11-27) - `$!` left alone in a begin/rescue/ensure that
+  raises nothing** (switch `IR_LAZY_ERRINFO`, on unless `=0`) - timed, not gated. Built on
+  4320d4a with claude/perf-lsite merged (d83116b).
+  - **What gap 22 is now.** Its 80 ns predate b72da7b: `resc` and `ens` of zjit-post-shapes are
+    light frames (`IR_LIGHT_FRAMES=why`), and the method JIT refuses them (`screen rejected
+    B/resc: Body`). `ab.rb -r 8` (ns; CRuby / IronRuby / `-X:NoJIT`): `x + 1` 21.1 / 27.0 /
+    35.0, rescue 20.4 / 39.0 / 40.0, ensure 24.2 / 50.5 / 50.1. So two parts: no typed body
+    (~8 ns, 27 against 35), and the handler in the light frame (rescue ~5 ns, ensure ~15).
+  - **What the handler pays** (callgrind, calls only - its code is MinOpts, see perf/castcheck):
+    `$!` - `GetCurrentException` and `SetCurrentException`, each a `[ThreadStatic]` read or
+    write, a call into the runtime from a compiled body (`__tls_get_addr`). Per call with
+    nothing raised: a rescue read it at entry and wrote it back in its finally; an ensure read
+    it at entry, read it again in the clause and wrote it back after, and asked
+    `RubyUtils.IsReclaimingFiber`, a third thread-static.
+  - **What changed.** The rescue's finally restores `$!` only if an exception was taken or the
+    statements were left otherwise (a jump, an exception going through): run to their end they
+    left `$!` as they found it (nested handlers and callees restore their own). The save at the
+    rescue's entry stays: when the handler runs, an inner frame that threw the exception on may
+    already have set `$!` to it, so a save there would restore the wrong value. The ensure
+    clause reads and restores `$!` only for an exception it runs for. `IsReclaimingFiber` asks
+    the thread-static only while some thread has a safe point requested (a thread reclaiming a
+    fiber does for as long as it is, `BeginFiberReclamation`).
+  - **Timed** (`Util/bench/rescue-shapes.rb`, `ab.rb -r 8`, `-X:NoJIT`, ns; CRuby / off / on):
+    ensure 31.6 / 60.8 / 52.0 (0.86), else_ 35.7 / 62.7 / 56.0, begin_r 39.0 / 62.2 / 56.0,
+    modifier 30.2 / 48.0 / 45.1, rescue 29.3 / 52.9 / 52.3, rescue_e 30.4 / 48.0 / 47.7; the
+    plain control 28.7 / 46.5 / 45.3 (all but ensure overlap). AWFY, ten processes each
+    (median, base / candidate / switch off): Json 45,741 / 45,650 / 45,598 us, CD 337,463 /
+    329,373 / 331,432, Havlak 2,604,039 / 2,595,776 / 2,554,229 - no change beyond the noise.
+  - **Checked.** `Util/errinfo-matrix.rb` (new: `$!` after a rescue and an ensure that raised
+    nothing, also inside a rescue clause; after a rescue clause ends; a callee's rescue; an
+    exception through a rescue that does not match; return through ensure inside a rescue; an
+    exception raised in ensure and its cause; retry; else/ensure order and `$!` in each; next
+    and break through ensure; throw through ensure; binding, local_variables and caller in a
+    rescue clause; TracePoint `:raise`/`:rescue`; Timeout and Thread#raise mid-body; a
+    million-deep recursion through ensure: SystemStackError) prints CRuby's output on the
+    baseline and the candidate, switch on and off. With it, rescue-light, jit-raise,
+    jit-rescue, raise, light-entry, block-pass, parked-scope, jit and hot-shapes in five modes
+    (as built, `IR_LAZY_ERRINFO=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`):
+    50 runs, the candidate's output the baseline's in every one (raise-matrix differs from
+    CRuby on both alike). ruby/spec language/rescue (60 examples), language/ensure (31),
+    language/retry (3), core/exception (250), library/timeout (7): 0 failures on both trees.
+    IronRuby.Tests: the 79 registered tests named Exception/Rescue/Ensure/Retry/Raise: PASSED.
+    Not run: the whole suite, a sweep, the census (no verdict moves).
+  - Left: the typed body (`Body` refused: a handler in the typed body, gap 22's last line);
+    the read of `$!` at a rescue's entry.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
