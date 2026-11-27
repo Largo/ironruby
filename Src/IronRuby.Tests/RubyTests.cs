@@ -994,6 +994,7 @@ namespace IronRuby.Tests {
                 Fiddle_AnsiSuffix1,
                 PackPointer_RealAddress1,
                 PackPointer_RelineWin32Api1,
+                Pack_FloatOfNonNumeric1,
                 IoConsole_WinsizeOffTerminal1,
                 Ripper_Filter1,
                 Require_ExtensionByLibraryName1,

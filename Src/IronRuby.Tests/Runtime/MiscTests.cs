@@ -8885,5 +8885,28 @@ end
 [""a%\nb"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
 ");
         }
+
+        /// <summary>
+        /// Array#pack's float directives take a Numeric only (MRI's rb_to_float): an object with #to_f that is not one is
+        /// "can't convert ToF into Float", nil and true by value. Util/pack-matrix.rb.
+        /// </summary>
+        public void Pack_FloatOfNonNumeric1() {
+            TestOutput(@"
+require 'ruby4'
+class ToF; def to_f = 1.5; end
+class N < Numeric; def to_f = 2.5; end
+[-> { [ToF.new].pack(""D"") }, -> { [N.new].pack(""g"") }, -> { [nil].pack(""D"") }, -> { [true].pack(""e"") }, -> { [""1""].pack(""D"") },
+ -> { [2**70].pack(""D"") }, -> { [Rational(1, 2)].pack(""E"") }, -> { [:s].pack(""f"") }].each { |l| p((l.call rescue $!)) }
+", @"
+#<TypeError: can't convert ToF into Float>
+""@ \x00\x00""
+#<TypeError: can't convert nil into Float>
+#<TypeError: can't convert true into Float>
+#<TypeError: can't convert String into Float>
+""\x00\x00\x00\x00\x00\x00PD""
+""\x00\x00\x00\x00\x00\x00\xE0?""
+#<TypeError: can't convert Symbol into Float>
+");
+        }
     }
 }

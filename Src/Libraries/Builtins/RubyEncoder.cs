@@ -904,6 +904,15 @@ namespace IronRuby.Builtins {
             if (value is MutableString) {
                 throw RubyExceptions.CreateTypeError("can't convert String into Float");
             }
+            // MRI's rb_to_float: only a Numeric is asked for to_f; anything else is "can't convert ToF into Float" (nil, true
+            // and false by value)
+            if (!(value is int || value is long || value is double || value is BigInteger)) {
+                var context = floatConversion.Context;
+                if (!context.GetClassOf(value).IsSubclassOf(context.GetClass(typeof(Numeric)))) {
+                    string name = (value == null || value is bool) ? context.Inspect(value).ToString() : context.GetClassOf(value).GetNonSingletonClass().Name;
+                    throw RubyExceptions.CreateTypeError("can't convert {0} into Float", name);
+                }
+            }
             double result = Protocols.CastToFloat(floatConversion, value);
             // the CLR's NaN has its sign bit set; MRI packs the positive quiet NaN
             return Double.IsNaN(result) ? BitConverter.Int64BitsToDouble(0x7FF8000000000000L) : result;
