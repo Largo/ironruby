@@ -7889,6 +7889,48 @@ false
         }
 
         /// <summary>
+        /// A method's keyword prologue (PrismAstBridge.LowerKeywords): which error wins when several things are wrong at once,
+        /// and defaults run in order and only for omitted keywords (Util/kw-prologue-matrix.rb).
+        /// </summary>
+        public void Method_KeywordPrologue1() {
+            TestOutput(@"
+def err = yield rescue ""#{$!.class}: #{$!.message}""
+def opt(a, k: 1) = [a, k]
+def req(a, k:) = [a, k]
+def two(a, b, j: 1, k:) = [a, b, j, k]
+def none(k: 1) = k
+def rest(a, k: 1, **o) = [a, k, o]
+$log = []
+def order(a, x: ($log << :x; 1), y: ($log << :y; 2)) = [a, x, y]
+p opt(1), opt(1, k: 2), req(1, k: 2), two(1, 2, k: 3), none, rest(1, z: 2), order(1, y: 0), $log
+p err { opt(k: 2) }, err { opt(1, z: 2, y: 3) }, err { req(1, z: 2) }, err { req }, err { req({k: 1}) }
+p err { two(1, k: 2) }, err { none({k: 1}) }, err { none(""k"" => 1) }, err { rest(k: 1) }, err { order(1, z: 1) }, $log
+p 40.times.map { |i| [opt(i % 2, k: i % 3), req(1, k: i % 2)] }.uniq.size
+", @"
+[1, 1]
+[1, 2]
+[1, 2]
+[1, 2, 1, 3]
+1
+[1, 1, {z: 2}]
+[1, 1, 0]
+[:x]
+""ArgumentError: wrong number of arguments (given 0, expected 1)""
+""ArgumentError: unknown keywords: :z, :y""
+""ArgumentError: missing keyword: :k""
+""ArgumentError: wrong number of arguments (given 0, expected 1; required keyword: k)""
+""ArgumentError: missing keyword: :k""
+""ArgumentError: wrong number of arguments (given 1, expected 2; required keyword: k)""
+""ArgumentError: wrong number of arguments (given 1, expected 0)""
+""ArgumentError: unknown keyword: \""k\""""
+""ArgumentError: wrong number of arguments (given 0, expected 1)""
+""ArgumentError: unknown keyword: :z""
+[:x]
+6
+");
+        }
+
+        /// <summary>
         /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
         /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
         /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any

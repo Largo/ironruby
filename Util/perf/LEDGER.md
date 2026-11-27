@@ -1074,6 +1074,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site is inside an expression, which control cannot enter). Left: the arms still double a
     large light frame's IL without register locals (m48 11.7 KB against 5.7), and a body with
     a multiple assignment and more than 24 calls loses 2-4% light for a reason not yet found.
+    **Re-measured after perf/lframe** (perf/regexlight, 2026-11-27, on b887bc1 + perf/lexical
+    a8feb83; `Util/perf/callgrind/count.sh`, `ab.rb -i -r 1 -n 20000 Util/bench/regex-shapes.rb`,
+    default against `IR_LIGHT_REGEX=all`): the regex literals that go to a method storing the
+    caller's `$~` still lose light - `gsub` 12,666 -> 12,887 (1.017), `split` 10,836 -> 11,050
+    (1.020), `kase` 8,575 -> 8,843 (1.031), `eqt` 5,767 -> 5,998 (1.040), the controls `size`
+    1.000 and `matchp` 0.985. 214-268 instructions a call, the +232 perf/lsite measured: the
+    cheaper light entry of perf/lframe did not change what the scope made late and the call
+    made twice cost. Nothing was built; the about 800 methods of the census's regex lines stay
+    out. A step on them has to make the second call or the late scope cheaper (perf/lsite and
+    perf/lsite2 tried the second and were rejected), not the light entry.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -1662,6 +1672,14 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     did not move: theirs is the prologue's cost below. Separately, the keyword prologue of
     `def kw(a, k: 1) = a + k` costs about 1,300-1,500 with the JIT off (4,017 against
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
+    The prologue's parts (perf/kwprologue, Rejected, JIT off): the separation checks 242, the
+    `unless KeywordArgumentsMatch` statement 380-640, each read 160-210 - 850 for
+    `def p_opt(a, k: 1) = a` called with the keyword left out, against 1,904 for the same
+    method with a plain optional. Folding the checks into one call saved 62. The method JIT
+    takes such methods and pays none of it (1,507); what pays is a keyword method it declines
+    (`**o`, `p_rest` 3,906). Unexplained: why one runtime call with four or five arguments
+    costs 350 or more in the interpreted body. A profiler that names the DLR interpreter's
+    frames (perf with jitdump, where perf_event_open is allowed) is the next tool.
 
 39. **A String is not safe under a concurrent writer either** - a correctness gap, like gap 20 for
     Array and Hash, found by perf/strrace (2026-11-27). `Util/string-race-matrix.rb` races 36 readers
@@ -6033,6 +6051,33 @@ after master (#228 to #233) had been merged into both trees.
   Also found: two of app-shapes' methods are declined at "[] on a RubyArray" for an element read
   with a negative index or of an Array instance variable compared with `==` - a typed-body
   question for another step.
+- **perf/kwprologue (/perf-step, 2026-11-26, on 78aab00) - a keyword method's prologue checks
+  the call in one runtime call** (gap 38's second cost; switch `IR_KW_PROLOGUE`, reverted).
+  Measured first by switching the prologue's parts off one at a time in a throwaway build
+  (`Util/perf/callgrind/count.sh`, `-X:NoJIT`, instructions a call): in `def p_opt(a, k: 1) =
+  a` the separation checks cost 242, the statement guarded by `KeywordArgumentsMatch` 380 (467
+  with the keyword given, 640 for a required one), the read 160-210 a keyword - 850 in all
+  against a plain optional (`p_plain_opt` 1,904, `p_opt_omitted` 2,765). The helpers are a few
+  instructions each (`HasKeywords` returns at once on the empty hash); an untaken `raise ...
+  unless a` costs 108 and the next 76, so a statement costs what its test does to execute, not
+  by being there; light frames do not change it (885 without them against 860). Tried: one
+  `[Emitted]` helper, `KeywordPrologueMatch(last, kw, names, required, rest)`, as the condition
+  of the `unless` that guards the prologue, with the separation checks moved into its body ahead
+  of the missing/unknown ones - the same errors in the same order, and the shape `JitKeywords`
+  recognizes (the JIT still specialized `kw`, `p_opt`, `p_req`, `p_two`; census 0 moved).
+  Result: `p_opt_omitted` 2,764 -> 2,702, `p_opt` 3,680 -> 3,618 (-62, 2%) with the JIT off,
+  nothing with it on; the controls 1.000. Rejected: 62 instructions do not pay for a new emitted
+  helper and a second prologue shape. Learned: the cost is not the number of statements but each
+  runtime call in the interpreted body (one call with five arguments cost about 560, where the
+  three it replaced cost 622), and the DLR's call instructions are the generic ones up to ten
+  arguments, so it is not a reflection fallback either - unexplained, see gap 38. Kept:
+  `Util/kw-prologue-matrix.rb` (which error wins when several things are wrong, default order
+  and side effects, ruby2_keywords, send, method_missing, super, define_method, Method#call, a
+  module function; CRuby's output on the unchanged build in every mode, and on the candidate
+  with the switch on and off), `Method_KeywordPrologue1`, and the shapes in `prelude-cost.rb`
+  (`p_*`, `d_*`). The parent's other idea - a call site that binds literal keywords without the
+  hash, guarded on the callee's signature - is untried; it would save the hash (about 670 at the
+  site) and the reads for a callee the JIT declines.
 
 - **perf/lexical3 (/perf-step, 2026-11-26, on 3cabf57) - bind the positionals of `def m(a, *r,
   k: 1)` in the calling convention instead of out of one splat** (the idea perf/lexical2's entry
