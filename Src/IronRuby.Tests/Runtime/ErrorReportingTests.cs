@@ -341,5 +341,37 @@ end
 [[13, ""Object#arity_kw1""], [14, ""block in <top (required)>""]]
 ");
         }
+
+        /// <summary>
+        /// Kernel#send and BasicObject#__send__ leave no frame of their own in a backtrace, with a String name too (as with a
+        /// Symbol, whose call the binder makes in place); Kernel#public_send keeps its frame. LEDGER gap 27.
+        /// </summary>
+        public void Backtrace_SendHidden1() {
+            TestOutput(@"
+require 'ruby4'
+def bt = yield rescue $!.backtrace.first(3).map { _1.sub(/^.*?:\d+:in /, """") }
+p bt { [1].send(""sum"") { raise } }
+p bt { [1].send(:sum) { raise } }
+p bt { [1].public_send(""sum"") { raise } }
+p bt { [1].__send__(""sum"") { raise } }
+p bt { 1.send(""foo"") }
+p bt { [1].send(""each"") { raise } }
+p bt { 1.send }, bt { 1.__send__ }, bt { 1.public_send }, bt { 1.send(:x) }, bt { 1.send(1) }, bt { 1.__send__(""foo"", 1) }, bt { [1].public_send(""sum"") { raise } }
+", @"
+[""'block (2 levels) in <main>'"", ""'Array#sum'"", ""'block in <main>'""]
+[""'block (2 levels) in <main>'"", ""'Array#sum'"", ""'block in <main>'""]
+[""'block (2 levels) in <main>'"", ""'Array#sum'"", ""'Kernel#public_send'""]
+[""'block (2 levels) in <main>'"", ""'Array#sum'"", ""'block in <main>'""]
+[""'block in <main>'"", ""'Object#bt'"", ""'<main>'""]
+[""'block (2 levels) in <main>'"", ""'Array#each'"", ""'block in <main>'""]
+[""'block in <main>'"", ""'Object#bt'"", ""'<main>'""]
+[""'block in <main>'"", ""'Object#bt'"", ""'<main>'""]
+[""'Kernel#public_send'"", ""'block in <main>'"", ""'Object#bt'""]
+[""'block in <main>'"", ""'Object#bt'"", ""'<main>'""]
+[""'block in <main>'"", ""'Object#bt'"", ""'<main>'""]
+[""'block in <main>'"", ""'Object#bt'"", ""'<main>'""]
+[""'block (2 levels) in <main>'"", ""'Array#sum'"", ""'Kernel#public_send'""]
+");
+        }
     }
 }
