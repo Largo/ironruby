@@ -260,7 +260,7 @@ namespace IronRuby.Builtins {
         private bool _hasFeed;
 
         // __iter_slow__'s operations.
-        private const int SlowAdvance = 0, SlowPeek = 1, SlowAcrossThreads = 2;
+        private const int SlowAdvance = 0, SlowPeek = 1, SlowAcrossThreads = 2, SlowResumeCurrent = 3;
 
         /// <summary>
         /// Where the iteration of a built-in method has got to. A cursor belongs to the Ruby thread
@@ -297,8 +297,19 @@ namespace IronRuby.Builtins {
             /// The yield of the last step has returned, with the value fed to it (Enumerator#feed) or nil: what the method's
             /// block would have answered.
             /// </summary>
-            internal virtual void Resume(object fed) {
+            internal virtual void Resume(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ sites, object fed) {
             }
+
+            /// <summary>
+            /// Its <see cref="Resume"/> runs Ruby code (#flat_map's Array.try_convert): CursorStep calls it before it takes the
+            /// lock, on the thread that owns the cursor, and an error it raises ends the iteration as an error in the method would.
+            /// </summary>
+            internal virtual bool ResumesWithRubyCode {
+                get { return false; }
+            }
+
+            // Resume has run for the step about to be taken, outside the lock (CursorStep); it is running.
+            internal bool ResumedEarly, Resuming;
 
             /// <summary>What the method answers (StopIteration#result), once it has returned.</summary>
             internal virtual object Result {
@@ -308,7 +319,9 @@ namespace IronRuby.Builtins {
 
         // What a collecting method does with what its block answers, the block being the suspended yield of #next: #map
         // keeps the answers, #select (#filter, #find_all) the elements it answered true for, #reject the others.
-        private const int CollectMap = 0, CollectSelect = 1, CollectReject = 2;
+        // #filter_map keeps the answers that are true, #flat_map (#collect_concat) the elements of each answer that is an
+        // Array or converts to one (Array.try_convert, MRI's rb_check_array_type), and any other answer itself.
+        private const int CollectMap = 0, CollectSelect = 1, CollectReject = 2, CollectFilterMap = 3, CollectFlatMap = 4;
 
         // Array#map, #collect, #select, #filter and #reject (IListOps): the length is read at each step, as Array#each's
         // is; #select keeps the element as it is once the block has run (MRI's rb_ary_elt), #reject the one it yielded.
@@ -335,7 +348,7 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            internal override void Resume(object fed) {
+            internal override void Resume(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ sites, object fed) {
                 if (_kind == CollectMap) {
                     _result.Add(fed);
                 } else if (_kind == CollectSelect) {
@@ -379,16 +392,92 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            internal override void Resume(object fed) {
-                if (_kind == CollectMap) {
-                    _result.Add(fed);
-                } else if (Protocols.IsTrue(fed) == (_kind == CollectSelect)) {
-                    _result.Add(_current);
+            internal override void Resume(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ sites, object fed) {
+                switch (_kind) {
+                    case CollectMap:
+                        _result.Add(fed);
+                        break;
+                    case CollectFilterMap:
+                        if (Protocols.IsTrue(fed)) {
+                            _result.Add(fed);
+                        }
+                        break;
+                    case CollectFlatMap:
+                        var array = fed as RubyArray;
+                        if (array == null && fed != null) {
+                            var site = sites.GetCallSite("try_convert", 1);
+                            array = site.Target(site, sites.Context.GetClass(typeof(RubyArray)), fed) as RubyArray;
+                        }
+                        if (array != null) {
+                            _result.AddRange(array);
+                        } else {
+                            _result.Add(fed);
+                        }
+                        break;
+                    default:
+                        if (Protocols.IsTrue(fed) == (_kind == CollectSelect)) {
+                            _result.Add(_current);
+                        }
+                        break;
                 }
+            }
+
+            internal override bool ResumesWithRubyCode {
+                get { return _kind == CollectFlatMap; }
             }
 
             internal override void Finish() {
                 _inner.Finish();
+            }
+
+            internal override object Result {
+                get { return _result; }
+            }
+        }
+
+        // Hash#select, #filter and #reject (IDictionaryOps.Filter): as MRI's rb_hash_select, the receiver is copied - a plain
+        // Hash with its compare_by_identity, the entries with their hash codes - when the method starts, the copy is walked,
+        // and a pair the block's answer does not keep is dropped from it. The steps are key and value, two values.
+        private sealed class HashFilterCursor : ExternalCursor {
+            private readonly Hash/*!*/ _result;
+            private readonly bool _keepWhen;
+            private int _index;
+
+            private HashFilterCursor(Hash/*!*/ receiver, Hash/*!*/ result, bool keepWhen) : base(receiver) {
+                _result = result;
+                _keepWhen = keepWhen;
+            }
+
+            // null where Filter would not copy the entries (and copies the pairs one by one instead)
+            internal static HashFilterCursor TryCreate(RubyContext/*!*/ context, Hash/*!*/ receiver, bool keepWhen) {
+                var result = new Hash(context);
+                if (receiver.ComparesByIdentity) {
+                    result.CompareByIdentity();
+                }
+                return result.TryCopyEntriesFrom(receiver) ? new HashFilterCursor(receiver, result, keepWhen) : null;
+            }
+
+            internal override bool Multiple {
+                get { return true; }
+            }
+
+            internal override bool MoveNext(out object value) {
+                object key, entryValue;
+                if (_result.TryGetNextEntry(ref _index, out key, out entryValue)) {
+                    var values = new RubyArray(2);
+                    values.Add(CustomStringDictionary.ObjToNull(key));
+                    values.Add(entryValue);
+                    value = values;
+                    return true;
+                }
+                value = null;
+                return false;
+            }
+
+            internal override void Resume(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ sites, object fed) {
+                if (Protocols.IsTrue(fed) != _keepWhen) {
+                    _result.RemoveEntryAt(_index - 1);
+                }
             }
 
             internal override object Result {
@@ -551,8 +640,12 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            internal override void Resume(object fed) {
-                _inner.Resume(fed);
+            internal override void Resume(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ sites, object fed) {
+                _inner.Resume(sites, fed);
+            }
+
+            internal override bool ResumesWithRubyCode {
+                get { return _inner.ResumesWithRubyCode; }
             }
 
             internal override void Finish() {
@@ -747,6 +840,11 @@ namespace IronRuby.Builtins {
             internal RubyMemberInfo EachSlice;
             internal RubyMemberInfo EachCons;
             internal RubyMemberInfo StopIterationResult;
+            internal RubyMemberInfo LazyEach;
+            internal RubyMemberInfo FilterMap;
+            internal RubyMemberInfo FlatMap;
+            internal RubyMemberInfo CollectConcat;
+            internal RubyMemberInfo EachWithObject;
         }
 
         private static readonly object _preludeMethodsKey = new object();
@@ -766,12 +864,22 @@ namespace IronRuby.Builtins {
                 var methods = GetPreludeMethods(context);
                 if (name == "each_with_index") {
                     methods.EachWithIndex = method.Info;
+                } else if (name == "each" && module.Name == "Enumerator::Lazy") {
+                    methods.LazyEach = method.Info;
                 } else if (name == "each") {
                     methods.StructEach = method.Info;
                 } else if (name == "each_slice") {
                     methods.EachSlice = method.Info;
                 } else if (name == "each_cons") {
                     methods.EachCons = method.Info;
+                } else if (name == "filter_map") {
+                    methods.FilterMap = method.Info;
+                } else if (name == "flat_map") {
+                    methods.FlatMap = method.Info;
+                } else if (name == "collect_concat") {
+                    methods.CollectConcat = method.Info;
+                } else if (name == "each_with_object") {
+                    methods.EachWithObject = method.Info;
                 } else if (name == "result") {
                     methods.StopIterationResult = method.Info;
                 }
@@ -825,6 +933,9 @@ namespace IronRuby.Builtins {
             if (args.Length == 1 && args[0] is int && (name == "each_slice" || name == "each_cons")) {
                 return TryCreateSliceCursor(context, target, name, (int)args[0]);
             }
+            if (args.Length == 1 && name == "each_with_object") {
+                return TryCreateEachWithObjectCursor(context, target, args[0]);
+            }
             if (args.Length != 0) {
                 return null;
             }
@@ -849,6 +960,15 @@ namespace IronRuby.Builtins {
 
                 case "reject":
                     return TryCreateCollectCursor(context, target, name, CollectReject);
+
+                case "filter_map":
+                    return TryCreatePreludeCollectCursor(context, target, name, GetPreludeMethods(context).FilterMap, CollectFilterMap);
+
+                case "flat_map":
+                    return TryCreatePreludeCollectCursor(context, target, name, GetPreludeMethods(context).FlatMap, CollectFlatMap);
+
+                case "collect_concat":
+                    return TryCreatePreludeCollectCursor(context, target, name, GetPreludeMethods(context).CollectConcat, CollectFlatMap);
 
                 case "each_pair":
                     return (hash = target as Hash) != null && IsBuiltinMethod(context, target, name, typeof(IDictionaryOps), "Each", "EachPair") ?
@@ -910,6 +1030,12 @@ namespace IronRuby.Builtins {
             if (!_fastNext) {
                 return null;
             }
+            // Hash's own, whose result is a Hash
+            Hash hash = target as Hash;
+            if (hash != null && kind != CollectMap && name != "find_all") {
+                return IsBuiltinMethod(context, target, name, typeof(IDictionaryOps), "Select", kind == CollectReject ? "Reject" : name == "filter" ? "Filter" : "Select") ?
+                    HashFilterCursor.TryCreate(context, hash, kind == CollectSelect) : null;
+            }
             // the C# methods of the name: the blockless one that made the enumerator, and the one with a block it stands for
             string impl = (kind == CollectMap) ? (name == "collect" ? "Collect" : "Map") :
                 (kind == CollectReject) ? "Reject" : (name == "filter" ? "Filter" : name == "find_all" ? "FindAll" : "Select");
@@ -965,6 +1091,33 @@ namespace IronRuby.Builtins {
             }
             return self._indexWithObject ? new IndexCursor(self, inner, self._indexArgument) :
                 new IndexCursor(self, inner, (int)self._indexArgument, false);
+        }
+
+        // Enumerable#filter_map, #flat_map and #collect_concat, the prelude's, over a receiver whose #each a cursor walks.
+        private static ExternalCursor TryCreatePreludeCollectCursor(RubyContext/*!*/ context, object target, string/*!*/ name,
+            RubyMemberInfo expected, int kind) {
+            if (!_fastNext || !IsPreludeMethod(context, target, name, expected)) {
+                return null;
+            }
+            ExternalCursor inner = TryCreateEachCursor(context, target);
+            return inner != null ? new EnumerableCollectCursor(target, inner, kind) : null;
+        }
+
+        // #each_with_object: Array's own (IListOps, which reads the length at each step, as #each does), or Enumerable's, the
+        // prelude's, over a receiver whose #each a cursor walks: [element, memo], and the memo at the end.
+        private static ExternalCursor TryCreateEachWithObjectCursor(RubyContext/*!*/ context, object target, object memo) {
+            if (!_fastNext) {
+                return null;
+            }
+            RubyArray array = target as RubyArray;
+            if (array != null && IsBuiltinMethod(context, target, "each_with_object", typeof(IListOps), "GetEachWithObjectEnumerator", "EachWithObject")) {
+                return new IndexCursor(target, new ArrayCursor(array, false), memo);
+            }
+            if (!IsPreludeMethod(context, target, "each_with_object", GetPreludeMethods(context).EachWithObject)) {
+                return null;
+            }
+            ExternalCursor inner = TryCreateEachCursor(context, target);
+            return inner != null ? new IndexCursor(target, inner, memo) : null;
         }
 
         // The receiver's own #each, when it is a built-in one a cursor can do.
@@ -1049,6 +1202,19 @@ namespace IronRuby.Builtins {
             return source;
         }
 
+        /// <summary>
+        /// Whether a lazy enumerator's #next may run its #each on a copy of it (the prelude's Lazy#__enum_iteration_source__):
+        /// it is an Enumerator::Lazy and nothing more (no singleton class, no subclass), and its #each is the prelude's, which
+        /// reads only the instance variables the copy is given. The fiber then holds no reference to the lazy the program
+        /// has, and an abandoned one is reclaimed (its handle collected) as an Enumerator's is. IR_FAST_NEXT=0 keeps the lazy.
+        /// </summary>
+        [RubyMethod("__iter_detachable_lazy__", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsDetachableLazy(RubyContext/*!*/ context, object self, object lazy) {
+            RubyMemberInfo expected = GetPreludeMethods(context).LazyEach;
+            return _fastNext && expected != null && context.GetImmediateClassOf(lazy) == expected.DeclaringModule &&
+                IsPreludeMethod(context, lazy, "each", expected);
+        }
+
         private static bool IsBuiltinMethod(RubyContext/*!*/ context, object target, string/*!*/ name, Type/*!*/ declaringType, params string[]/*!*/ clrNames) {
             var method = context.ResolveMethod(target, name, VisibilityContext.AllVisible);
             if (!method.Found || !(method.Info is RubyLibraryMethodInfo)) {
@@ -1105,12 +1271,21 @@ namespace IronRuby.Builtins {
         /// Ends with the cursor's lock released: everything that can raise happens outside it.
         /// </summary>
         private static object CursorStep(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage,
-            Enumerator/*!*/ self, ExternalCursor/*!*/ cursor, bool consume) {
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ convertStorage, Enumerator/*!*/ self, ExternalCursor/*!*/ cursor,
+            bool consume) {
 
             RubyContext context = slowStorage.Context;
             StopIteration stop = null;
             bool first = false, acrossThreads = false;
             object value;
+
+            // The suspended yield returns: a cursor whose Resume runs Ruby code has it run here, before the lock. Only the owner
+            // advances the iteration, and only when no value is waiting (a thread that is not the owner takes a peeked one, and
+            // nothing else). An error ends the iteration, and the next #next starts a fresh one (MRI's next_init).
+            if (cursor.ResumesWithRubyCode) {
+                ResumeWithRubyCode(slowStorage, convertStorage, self, cursor);
+            }
+
             using (new RubyUtils.UninterruptedLock(cursor)) {
                 if (!cursor.Peeked) {
                     if (cursor.Done) {
@@ -1123,7 +1298,11 @@ namespace IronRuby.Builtins {
                     } else {
                         // the suspended yield returns (next_ii), taking the fed value with it
                         if (cursor.Started) {
-                            cursor.Resume(self._hasFeed ? self._feedValue : null);
+                            if (cursor.ResumedEarly) {
+                                cursor.ResumedEarly = false;
+                            } else {
+                                cursor.Resume(convertStorage, self._hasFeed ? self._feedValue : null);
+                            }
                             self._feedValue = null;
                             self._hasFeed = false;
                         }
@@ -1160,13 +1339,13 @@ namespace IronRuby.Builtins {
             // get_next_values: the end is raised once as such, and from then on as a new StopIteration
             // whose cause is the first one
             if (first) {
-                throw ThrowsUnkept() ? RubyExceptionData.MarkUnkept(stop) : stop;
+                throw Raising(context, stop);
             }
             // the first one is handed to Ruby code now (Exception#cause): if it was rescued and dropped, the walk for its
             // backtrace is still to be taken, and is taken here, as close to where it was rescued as there is
             RubyExceptionData.ExposeCatchSite(stop);
             var again = CreateStopIteration(context, cursor.Result, stop);
-            throw ThrowsUnkept() ? RubyExceptionData.MarkUnkept(again) : again;
+            throw Raising(context, again);
         }
 
         // IR_FAST_NEXT=0 throws the StopIteration of a cursor as before, the stack walked as soon as a frame rescues it.
@@ -1182,6 +1361,83 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static bool ThrowsUnkept() {
             return _fastNext && TracePoint.ActiveEvents == 0;
+        }
+
+        /// <summary>
+        /// The StopIteration about to be thrown, marked unkept (<see cref="ThrowsUnkept"/>), after a TracePoint on :raise has seen
+        /// it go by, as MRI's rb_exc_raise shows it (and as Hash#fetch's KeyError is shown, IDictionaryOps).
+        /// </summary>
+        private static StopIteration/*!*/ Raising(RubyContext/*!*/ context, StopIteration/*!*/ stop) {
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
+                TracePoint.OnException(TraceEvents.Raise, null, context, stop);
+            }
+            if (ThrowsUnkept()) {
+                RubyExceptionData.MarkUnkept(stop);
+            }
+            return stop;
+        }
+
+        // CursorStep's part for a cursor whose Resume runs Ruby code, in a method of its own: the handler here would otherwise be
+        // CursorStep's, which every StopIteration is thrown from.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ResumeWithRubyCode(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ convertStorage, Enumerator/*!*/ self, ExternalCursor/*!*/ cursor) {
+
+            if (cursor.Thread != RubyUtils.CurrentRubyThread) {
+                return;
+            }
+            if (cursor.Resuming) {
+                // the Ruby code Resume runs is the method's, between two of its yields: the iteration is under way on this
+                // thread, as MRI's fiber is running
+                SlowStep(slowStorage, self, SlowResumeCurrent);
+            }
+            if (!cursor.Started || cursor.Peeked || cursor.Done || cursor.ResumedEarly) {
+                return;
+            }
+            object fed = self._hasFeed ? self._feedValue : null;
+            try {
+                cursor.Resuming = true;
+                cursor.Resume(convertStorage, fed);
+            } catch {
+                cursor.Resuming = false;
+                using (new RubyUtils.UninterruptedLock(cursor)) {
+                    cursor.Done = true;
+                    cursor.Finish();
+                }
+                Interlocked.CompareExchange(ref self._cursor, null, cursor);
+                self._feedValue = null;
+                self._hasFeed = false;
+                throw;
+            }
+            cursor.Resuming = false;
+            cursor.ResumedEarly = true;
+        }
+
+        // The StopIteration that ended the fiber's iteration (__iter_raise_stop__), the cause of the ones raised after it.
+        private StopIteration _fiberStop;
+
+        /// <summary>
+        /// The end of an iteration that runs on the prelude's fiber (Enumerator#__iter_stop__), raised as a cursor's is
+        /// (CursorStep): once as such, and from then on as a new StopIteration whose cause is the first, each one unkept, so that
+        /// the frame that rescues it may leave the walk of the stack below it (perf/extiter). Raised by the prelude it was an
+        /// exception Ruby code had made - Kernel#raise of an instance - and every end of such an iteration took the walk.
+        /// </summary>
+        [RubyMethod("__iter_raise_stop__", RubyMethodAttributes.PrivateInstance)]
+        public static object RaiseFiberStop(RubyContext/*!*/ context, Enumerator/*!*/ self, object result) {
+            // MRI makes it with rb_exc_new, which calls a #new or #initialize of the program's: the prelude does then
+            // (and keeps the first one itself)
+            if (!RubyExceptionData.MakesUnkeptException(context.GetClass(typeof(StopIteration)))) {
+                return null;
+            }
+            StopIteration first = self._fiberStop;
+            if (first == null) {
+                var stop = self._fiberStop = CreateStopIteration(context, result, null);
+                throw Raising(context, stop);
+            }
+            // handed to Ruby code now (Exception#cause): the walk left for it is taken here
+            RubyExceptionData.ExposeCatchSite(first);
+            var again = CreateStopIteration(context, result, first);
+            throw Raising(context, again);
         }
 
         private static StopIteration/*!*/ CreateStopIteration(RubyContext/*!*/ context, object result, StopIteration cause) {
@@ -1217,40 +1473,44 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("next")]
-        public static object Next(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage, Enumerator/*!*/ self) {
+        public static object Next(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ convertStorage, Enumerator/*!*/ self) {
             var cursor = GetCursor(slowStorage, self);
             if (cursor == null) {
                 return ValuesToValue(SlowStep(slowStorage, self, SlowAdvance), false);
             }
-            return CursorStep(slowStorage, self, cursor, true);
+            return CursorStep(slowStorage, convertStorage, self, cursor, true);
         }
 
         [RubyMethod("peek")]
-        public static object Peek(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage, Enumerator/*!*/ self) {
+        public static object Peek(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ convertStorage, Enumerator/*!*/ self) {
             var cursor = GetCursor(slowStorage, self);
             if (cursor == null) {
                 return ValuesToValue(SlowStep(slowStorage, self, SlowPeek), true);
             }
-            object value = CursorStep(slowStorage, self, cursor, false);
+            object value = CursorStep(slowStorage, convertStorage, self, cursor, false);
             return cursor.Multiple ? new RubyArray((RubyArray)value) : value;
         }
 
         [RubyMethod("next_values")]
-        public static RubyArray/*!*/ NextValues(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage, Enumerator/*!*/ self) {
+        public static RubyArray/*!*/ NextValues(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ convertStorage, Enumerator/*!*/ self) {
             var cursor = GetCursor(slowStorage, self);
             if (cursor == null) {
                 return SlowStep(slowStorage, self, SlowAdvance);
             }
-            return CursorValues(cursor, CursorStep(slowStorage, self, cursor, true), false);
+            return CursorValues(cursor, CursorStep(slowStorage, convertStorage, self, cursor, true), false);
         }
 
         [RubyMethod("peek_values")]
-        public static RubyArray/*!*/ PeekValues(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage, Enumerator/*!*/ self) {
+        public static RubyArray/*!*/ PeekValues(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ convertStorage, Enumerator/*!*/ self) {
             var cursor = GetCursor(slowStorage, self);
             if (cursor == null) {
                 return new RubyArray(SlowStep(slowStorage, self, SlowPeek));
             }
-            return CursorValues(cursor, CursorStep(slowStorage, self, cursor, false), true);
+            return CursorValues(cursor, CursorStep(slowStorage, convertStorage, self, cursor, false), true);
         }
 
         /// <summary>
@@ -1308,6 +1568,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("__iter_reset__", RubyMethodAttributes.PrivateInstance)]
         public static object ResetExternalIteration(Enumerator/*!*/ self) {
             self._cursor = null;
+            self._fiberStop = null;
             self._onFiber = false;
             self._feedValue = null;
             self._hasFeed = false;
