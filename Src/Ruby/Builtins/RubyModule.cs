@@ -4355,14 +4355,23 @@ namespace IronRuby.Builtins {
 
             // another runtime sees the name decorated with the runtime id; not worth caching
             if (context != _context) {
-                return MutableString.CreateMutable(GetName(context), context.GetIdentifierEncoding()).FreezeInterned();
+                string name = GetName(context);
+                return MutableString.CreateMutable(name, NameEncoding(context, name)).FreezeInterned();
             }
 
             var result = _nameString;
             if (result == null) {
-                _nameString = result = MutableString.CreateMutable(_name, context.GetIdentifierEncoding()).FreezeInterned();
+                _nameString = result = MutableString.CreateMutable(_name, NameEncoding(context, _name)).FreezeInterned();
             }
             return result;
+        }
+
+        /// <summary>
+        /// MRI's module names are symbols' strings: US-ASCII when the name is ASCII ("Object"),
+        /// UTF-8 otherwise. A temporary name keeps the encoding it was given, which here is UTF-8.
+        /// </summary>
+        private RubyEncoding/*!*/ NameEncoding(RubyContext/*!*/ context, string/*!*/ name) {
+            return !_isTemporaryName && name.IsAscii() ? RubyEncoding.Ascii : context.GetIdentifierEncoding();
         }
 
         public MutableString GetDisplayName(RubyContext/*!*/ context, bool showEmptyName) {
@@ -4411,12 +4420,18 @@ namespace IronRuby.Builtins {
 
                     c = (RubyClass)module;
                 }
-                return result.Append('>', nestings);
+                result.Append('>', nestings);
+                if (result.IsAscii()) {
+                    // MRI: "#<Class:Object>" is US-ASCII, as the name inside it is
+                    result.ForceEncoding(RubyEncoding.Ascii);
+                }
+                return result;
             } else if (_name == null) {
                 if (showEmptyName) {
                     return null;
                 } else {
-                    MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
+                    // MRI makes "#<Class:0x...>" with rb_sprintf, a binary string
+                    MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
                     result.Append("#<");
                     result.Append(_context.GetClassOf(this).GetName(context));
                     result.Append(':');
@@ -4425,7 +4440,8 @@ namespace IronRuby.Builtins {
                     return result;
                 }
             } else {
-                return MutableString.CreateMutable(GetName(context), context.GetIdentifierEncoding());
+                string name = GetName(context);
+                return MutableString.CreateMutable(name, NameEncoding(context, name));
             }
         }
 

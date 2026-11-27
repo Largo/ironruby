@@ -61,6 +61,11 @@ namespace IronRuby.Builtins {
         // matching with _cachedRegex, which is compiled once it has been used enough.
         private bool _binaryIsPlain;
 
+        // The same for an ISO-8859-1 subject with bytes above 0x7F, which Onigmo matches with its ISO-8859-1 ctype table
+        // (RegexpTransformer.Transform(..., latin1Ctype)).
+        private Tuple<TimeSpan, Regex> _cachedLatin1;
+        private bool _latin1IsPlain;
+
         // The same CLR regex forced to start where the search starts, for the scanning operations
         // that only ever look at the current position (StringScanner#scan, #skip, #check, #match?).
         // Cached against the regex it was derived from, so it follows _cachedRegex's own lifetime.
@@ -443,6 +448,9 @@ namespace IronRuby.Builtins {
             if (target.UsesAsciiCtype(input)) {
                 return target.TransformBinaryPattern(countUse);
             }
+            if (input.Encoding.CodePage == 28591 && !input.IsAscii()) {
+                return target.TransformLatin1Pattern(countUse);
+            }
             return target.TransformPattern(countUse);
         }
 
@@ -492,6 +500,34 @@ namespace IronRuby.Builtins {
             }
 
             _cachedBinary = Tuple.Create(timeout, result);
+            return result;
+        }
+
+        private Regex/*!*/ TransformLatin1Pattern(bool countUse) {
+            TimeSpan timeout = EffectiveTimeout;
+            if (_latin1IsPlain) {
+                return TransformPattern(countUse);
+            }
+            var cached = _cachedLatin1;
+            if (cached != null && timeout == cached.Item1) {
+                return cached.Item2;
+            }
+
+            Regex plain = TransformPattern(false);
+            Regex result;
+            try {
+                bool hasGAnchor, applied;
+                string translated = RegexpTransformer.Transform(GetClrPatternSource(), _options, out hasGAnchor, false, false, true, out applied);
+                if (!applied) {
+                    _latin1IsPlain = true;
+                    return plain;
+                }
+                result = new Regex(translated, plain.Options, timeout);
+            } catch (Exception) {
+                result = plain;
+            }
+
+            _cachedLatin1 = Tuple.Create(timeout, result);
             return result;
         }
 

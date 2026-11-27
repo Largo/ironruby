@@ -2464,5 +2464,25 @@ nil
 ""break from proc-closure""
 ");
         }
+
+        /// <summary>
+        /// A block passed to a method that does not use it is not warned about when some method of the same name uses a block,
+        /// a def later in the file included: MRI notes those names when it compiles the file (iseq_set_use_block). LEDGER gap 28.
+        /// </summary>
+        public void UnusedBlock_LaterDefinition1() {
+            // the one warning, about C#other, is the runtime's to count too
+            AssertOutput(() => CompilerTest(@"
+def Warning.warn(msg, category: nil) = print(""warn: "", msg.sub(/\A.*?warning: /, """").sub(/ defined at \S+/, """"))
+class A; def given; block_given?; end; end
+class C; def other; 1; end; end
+def outer(&b) = A.new.given(&b)
+p outer { }, C.new.other { }
+class B; def given; yield; end; end
+", 0, 1), @"
+warn: the block passed to 'C#other' may be ignored
+true
+1
+");
+        }
     }
 }

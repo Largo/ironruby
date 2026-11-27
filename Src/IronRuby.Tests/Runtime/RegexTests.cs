@@ -902,6 +902,38 @@ translated: [RegexpError, ""unmatched close parenthesis: /\\xC3\\xA9)/""]
         /// sees U+0080-U+00FF. ISO-8859-1 and UTF-8 subjects keep their own letters, and a BINARY
         /// regexp's \p{Punct} is [[:punct:]] even on ASCII text.
         /// </summary>
+        /// <summary>
+        /// Against an ISO-8859-1 subject Onigmo uses its ISO-8859-1 ctype table, not Unicode's:
+        /// the superscripts and vulgar fractions are word characters, U+00A7 and U+00B6 are not
+        /// punctuation but the soft hyphen is, U+0085 is neither a space nor a line break, and
+        /// /i folds no case pair onto U+00DF, U+00FF or U+00B5.
+        /// </summary>
+        public void Regex_Latin1Ctype1() {
+            TestOutput(@"
+def l(s) = s.dup.force_encoding(""ISO-8859-1"")
+s = l(""\xAA\xA7\xB2\xA0\xD7\xB6\xAD\xBC"")
+p s.scan(/[[:word:]]/).map(&:ord)
+p s.scan(/(?u)\w/).map(&:ord)
+p s.scan(/[[:punct:]]/).map(&:ord)
+p s.scan(/[[:space:]]|\s/).map(&:ord)
+p s.scan(/(?a)[[:alpha:]]/).map(&:ord)
+p s.scan(/\b./).map(&:ord)
+p l(""a\x85"").scan(/\R/).size
+p l(""\xDF\xFF\xB5\xC0"").scan(/[[:upper:]]/i).map(&:ord)
+p l(""abc"").scan(/\w/).size
+", @"
+[170, 178, 188]
+[170, 178, 188]
+[173]
+[160]
+[170]
+[170, 167, 178, 160, 188]
+0
+[192]
+3
+");
+        }
+
         public void Regex_BinaryCtype1() {
             TestOutput(@"
 require 'ruby4'

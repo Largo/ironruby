@@ -16,12 +16,11 @@
 # A row lists, for each subject encoding, which of the characters 0x80-0xFF (and 0x00-0x7F,
 # as a check that ASCII is unchanged) the pattern matches, as hex ranges.
 #
-# The BINARY and US-ASCII columns and the entry points agree with CRuby 4.0. Rows that still
-# differ, all in the other columns and all older than this matrix: ISO-8859-1 subjects are
-# matched with Unicode's tables rather than Onigmo's ISO-8859-1 ctype table ([[:punct:]],
-# [[:space:]], \s, (?u)\s, \R and 0x85, [[:word:]] and \b with the superscripts and fractions,
-# (?a)[[:alpha:]], [[:upper:]]/i), UTF-8's \b and \B do not count U+00B2 U+00B3 U+00B9
-# U+00BC-U+00BE as word characters, and UTF-8's [[:upper:]]/i misses U+00B5.
+# The BINARY, US-ASCII and ISO-8859-1 columns and the entry points agree with CRuby 4.0
+# (an ISO-8859-1 subject that is not ASCII-only is matched with Onigmo's ISO-8859-1 ctype
+# table). Rows that still differ, all in the UTF-8 column and older than this matrix: UTF-8's
+# \b and \B do not count U+00B2 U+00B3 U+00B9 U+00BC-U+00BE as word characters, and UTF-8's
+# [[:upper:]]/i misses U+00B5.
 
 require "strscan"
 

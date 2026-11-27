@@ -949,6 +949,141 @@ puts ArrayList
         }
 
         /// <summary>
+        /// Colons go only with z, and E and O only with the conversions they modify: otherwise MRI's
+        /// strftime makes the directive unknown at the colon (or the E or O), copies it through and
+        /// reads the rest afresh, so "%:%Y" is "%:2020" and "%:%" ends in a lone %. That error names
+        /// the whole format.
+        /// </summary>
+        public void Time_StrftimeColon1() {
+            TestOutput(@"
+t = Time.utc(2020, 1, 2, 3, 4, 5)
+%w[%:%Y %::y %:: %::::z %:::z %E%Y %O%d %E: %-:%m %10:%Y].each { |f| p t.strftime(f) }
+%w[%:% %::3% %E% x%].each { |f| begin; t.strftime(f); rescue ArgumentError => e; puts e.message; end }
+", @"
+""%:2020""
+""%::y""
+""%::""
+""%::::z""
+""+00""
+""%E2020""
+""%O02""
+""%E:""
+""%-:01""
+""%10:2020""
+invalid format: %:%
+invalid format: %::3%
+invalid format: %E%
+invalid format: x%
+");
+        }
+
+        /// <summary>
+        /// A time with a fixed offset has no zone name, and MRI's %Z then writes nothing at all, not
+        /// even the padding of a width (nor does a huge width raise ERANGE).
+        /// </summary>
+        public void Time_StrftimeNoZone1() {
+            TestOutput(@"
+t = Time.new(2012, 1, 1, 0, 0, 0, 3660)
+%w[%10Z %-10Z %010Z %^5Z %Z| %2000000000Z].each { |f| p t.strftime(f) }
+u = Time.utc(2020)
+p u.strftime(""%6Z|""), u.localtime(""+01:00"").strftime(""%_5Z|"")
+", @"
+""""
+""""
+""""
+""""
+""|""
+""""
+""   UTC|""
+""|""
+");
+        }
+
+        /// <summary>
+        /// MRI's date_zone_to_diff strips only "gmt" or "utc" before a zone's sign, so "UT-3" has no
+        /// offset, though "ut" on its own is UTC.
+        /// </summary>
+        public void Date_ZoneToDiffUt1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+[""UT-3"", ""UT+0930"", ""UTC-3"", ""GMT+3"", ""+3"", ""ut"", ""Ut-03:00"", ""utc+9"", ""gmt-3.5""].each { |z| p [z, Date._strptime(z, ""%Z"")] }
+p Date._parse(""2026-01-02 10:00 UT-3"")
+p DateTime.strptime(""2026 UTC-3"", ""%Y %Z"").offset
+", @"
+[""UT-3"", {zone: ""UT-3"", offset: nil}]
+[""UT+0930"", {zone: ""UT+0930"", offset: nil}]
+[""UTC-3"", {zone: ""UTC-3"", offset: -10800}]
+[""GMT+3"", {zone: ""GMT+3"", offset: 10800}]
+[""+3"", {zone: ""+3"", offset: 10800}]
+[""ut"", {zone: ""ut"", offset: 0}]
+[""Ut-03:00"", {zone: ""Ut-03:00"", offset: nil}]
+[""utc+9"", {zone: ""utc+9"", offset: 32400}]
+[""gmt-3.5"", {zone: ""gmt-3.5"", offset: -12600}]
+{zone: ""UT-3"", hour: 10, min: 0, year: 2026, mon: 1, mday: 2, offset: nil}
+(-1/8)
+");
+        }
+
+        /// <summary>
+        /// Date._strptime and Date._parse refuse a string (or format) whose encoding is not ASCII-compatible
+        /// with MRI's ArgumentError, before any regexp sees it.
+        /// </summary>
+        public void Date_StrptimeEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+u = ""2026"".encode(""UTF-16LE"")
+p((Date._strptime(u, ""%Y"") rescue $!))
+p((Date._strptime(""2026"", ""%Y"".encode(""UTF-16LE"")) rescue $!))
+p((Date._parse(u) rescue $!))
+p((Date.strptime(u, ""%Y"") rescue $!))
+p((DateTime._strptime(u, ""%Y"") rescue $!))
+", @"
+#<ArgumentError: string should have ASCII compatible encoding>
+#<ArgumentError: format should have ASCII compatible encoding>
+#<ArgumentError: string should have ASCII compatible encoding>
+#<ArgumentError: string should have ASCII compatible encoding>
+#<ArgumentError: string should have ASCII compatible encoding>
+");
+        }
+
+        /// <summary>
+        /// Date._strptime's leftover is a plain String even when the string passed in is a subclass's,
+        /// as MRI's is.
+        /// </summary>
+        public void Date_StrptimeSubclass1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+class S < String; end
+h = Date._strptime(S.new(""2026 x""), ""%Y""); p [h, h[:leftover].class]
+h = Date._strptime(S.new(""2026 \xC3\xA9""), ""%Y""); p [h[:leftover].bytes, h[:leftover].class]
+", @"
+[{year: 2026, leftover: "" x""}, String]
+[[32, 195, 169], String]
+");
+        }
+
+        /// <summary>
+        /// date__parse takes the day name out before the time, so the time's zone cannot read a day name
+        /// after the time as a zone, and :wday leads the hash.
+        /// </summary>
+        public void Date_ParseDayFirst1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+[""Sat Aug 28 02:55:50 2021"", ""10:00 sat"", ""Sat, 28 Aug 2021 02:55:50 GMT"", ""monday 3pm"", ""2021-08-28 sun""].each { |s| p Date._parse(s) }
+", @"
+{wday: 6, hour: 2, min: 55, sec: 50, year: 2021, mon: 8, mday: 28}
+{wday: 6, hour: 10, min: 0}
+{wday: 6, zone: ""GMT"", hour: 2, min: 55, sec: 50, year: 2021, mon: 8, mday: 28, offset: 0}
+{wday: 1, hour: 15}
+{wday: 0, year: 2021, mon: 8, mday: 28}
+");
+        }
+
+        /// <summary>
         /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
         /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
         /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's
@@ -3140,6 +3275,82 @@ t { ""\xe0"".force_encoding(""macThai"").ord }
 ");
         }
 
+        /// <summary>
+        /// MRI builds the transcoders' error messages with rb_sprintf, so an UndefinedConversionError,
+        /// InvalidByteSequenceError or ConverterNotFoundError raised by a conversion has a binary message;
+        /// one made with a message of its own keeps that string.
+        /// </summary>
+        public void Encoding_ErrorMessageBinary1() {
+            TestOutput(@"
+ec = Encoding::Converter.new(""UTF-8"", ""US-ASCII"")
+ec.primitive_convert(""\xE6\x97\xA5"".dup.force_encoding(""UTF-8""), """".b)
+p ec.last_error.message.encoding
+[""\xE6\x97\xA5"", ""\xFF""].each { |s| begin; s.dup.force_encoding(""UTF-8"").encode(""US-ASCII""); rescue => x; p [x.class, x.message, x.message.encoding]; end }
+begin; ""\xFF"".b.encode(""UTF-8""); rescue => x; p [x.message, x.message.encoding]; end
+begin; Encoding::Converter.new(""x"", ""y""); rescue => x; p [x.message, x.message.encoding]; end
+p Encoding::UndefinedConversionError.new(""m"").message.encoding
+p Encoding::UndefinedConversionError.new.message
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+[Encoding::UndefinedConversionError, ""U+65E5 from UTF-8 to US-ASCII"", #<Encoding:BINARY (ASCII-8BIT)>]
+[Encoding::InvalidByteSequenceError, ""\""\\xFF\"" on UTF-8"", #<Encoding:BINARY (ASCII-8BIT)>]
+[""\""\\xFF\"" from ASCII-8BIT to UTF-8"", #<Encoding:BINARY (ASCII-8BIT)>]
+[""code converter not found (x to y)"", #<Encoding:BINARY (ASCII-8BIT)>]
+#<Encoding:UTF-8>
+""Encoding::UndefinedConversionError""
+");
+        }
+
+        /// <summary>
+        /// A decorator's name in Encoding::Converter#convpath (and search_convpath) is a binary string,
+        /// as MRI's transcoder table holds it.
+        /// </summary>
+        public void Encoding_ConvPathDecoratorBinary1() {
+            TestOutput(@"
+p Encoding::Converter.new("""", """", universal_newline: true).convpath.map(&:encoding)
+p Encoding::Converter.new("""", ""universal_newline"").convpath.map(&:encoding)
+p Encoding::Converter.new([[""UTF-8"", ""EUC-JP""], ""crlf_newline""]).convpath.last.encoding
+p Encoding::Converter.search_convpath(""UTF-8"", ""EUC-JP"", crlf_newline: true).last.encoding
+p Encoding::Converter.new(""UTF-8"", ""UTF-16BE"", xml: :text).convpath[0].encoding
+", @"
+[#<Encoding:BINARY (ASCII-8BIT)>]
+[#<Encoding:BINARY (ASCII-8BIT)>]
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+");
+        }
+
+        /// <summary>
+        /// A module's name is a symbol's string in MRI, US-ASCII when it is ASCII, and so is the
+        /// description of a singleton class; an anonymous module's "#<Class:0x...>" is a binary string.
+        /// A temporary name keeps its own encoding.
+        /// </summary>
+        public void Module_NameEncoding1() {
+            TestOutput(@"
+module M; class K; end; end
+p Object.name.encoding, Object.to_s.encoding, M::K.name.encoding, M::K.inspect.encoding
+p Object.singleton_class.to_s.encoding, Object.new.singleton_class.to_s.encoding
+p Class.new.to_s.encoding, Module.new.inspect.encoding
+p [Object.name, ""a""].join.encoding, ""#{Object}"".encoding
+c = Class.new
+c.set_temporary_name(""fake<x>"")
+p c.name.encoding
+", @"
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:US-ASCII>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+");
+        }
+
         public void Encoding_Converter1() {
             TestOutput(@"
 def t
@@ -3786,6 +3997,38 @@ Set[1]
 MySet
 true
 ""\x04\bo:\bSet\x06:\n@hash}\x06i\x06TF""
+");
+        }
+
+        /// <summary>
+        /// MRI keeps the backtrace of a raise in "bt_locations" and Marshal writes it: as a link to "bt"
+        /// while that is still the raise's, as the raise's strings once #set_backtrace replaced it, and not
+        /// at all for an exception never raised or raised with a backtrace of #raise's argument. It and the
+        /// cause come after the instance variables set before the raise.
+        /// </summary>
+        public void Marshal_ExceptionBtLocations1() {
+            TestOutput(@"
+require 'ruby4'
+def ivars(e) = Marshal.dump(e).scan(/:[\x06-\x16]([a-z_@?]+)(.)/).map(&:join)
+e = RuntimeError.new(""x""); p ivars(e)
+e.set_backtrace([""a""]); p ivars(e)
+begin; raise ""y""; rescue => f; end
+p ivars(f)
+f.set_backtrace([""b""]); p ivars(f)
+p Marshal.load(Marshal.dump(f)).backtrace == [""b""]
+begin; raise RuntimeError, ""z"", [""s1""]; rescue => g; end
+p ivars(g), ivars(Marshal.load(Marshal.dump(g)))
+begin; begin; raise ""in""; rescue; e2 = KeyError.new(""o"", receiver: 1, key: 2); e2.instance_variable_set(:@u, 1); raise e2; end; rescue => c; end
+p ivars(c)
+", @"
+[""mesgI"", ""bt0""]
+[""mesgI"", ""bt[""]
+[""mesgI"", ""bt["", ""bt_locations@\a""]
+[""mesgI"", ""bt["", ""bt_locations[""]
+true
+[""mesgI"", ""bt[""]
+[""mesgI"", ""bt[""]
+[""mesgI"", ""bt["", ""receiveri\x06"", ""keyi\a"", ""@ui\x06"", ""causeo:"", ""bt_locations@\v""]
 ");
         }
 
