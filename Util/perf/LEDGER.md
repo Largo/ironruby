@@ -712,7 +712,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    each call); the rest of NBody's 18 MB is the harness's `times` block (its index
    past the cache, the `0.01` literal) and `energy`. TruffleRuby allocates nothing
    there; the next step for the tuple is a parked scope that keeps its tuple when no
-   Proc of the call outlived it.
+   Proc of the call outlived it. Round forty built that and rejected it (see Rejected,
+   perf/parkedtuple): the bytes went (18 -> 12 MB) and the time did not, since taking
+   and clearing the tuple costs about what allocating 24 bytes does. What is left of
+   NBody's 12 MB is the harness's `times` block and `energy`, not `advance`.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -6483,6 +6486,36 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/parkedtuple 16300b2 b0a33d4, reverted in ccad78e (round forty, 2026-11-27) - a parked method
+  scope keeps its locals tuple for the next call (gap 2)**. After perf/nbody2 all `advance` allocated was
+  its 24-byte locals tuple: a method that parks its scope with its block literals' Procs still made a new
+  tuple per call, at its entry (`MakeLocalsStorage`, before it knows whether it will take the parked
+  scope) or, for a light frame with register locals, when it makes the scope (`MaterializeLocals`).
+  AWFY has some thirty such methods (`IR_PARKED_SCOPES=verbose`): DeltaBlue's `satisfy`, `execute`,
+  `incremental_remove`, som.rb's `each`, `append`, `remove`, Queens' `place_queen`, NBody's `advance`.
+  Built: `EndPark` cleared the scope's tuple (flat, up to 16 slots) and kept it with the scope
+  (`ParkedProcs.Locals`); the next call took it with an atomic exchange (`RubyOps.TakeParkedLocals`,
+  [Emitted]) from the slot at its entry, or from the parked scope it took when it made the tuple with
+  the scope (taking from the slot there found nothing: the scope was already out of it). Safe for the
+  reasons parking is - a scope nothing captured, Procs reusable and inactive - and
+  `Util/parked-tuple-matrix.rb` (in 16300b2: a local set on some calls only, bindings and Procs of the
+  scope kept in the middle, an exception, more than 16 locals, recursion, threads, a fiber, eval, a
+  TracePoint binding) printed CRuby's answers in every mode and caught a clear left out (three rows
+  wrong). The parked-scope, block-scope-reuse, block-nest-reuse, nested-proc, loop-exit, osr-array, jit
+  and hot-shapes matrices in the gate's modes and with the switch off: 63 same. ruby/spec
+  language/block, language/def, core/binding, core/proc: no failures, as on the base.
+  Bytes (alloc.rb): NBody 18,029,866 -> 12,032,795 per iteration, Towers 137 -> 45 KB, Queens -3%,
+  Richards -6%, Havlak -1.2%, DeltaBlue -1%; geomean of the fourteen 0.892.
+  Why rejected: the time. Callgrind (switch off -> on, one tree): a parked light frame with register
+  locals (`sum_with`: two locals an `each` block reads) +2.9% and +2.9% in two pairs of processes, and
+  +2.2% after the clear was made typed instead of SetValue per slot (b0a33d4); som.rb-style `each` and
+  `has_some` +0.14%; `advance` -3.0% in one build and +0.4% in the next. Ten alternating AWFY processes
+  (medians, ranges overlapping): NBody 0.982, Richards 1.020, DeltaBlue 1.041, Havlak 1.083. The take
+  (an interlocked exchange, a type test) and the clear cost about what a 24-byte gen0 allocation does,
+  and the register-locals arms each grew by the take. What would be different: a tuple the frame owns
+  without an exchange - a parked scope taken at the entry together with its tuple, which changes when
+  the scope is taken for every light frame that parks.
 
 - **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
   above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
