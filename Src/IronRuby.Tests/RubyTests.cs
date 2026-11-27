@@ -1438,6 +1438,7 @@ namespace IronRuby.Tests {
                 String_OrdWide1,
                 Integer_ChrSingleByte1,
                 String_TranslateCheckOrder1,
+                String_EncodeKeywordOptionsOnly1,
                 Integer_ChrMultibyte1,
                 String_Cesu8_1,
                 String_EmacsMule1,

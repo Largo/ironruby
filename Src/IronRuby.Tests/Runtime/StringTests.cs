@@ -1387,5 +1387,26 @@ then %s US-ASCII: [Encoding::CompatibilityError, ""incompatible character encodi
 bytes kept: [""3c8fa2b73e"", ""3cedb2803e""]
 ");
         }
+
+        /// <summary>
+        /// String#encode and #encode! take their options as keywords only: a positional Hash, or an object with #to_hash, is an
+        /// encoding (TypeError), and a third positional argument too many; a keyword hash, **obj included, is the options. Util/encode-matrix.rb.
+        /// </summary>
+        public void String_EncodeKeywordOptionsOnly1() {
+            TestOutput(@"
+require 'ruby4'
+class ToHashOptions; def to_hash = {undef: :replace}; end
+s = ""あ""
+[-> { s.encode(""US-ASCII"", ToHashOptions.new) }, -> { s.encode(""US-ASCII"", ""UTF-8"", ToHashOptions.new) }, -> { s.encode(""US-ASCII"", **ToHashOptions.new) },
+ -> { s.encode(""US-ASCII"", {undef: :replace}) }, -> { s.encode(ToHashOptions.new) }, -> { s.dup.encode!(""US-ASCII"", ToHashOptions.new) }].each { |l| p((l.call rescue $!)) }
+", @"
+#<TypeError: no implicit conversion of ToHashOptions into String>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+""?""
+#<TypeError: no implicit conversion of Hash into String>
+#<TypeError: no implicit conversion of ToHashOptions into String>
+#<TypeError: no implicit conversion of ToHashOptions into String>
+");
+        }
     }
 }

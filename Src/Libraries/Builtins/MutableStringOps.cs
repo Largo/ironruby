@@ -3047,7 +3047,18 @@ namespace IronRuby.Builtins {
             [Optional]object fromEncoding,
             [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            Protocols.TryConvertToOptions(toHash, ref options, ref toEncoding, ref fromEncoding);
+            // The options are keywords only (Ruby 3.0's separation): a trailing positional Hash, or an object with
+            // #to_hash, is an encoding to CRuby 4.0 and so "no implicit conversion of Hash into String". A keyword hash
+            // that arrived as the last positional argument (**obj) is still the options.
+            if (options == null) {
+                if (fromEncoding is Hash lastHash && lastHash.IsKeywordArguments) {
+                    options = lastHash;
+                    fromEncoding = Missing.Value;
+                } else if (fromEncoding == Missing.Value && toEncoding is Hash onlyHash && onlyHash.IsKeywordArguments) {
+                    options = onlyHash;
+                    toEncoding = Missing.Value;
+                }
+            }
 
             // encodings:
             RubyEncoding to, from;
