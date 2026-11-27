@@ -72,7 +72,7 @@ row "nearer by include", entries(10, ->(k) { C7.include(Module.new { const_set(:
 module Q8; X = 1; end
 module R8; end
 loop8 = -> { run { i = 0; s = 0; while i < N; s += Q8::X; i += 1; end; s } }
-# (not `Q8.prepend(Module.new { const_set(:X, 40) })`: IronRuby finds the prepended X in every mode, CRuby Q8's own)
+row "qualifier's module gets a prepend", entries(10, ->(k) { Q8.prepend(Module.new { const_set(:X, 40) }) if k == 5 }) { loop8.() }
 row "qualified, its path replaced", entries(10, ->(k) { Object.const_set(:Q8, Module.new { const_set(:X, 50) }) if k == 5 }) { loop8.() }
 
 # an autoload registered nearer between entries, and a loop entered while an autoload of that name is in flight
@@ -108,6 +108,69 @@ t = Thread.new { k = 0; until (k += 1) > 20000 || seen.last == 100 * N; seen << 
 sleep 0.01 until seen.size > 50
 L12.const_set(:X12, 100)
 t.join
-row "nearer defined on another thread (between entries)", [seen.first, seen.last, seen.uniq.size <= 2, seen.drop_while { |v| v == N }.uniq]
+# (an entry running when the constant appears may add some of each: a running loop sees it at its next read)
+row "nearer defined on another thread", [seen.first, seen.last, seen.all? { |v| v.between?(N, 100 * N) }]
+
+# ---------------------------------------------------------------- 4. a running loop, and a nearer constant another thread defines
+# Each loop runs while the constant it reads is still the one it started with, up to a limit far beyond what it needs: a
+# loop that does not see the nearer constant appear (CRuby's next read does) runs to the limit and says so. The methods are
+# warmed with short runs first, so that the method JIT has typed them.
+LIMIT = 1_000_000_000
+def nearer(define)
+  t = Thread.new { sleep 0.05; define.() }
+  r = yield
+  t.join
+  r
+end
+R1 = 1
+module RL1
+  def self.body(n = LIMIT) = (i = 0; while R1 == 1 && i < n; i += 1; end; i < n)
+end
+200.times { RL1.body(20) }
+row "running body, nearer lexical", nearer(-> { RL1.const_set(:R1, 2) }) { RL1.body }
+R2 = 1
+module RL2
+  def self.outlined(n = LIMIT) = run { i = 0; while R2 == 1 && i < n; i += 1; end; i < n }
+end
+row "running outlined, nearer lexical", nearer(-> { RL2.const_set(:R2, 2) }) { RL2.outlined }
+R3 = 1
+class RB3; end
+class RC3 < RB3
+  def self.body(n = LIMIT) = (i = 0; while R3 == 1 && i < n; i += 1; end; i < n)
+end
+200.times { RC3.body(20) }
+row "running body, nearer in a superclass", nearer(-> { RB3.const_set(:R3, 2) }) { RC3.body }
+R4 = 1
+class RC4
+  def self.outlined(n = LIMIT) = run { i = 0; while R4 == 1 && i < n; i += 1; end; i < n }
+end
+row "running outlined, nearer by include", nearer(-> { RC4.include(Module.new { const_set(:R4, 2) }) }) { RC4.outlined }
+R5 = 1
+module RL5
+  def self.body(n = LIMIT) = (i = 0; while R5 == 1 && i < n; i += 1; end; i < n)
+end
+200.times { RL5.body(20) }
+row "running body, nearer by prepend", nearer(-> { RL5.prepend(Module.new { const_set(:R5, 2) }) }) { RL5.body }
+class RB6; Y = 1; end
+class RQ6 < RB6; end
+def rq6(n = LIMIT) = run { i = 0; while RQ6::Y == 1 && i < n; i += 1; end; i < n }
+row "running outlined, qualified, nearer by the qualifier's include", nearer(-> { RQ6.include(Module.new { const_set(:Y, 9) }) }) { rq6 }
+
+# ---------------------------------------------------------------- 5. the order a constant lookup searches a module with prepends
+class S13; X = :s_own; end
+S13.prepend(Module.new { const_set(:X, :s_pre) })
+class C13 < S13; end
+module M13; Y = :m_own; end
+M13.prepend(Module.new { const_set(:Y, :m_pre) })
+class D13; include M13; end
+class F13; W = :own; end
+F13.prepend(Module.new { const_set(:W, :pre) })
+module N13; V = :n; end
+module N13b; V = :n2; end
+class G13; include N13; prepend N13b; end
+row "own table before prepends", [S13::X, S13.const_get(:X), M13::Y, F13::W, F13.const_get(:W), F13.const_defined?(:W)]
+row "superclass's and mixin's prepends win", [C13::X, C13.const_get(:X), D13::Y, D13.const_get(:Y), G13::V]
+loop13 = -> { run { i = 0; s = 0; while i < N; s += (F13::W == :own ? 1 : 0); i += 1; end; s } }
+row "a loop over it", entries(6, nil) { loop13.() }
 
 puts "end"

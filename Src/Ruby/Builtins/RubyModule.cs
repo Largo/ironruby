@@ -1675,7 +1675,7 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             RubyModule owner = null;
-            ForEachAncestor(true, (module) => {
+            ForEachConstantAncestor(true, (module) => {
                 ConstantStorage storage;
                 if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
                     owner = module;
@@ -1790,6 +1790,51 @@ namespace IronRuby.Builtins {
             RubyOps.ScopeSetMember(_context.TopGlobalScope, name, this);
         }
 
+        // IR_LOOP_NEAR=0: a constant new to a module on a folded lookup's path moves ConstantAccessVersion only, as any new one.
+        private static readonly bool _FoldedPaths = Environment.GetEnvironmentVariable("IR_LOOP_NEAR") != "0";
+
+        // The names of the constants compiled code folded through this module: lookups that searched it, or would have
+        // searched it ahead of where they found the constant (JitFoldedConstant.Resolve). Under the class hierarchy lock.
+        private HashSet<string> _foldedConstantNames;
+
+        internal void NoteFoldedConstantNoLock(string/*!*/ name) {
+            Context.RequiresClassHierarchyLock();
+            if (_FoldedPaths) {
+                (_foldedConstantNames ??= new HashSet<string>()).Add(name);
+            }
+        }
+
+        private bool IsOnFoldedPathNoLock(string/*!*/ name) {
+            return _foldedConstantNames != null && _foldedConstantNames.Contains(name);
+        }
+
+        /// <summary>
+        /// A module was included in or prepended to this one. A new constant moves ConstantAccessVersion, which a running
+        /// compiled loop does not read; one a folded lookup would now find nearer than what it folded is a change that loop
+        /// must see at its next iteration, as CRuby's next read does, as a reassignment is (RubyContext.ConstantReassigned).
+        /// So if a mixin of this module now has a constant of a name folded through this module, the code epoch moves:
+        /// keyed on the lookups' paths, a constant of that name anywhere else (rminor's epoch move fired for those) does not.
+        /// </summary>
+        private void MixinsChangedConstantsNoLock() {
+            if (_foldedConstantNames != null && (BringsFoldedConstantNoLock(_prepends) || BringsFoldedConstantNoLock(_mixins))) {
+                _context.ConstantReassigned();
+            } else {
+                _context.ConstantsChanged();
+            }
+        }
+
+        private bool BringsFoldedConstantNoLock(RubyModule/*!*/[]/*!*/ modules) {
+            foreach (var module in modules) {
+                foreach (var name in _foldedConstantNames) {
+                    ConstantStorage storage;
+                    if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         private void SetConstantNoLock(string/*!*/ name, object value) {
             Mutate();
             SetConstantNoMutateNoLock(name, value);
@@ -1803,6 +1848,9 @@ namespace IronRuby.Builtins {
             if (_constants.TryGetValue(name, out previous) && !previous.IsRemoved && !(previous.Value is AutoloadedConstant)) {
                 // assigned again: a running loop that folded it must see the new value (none has folded an
                 // autoload that has not run: the file it loads assigning the constant is no reassignment)
+                _context.ConstantReassigned();
+            } else if (IsOnFoldedPathNoLock(name)) {
+                // new here, where a folded lookup of the name searched: nearer than what it found, so the same
                 _context.ConstantReassigned();
             } else {
                 _context.ConstantsChanged();
@@ -1877,7 +1925,7 @@ namespace IronRuby.Builtins {
         public MutableString GetAutoloadedConstantPath(string/*!*/ name, bool inherit) {
             using (Context.ClassHierarchyLocker()) {
                 MutableString result = null;
-                ForEachAncestor(inherit, (module) => {
+                ForEachConstantAncestor(inherit, (module) => {
                     ConstantStorage storage;
                     AutoloadedConstant autoloaded;
                     if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
@@ -2078,12 +2126,33 @@ namespace IronRuby.Builtins {
         }
 
         // Returns the owner of the constant or null if the constant is not found.
+        // IR_CONST_OWN_FIRST=0: a constant is looked up in ancestor order, the modules prepended to the receiver first.
+        private static readonly bool _ConstantsOwnFirst = Environment.GetEnvironmentVariable("IR_CONST_OWN_FIRST") != "0";
+
+        /// <summary>
+        /// The modules a constant lookup from this one searches, in order: this module's own table first, and then its
+        /// ancestors as ForEachAncestor visits them, without it. CRuby keeps a module's constants in the module itself,
+        /// which comes before the modules prepended to it (rb_prepend_module moves the method table to the origin, not
+        /// the constant table), so `Q::X' finds Q's own X ahead of a prepended module's. Only the module the lookup
+        /// starts from: a superclass or an included module is reached through its prepended modules first, and theirs
+        /// win (`C::X' for C < S finds what S's prepended module has).
+        /// </summary>
+        private bool ForEachConstantAncestor(bool inherited, Func<RubyModule/*!*/, bool>/*!*/ action) {
+            if (!_ConstantsOwnFirst || _prepends.Length == 0) {
+                return ForEachAncestor(inherited, action);
+            }
+            if (action(this)) {
+                return true;
+            }
+            return ForEachAncestor(inherited, (module) => module != this && action(module));
+        }
+
         private RubyModule TryResolveConstantNoAutoloadCheck(bool inherited, string/*!*/ name, out ConstantStorage value) {
             Context.RequiresClassHierarchyLock();
 
             var storage = default(ConstantStorage);
             RubyModule owner = null;
-            if (ForEachAncestor(inherited, (module) => (owner = module).TryGetConstantNoAutoloadCheck(name, out storage))) {
+            if (ForEachConstantAncestor(inherited, (module) => (owner = module).TryGetConstantNoAutoloadCheck(name, out storage))) {
                 value = storage;
                 return owner;
             } else {
@@ -3955,7 +4024,7 @@ namespace IronRuby.Builtins {
 
             PrependsUpdated(oldPrepends, _prepends = expanded);
             _inheritedLookups = null;
-            _context.ConstantsChanged();
+            MixinsChangedConstantsNoLock();
         }
 
         /// <summary>
@@ -4054,7 +4123,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            _context.ConstantsChanged();
+            MixinsChangedConstantsNoLock();
         }
 
         private static RubyModule[]/*!*/ SpliceBefore(RubyModule/*!*/[]/*!*/ list, int index, RubyModule/*!*/[]/*!*/ added) {
@@ -4105,7 +4174,7 @@ namespace IronRuby.Builtins {
 
             MixinsUpdated(_mixins, _mixins = expanded);
             _inheritedLookups = null;
-            _context.ConstantsChanged();
+            MixinsChangedConstantsNoLock();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
@@ -4152,7 +4221,7 @@ namespace IronRuby.Builtins {
 
             MixinsUpdated(_mixins, _mixins = expanded);
             _inheritedLookups = null;
-            _context.ConstantsChanged();
+            MixinsChangedConstantsNoLock();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();

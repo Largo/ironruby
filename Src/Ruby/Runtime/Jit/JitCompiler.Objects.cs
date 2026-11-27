@@ -171,7 +171,7 @@ namespace IronRuby.Runtime.Jit {
             if (scope == null) { throw Bail("constant without a scope: " + node.Name); }
             object value;
             RubyModule owner;
-            string failure = JitFoldedConstant.Resolve(_context, scope, node, out value, out owner);
+            string failure = JitFoldedConstant.Resolve(_context, scope, node, out value, out owner, true);
             if (failure != null) { throw Bail(failure); }
             _resolvedConstantOwner = owner;
             (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).Add(new JitFoldedConstant(scope, node, value, owner));
@@ -2273,8 +2273,13 @@ namespace IronRuby.Runtime.Jit {
         /// an autoload pending or running, a deprecated or private constant, a missing one, or a scope lexically
         /// inside an object's singleton class (whose generic sites do not cache either). Null when it is one.
         /// </summary>
+        ///
+        /// <paramref name="notePath"/>: the lookup is being folded - every module it searched, or would search ahead of where it
+        /// found the constant, notes the name (RubyModule.NoteFoldedConstantNoLock), in the same hold of the class hierarchy
+        /// lock as the lookup: a constant of that name made in one of them later, or brought into one by a mixin, is then a
+        /// change a running loop that folded this must see (RubyModule.ConstantAddedNoLock).
         internal static string Resolve(RubyContext/*!*/ context, RubyScope/*!*/ scope, ConstantVariable/*!*/ node,
-            out object value, out RubyModule resolvedOwner) {
+            out object value, out RubyModule resolvedOwner, bool notePath = false) {
             string name = node.Name;
             value = null;
             resolvedOwner = null;
@@ -2285,7 +2290,7 @@ namespace IronRuby.Runtime.Jit {
                 if (qualifier == null) { return "constant qualified by an expression: " + name; }
                 object qualifierValue;
                 RubyModule qualifierOwner;
-                failure = Resolve(context, scope, qualifier, out qualifierValue, out qualifierOwner);
+                failure = Resolve(context, scope, qualifier, out qualifierValue, out qualifierOwner, notePath);
                 if (failure != null) { return failure; }
                 var module = qualifierValue as RubyModule;
                 if (module == null) { return "constant qualified by a non-module: " + name; }
@@ -2297,6 +2302,7 @@ namespace IronRuby.Runtime.Jit {
                     if (!module.TryResolveConstantNoLock(null, name, out storage) || module.IsPrivateConstantInAncestors(name)) {
                         return "qualified constant not found: " + name;
                     }
+                    if (notePath) { NoteAncestors(module, name); }
                     if ((failure = NotDeprecated(context, module.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
                     resolvedOwner = module.GetConstantOwnerNoLock(name) ?? module;
                     value = storage.Value;
@@ -2311,6 +2317,7 @@ namespace IronRuby.Runtime.Jit {
                         if (!obj.TryResolveConstantNoLock(null, name, out storage) || obj.IsPrivateConstant(name)) {
                             return "constant not found: ::" + name;
                         }
+                        if (notePath) { NoteAncestors(obj, name); }
                         if ((failure = NotDeprecated(context, obj.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
                         resolvedOwner = obj.GetConstantOwnerNoLock(name) ?? obj;
                     } else {
@@ -2318,6 +2325,7 @@ namespace IronRuby.Runtime.Jit {
                         if (scope.TryResolveConstantNoLock(null, name, out storage, out owner) != null) {
                             return "constant not found: " + name;
                         }
+                        if (notePath) { NoteLexicalPath(context, scope, name); }
                         // the owner is only reported once some constant has been deprecated
                         if ((failure = NotDeprecated(context, owner, name)) != null) { return failure; }
                         resolvedOwner = owner;
@@ -2333,6 +2341,30 @@ namespace IronRuby.Runtime.Jit {
                 return "constant without a value: " + name;
             }
             return null;
+        }
+
+        // The modules a lookup of `name' from the module searches (its ancestors), each noting the name.
+        private static void NoteAncestors(RubyModule/*!*/ module, string/*!*/ name) {
+            module.ForEachAncestor(true, (m) => { m.NoteFoldedConstantNoLock(name); return false; });
+        }
+
+        // The modules an unqualified lookup from the scope searches (RubyScope.TryResolveConstantNoLock): the lexical
+        // scopes' modules, the innermost one's ancestors, and Object's when that is a module or there is none. All of
+        // them, not only those ahead of where the constant was found: one after it costs a needless hand-back at most.
+        private static void NoteLexicalPath(RubyContext/*!*/ context, RubyScope/*!*/ scope, string/*!*/ name) {
+            RubyModule innerMost = null;
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                if (s.Module != null) {
+                    s.LexicalConstantModule.NoteFoldedConstantNoLock(name);
+                    innerMost ??= s.Module;
+                }
+            }
+            if (innerMost != null) {
+                NoteAncestors(innerMost, name);
+            }
+            if (innerMost == null || !innerMost.IsClass) {
+                NoteAncestors(context.ObjectClass, name);
+            }
         }
 
         /// <summary>A deprecated constant warns on every read, which the generic code does.</summary>
