@@ -94,6 +94,10 @@ namespace IronRuby.Runtime.Jit {
         // block after its parameters and makes its frame (JitResume.cs); null when it has none.
         internal JitResumeInfo Resume;
         internal int FallbackSites;
+        // The body was compiled for a call without a block: its block parameter is nil, which `&k' passes on as no block
+        // (JitStub.BlockParameterOnlyPassed), or it answered `block_given?' with false. The entry takes it only when the
+        // block is null.
+        internal bool AssumesNoBlock;
     }
 
     /// <summary>
@@ -111,6 +115,12 @@ namespace IronRuby.Runtime.Jit {
 
         private readonly MethodDeclaration _ast;
         private readonly RubyContext/*!*/ _context;
+
+        // The method's block parameter, when it only passes it on (JitStub.BlockParameterOnlyPassed): the body is compiled
+        // for a call without a block, where `&k' passes none (JitScreen.PassesNoBlock). Null otherwise.
+        private readonly LocalVariable _passedBlock;
+        // The body answered `block_given?' with false, for a call without a block (EmitBlockGiven).
+        private bool _blockGivenFalse;
         private readonly int _scopeDepth;
 
         // The refinements active where the code being compiled was written: the calls it binds itself
@@ -222,6 +232,7 @@ namespace IronRuby.Runtime.Jit {
             _ast = ast;
             _context = context;
             _constantScope = constantScope;
+            if (JitStub.BlockParameterOnlyPassed(ast)) { _passedBlock = ast.Parameters.Block; }
             _paramTypes = paramTypes;
             _keywords = keywords;
             _supplied = (keywords == null) ? supplied : -1;
@@ -799,6 +810,7 @@ namespace IronRuby.Runtime.Jit {
                     InlinedOnArgumentClass = c._inlinedOnArgumentClass,
                     Resume = (c._fallbackSites > 0) ? c._resume : null,
                     FallbackSites = c._fallbackSites,
+                    AssumesNoBlock = c._passedBlock != null || c._blockGivenFalse,
                 };
             }
             return Declined("the return type did not settle");
@@ -2274,8 +2286,39 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Call(JitRuntime.M("RaiseDeopt"));
         }
 
+        /// <summary>
+        /// A call whose block is `&amp;nil', or `&amp;k' of the method's block parameter k when the method only passes it on and
+        /// the body is compiled for a call without a block (_passedBlock): it passes no block, and is the call without one.
+        /// </summary>
+        private bool PassesNoBlock(MethodCall/*!*/ node) {
+            return _refinements.IsEmpty && JitScreen.PassesNoBlock(node, _passedBlock);
+        }
+
+        // `block_given?' in a method (not an outlined loop, which runs in a frame that may have a block)
+        private bool IsBlockGiven(MethodCall/*!*/ node) {
+            return node.Target == null && node.MethodName == "block_given?" && (node.Arguments == null || node.Arguments.IsEmpty) &&
+                node.Block == null && _ast != null && _loop == null;
+        }
+
+        /// <summary>
+        /// `block_given?' as false, for a body the entry takes only when the call has no block (JitCode.AssumesNoBlock) - and
+        /// which a body that inlines it or calls it directly calls without one. Kernel#block_given? is what self's class
+        /// resolves the name to now; the entry's method version guard covers a later definition.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitBlockGiven(out JT type) {
+            object sample = (_hints != null) ? _hints.SelfSample : null;
+            // (only BuildEntry tests the block: not a keyword method's direct entry, nor a per-count body's)
+            if (_keywords != null || _supplied >= 0) { throw Bail("block_given? with optional parameters"); }
+            if (sample == null || !_refinements.IsEmpty || !IsBuiltinMethod(JitRuntime.ClassOf(_context, sample), "block_given?")) {
+                throw Bail("block_given? is not Kernel's");
+            }
+            _blockGivenFalse = true;
+            type = JT.Bool;
+            return Ast.Constant(false);
+        }
+
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
-            if (node.Block != null) {
+            if (node.Block != null && !PassesNoBlock(node)) {
                 // an iterator with a literal block inside a core iterator's outlined loop: run in place (JitCompiler.Nest.cs)
                 if (_loop != null && WritesReceivers) { return EmitNestedBlockLoop(node, out type); }
                 throw Bail("call with a block: " + node.MethodName);
@@ -2287,6 +2330,8 @@ namespace IronRuby.Runtime.Jit {
             if (node.Target != null && argc == 0 && node.MethodName == "!") {
                 return EmitNot(node.Target, out type);
             }
+
+            if (IsBlockGiven(node)) { return EmitBlockGiven(out type); }
 
             // `raise ...' or `fail ...' (EmitRaise): a deopt, and the generic body raises.
             if (IsRaiseCall(node)) { return EmitRaise(node, out type); }
@@ -3319,6 +3364,24 @@ namespace IronRuby.Runtime.Jit {
             // a method with keywords is never called directly from its typed body (EmitCall)
             _arity = (keywords != null) ? -1 : ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
             _tailConstruction = (keywords != null) ? null : JitCompiler.TailConstruction(ast);
+            if (JitStub.BlockParameterOnlyPassed(ast)) { _passedBlock = ast.Parameters.Block; }
+        }
+
+        // the method's block parameter, when it only passes it on (JitCompiler._passedBlock)
+        private readonly LocalVariable _passedBlock;
+
+        /// <summary>
+        /// `&amp;nil', or `&amp;k' of <paramref name="passedBlock"/>, the block parameter of a method that only passes it on and
+        /// whose body is entered only without a block: no block is passed (JitCompiler.PassesNoBlock).
+        /// </summary>
+        internal static bool PassesNoBlock(MethodCall/*!*/ node, LocalVariable passedBlock) {
+            var reference = node.Block as BlockReference;
+            if (reference == null) { return false; }
+            var literal = reference.Expression as Literal;
+            if (literal != null && literal.GetType() == typeof(Literal) && literal.Value == null) { return true; }
+            var local = reference.Expression as LocalVariable;
+            return local != null && passedBlock != null && local.Name == passedBlock.Name &&
+                local.DefinitionLexicalDepth == passedBlock.DefinitionLexicalDepth;
         }
 
         // the `C.new(a, b)' the method ends with, if it does (JitCompiler.TailConstruction)
@@ -3959,7 +4022,7 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>Mirrors JitCompiler.EmitCall: a self-recursive call, a binary operator, an element read or a Hash query.</summary>
         private bool WalkCall(MethodCall/*!*/ node) {
-            if (node.Block != null) { return No(node); }
+            if (node.Block != null && !PassesNoBlock(node, _passedBlock)) { return No(node); }
             // `raise ...': a deopt, whose arguments are never emitted (JitCompiler.EmitRaise)
             if (JitCompiler.IsRaiseCall(node)) { return true; }
             var args = node.Arguments;

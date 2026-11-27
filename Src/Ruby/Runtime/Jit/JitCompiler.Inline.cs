@@ -50,7 +50,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression TryInlineCall(MethodCall/*!*/ node, out JT type) {
             type = JT.None;
-            if (_ast == null || _loop != null || _supplied >= 0 || _hints == null || !_refinements.IsEmpty || node.Block != null) { return null; }
+            if (_ast == null || _loop != null || _supplied >= 0 || _hints == null || !_refinements.IsEmpty || node.Block != null && !PassesNoBlock(node)) { return null; }
             var args = (node.Arguments != null) ? node.Arguments.Expressions : new RExpr[0];
             foreach (var arg in args) {
                 if (arg is SplattedArgument) { return null; }
