@@ -1010,6 +1010,27 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     takes Permute from 124.5 to 53.9 MB per iteration and costs 3.8% more instructions, its time
     level (1.00 over six rounds), as perf/deadconst found. Left: `each_with_index` (the prelude's,
     `*args, &block`), `inject`, and `upto`/`downto`'s entry, which is not their bytes.
+    perf/iter3 (round thirty-seven, measured, nothing kept; `Util/bench/iter-shapes.rb`) put
+    the gap where it stands now, ns per call of a method that calls the iterator, alternating
+    rounds: `each` over 1, 2, 4 elements 128, 159, 184 against CRuby's 78, 108, 176 (1.64,
+    1.47, 1.05), `times` 1.40, 1.27, 1.05, `map` 1.42, 1.16, 0.88. Per element IronRuby is now
+    cheaper than CRuby (about 13 ns against 30); what is left is the fixed part, and it is
+    not the iterator, the yield or the BlockParam: a light method that ignores its block,
+    called with a literal `{ }` (`nbl`), is 116 ns against 59 with a stored Proc (`nbp`) and 39
+    with none, where CRuby's literal costs nothing (36, 36, 32); `a.each { }` 120 against
+    `a.each(&P)` 84. With every light frame off (`IR_LIGHT_FRAMES=0`) the stored Proc costs
+    98 and the literal 107: once the method has a scope the literal adds almost nothing. So
+    the ~57 ns is the caller's scope, which a light frame makes (or takes parked) because the
+    literal's Proc is over it, and the Proc made over it. Not the parking protocol's atomics:
+    publishing the parked scope with a release write instead of a compare-exchange
+    (`EndPark`) moved nothing in eight rounds (1.03, 0.92, 1.02 overlapping), and with parking
+    off (allocating scope and Proc) the time is the same. What would take it is a Proc that
+    needs no method scope until something can see one - a literal whose body reads and writes
+    only its own locals and the method's through the frame, given to a callee that does not
+    keep it - with the scope made, from the frame's live locals, when it escapes (`&b`,
+    `binding`, a `return` from the block, a TracePoint). That is the light frame's lazy scope
+    reached from a Proc instead of from the frame's own code: gap 16's design, not one step.
+
 14. **DeltaBlue: `Vector#each`** (`(@first_idx..(@last_idx - 1)).each { |i| yield
     @storage[i] }`) is about 20% of its samples by nearest Ruby frame (8.9% the method,
     11.3% its block), and no call site owns more than 1.2% of the 24% in
