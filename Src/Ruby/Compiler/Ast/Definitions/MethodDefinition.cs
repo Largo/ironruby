@@ -482,15 +482,23 @@ namespace IronRuby.Compiler.Ast {
         // cost: a method that calls one with a literal gets no parking slot, and a method of the same name of a program's own
         // class is merely not parked.
         private static readonly System.Collections.Generic.HashSet<string> NeverParkedIterators = new System.Collections.Generic.HashSet<string> {
-            "new", "upto", "downto", "step", "any?", "all?", "none?", "one?", "count", "delete_if", "keep_if", "each_cons", "each_slice",
-            "each_with_index", "each_with_object", "fill", "filter_map", "find", "detect", "find_index", "group_by", "index", "inject",
+            "new", "upto", "downto", "step", "one?", "count", "delete_if", "keep_if", "each_cons", "each_slice",
+            "each_with_index", "each_with_object", "fill", "filter_map", "group_by", "inject",
             "reduce", "max_by", "min_by", "partition", "reject", "reverse_each", "sort", "sort_by", "take_while", "drop_while",
             "uniq", "zip", "each_key", "each_value", "each_char", "each_byte", "each_line", "define_method", "lambda", "proc",
             "instance_eval", "instance_exec", "class_eval", "module_eval", "class_exec", "module_exec", "fetch", "tally_by",
         };
 
+        // Array#find, #detect, #find_index, #index, #any?, #all? and #none? only yield ([BlockNotKept]); IR_PARKED_FIND=0 counts
+        // them never parked again, as they were while an Array's find and any? were Enumerable's. (Integer#upto and #downto
+        // only yield too, but parking a method around them costs more instructions than the bytes it saves: Util/perf/LEDGER.md,
+        // gap 13, perf/iter2.)
+        private static readonly bool ParkedFindEnabled = Environment.GetEnvironmentVariable("IR_PARKED_FIND") != "0";
+
         internal static bool IsNeverParkedIterator(string/*!*/ name) {
-            return NeverParkedIterators.Contains(name);
+            return NeverParkedIterators.Contains(name) ||
+                !ParkedFindEnabled && (name == "find" || name == "detect" || name == "find_index" || name == "index" ||
+                    name == "any?" || name == "all?" || name == "none?");
         }
 
         /// <summary>
