@@ -271,17 +271,21 @@ namespace IronRuby.StandardLibrary.StringScanner {
         private Utf8Map Map {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
-                // what every scan on an ASCII or non-UTF-8 subject asks: kept small enough to inline
+                // What every scan asks, four times a token: one flag test, which answers for a subject
+                // already known to be ASCII (or BINARY). A per-function count of an ASCII scan
+                // (callgrind, JIT'd code named from the perf map) put the earlier check - the switch's
+                // static, the encoding, an IsAscii call - at 4.9 of the 6.7 M instructions the map
+                // had added to a pass over 10 KB.
                 MutableString subject = _scanString;
-                if (!MapEnabled || subject.Encoding != RubyEncoding.UTF8 || subject.IsAscii()) {
-                    return null;
-                }
-                return MapFor(subject);
+                return subject.HasByteCharacters ? null : MapFor(subject);
             }
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private Utf8Map MapFor(MutableString/*!*/ subject) {
+            if (!MapEnabled || subject.Encoding != RubyEncoding.UTF8 || subject.IsAscii()) {
+                return null;
+            }
             // a string held as bytes is decoded once, as a match would
             subject.PrepareForCharacterRead();
             string text = subject.ConvertToString();
