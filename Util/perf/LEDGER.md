@@ -1625,6 +1625,30 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/strcow (2026-11-27, not gated) - a String slice copied while the content is held; a
+  long tail slice shares the array, as MRI's** (gap 24's dup note). Asked for: copy-on-write content
+  for dup, `+` and slices. Found: it is there already - CharArrayContent and BinaryContent share
+  their array on Clone and on a long slice and copy on the first write (ContentState, the
+  `MutableString_CopyOnWrite*` tests): a dup of 10,000 characters costs what a dup of 10 does (108
+  ns), `+` is CRuby's time (97 against 106), a short slice too (95 against 101). What was left:
+  (1) a slice that is copied read the array unheld, so `s[1..]` racing `s.slice!(0, 1)` tore (the
+  string's last character several times; `Util/strcow-matrix.rb`'s slice! rows differed from CRuby
+  in 20 runs of 20). Copies are now made holding the content (`GetSlice` enters it once and decides
+  there): a short slice +40 instructions (2,877 -> 2,917), 92 -> 97-100 ns. (2) A tail slice,
+  which MRI shares (rb_str_subseq, SHARABLE_SUBSTRING_P) whatever it keeps alive, was copied
+  unless it kept half the array: `Utils.IsSharedSlice(length, count, toEnd)` shares a slice of 256
+  or more that runs to the end, for String#[] and #slice only (`Content.GetSlice(start, count,
+  shareTail)`: #slice! removes the slice next and would then copy the whole array to write it).
+  `IR_SHARE_TAIL=0` turns (2) off. `LONG[5000..]` of 10,001 characters 23,772 -> 3,505
+  instructions, 1,580-1,613 -> 151-157 ns (CRuby 130); a middle slice is copied as in MRI and stays
+  1,550-1,620 (CRuby 487: half the bytes, a char is two) - a per-encoding byte store is the next
+  step there, not sharing. Controls level: dup, `+`, size, plain. Checks: `Util/strcow-matrix.rb`
+  (new; threads included) prints CRuby's output, 20 runs of 20 (master: 0 of 20); strcow, dup,
+  string-search, hot-shapes, jit and jit-calls matrices in every mode and with the switch off:
+  PASS; spec/core/string 3,963 examples, the one known try_convert wording error on both; the 43
+  MutableString and String IronRuby.Tests: PASSED. Left: other readers of a content (index, each
+  char, the byte views) still read it unheld.
+
 - **perf/dupcost (2026-11-26, not gated) - `String#dup` of a bare string: one look for instance
   data, and the copy constructor** (gap 24's dup note). Where the time went, by callgrind with the
   CLR's perf map over one `str_dup` section of `dup-shapes.rb` (instructions per call, the

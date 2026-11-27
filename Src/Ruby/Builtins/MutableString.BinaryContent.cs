@@ -571,6 +571,25 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // A long slice that runs to the end shares the array as well (Content.GetSlice(int, int, bool)); any other is GetSlice's.
+            public override Content/*!*/ GetSlice(int start, int count, bool shareTail) {
+                int n = Utils.NormalizeCount(_count, start, count);
+                if (shareTail && start + n == _count && Utils.IsSharedSlice(_data.Length, n, true)) {
+                    bool shared = ContentState.Enter(ref _state);
+                    try {
+                        // checked again while holding the content
+                        int sliceCount = Utils.NormalizeCount(_count, start, count);
+                        if (start + sliceCount == _count && Utils.IsSharedSlice(_data.Length, sliceCount, true)) {
+                            shared = true;
+                            return new BinaryContent(_data, _start + start, sliceCount, _owner);
+                        }
+                    } finally {
+                        ContentState.Exit(ref _state, shared);
+                    }
+                }
+                return GetSlice(start, count);
+            }
+
             public override CharacterEnumerator/*!*/ GetCharacters() {
                 if (_owner.HasByteCharacters) {
                     return new MutableString.BinaryCharacterEnumerator(_owner.Encoding, _data, _start, _count);

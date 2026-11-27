@@ -1158,8 +1158,9 @@ namespace IronRuby.Builtins {
                 return (start == charCount && count >= 0) ? self.CreateDerived() : null;
             }
 
-            // a long substring shares the receiver's array (MutableString.GetSlice)
-            return GetCharacterSlice(self, start, count);
+            // a long substring shares the receiver's array (MutableString.GetSlice), and so does a long tail
+            self.ToClrRange(ref start, ref count);
+            return self.GetSlice(start, count, true);
         }
 
         #region byteslice
