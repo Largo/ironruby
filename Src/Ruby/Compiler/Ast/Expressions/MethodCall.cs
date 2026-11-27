@@ -31,6 +31,13 @@ namespace IronRuby.Compiler.Ast {
     /// target.method_id(args)
     /// </summary>
     public partial class MethodCall : CallExpression {
+        /// <summary>
+        /// IR_SPLAT_BY_REFERENCE=0: a call with a block argument copies its trailing splat before the block argument is evaluated,
+        /// as it used to (see TransformRead). CRuby 4.0 passes the list itself when the block argument is a variable, a constant
+        /// or a literal (IsSideEffectFree).
+        /// </summary>
+        internal static readonly bool SplatByReference = System.Environment.GetEnvironmentVariable("IR_SPLAT_BY_REFERENCE") != "0";
+
         private string/*!*/ _methodName;
         private readonly Expression _target;
 
@@ -183,7 +190,21 @@ namespace IronRuby.Compiler.Ast {
                     assignments.Add(Ast.Assign(temp, argument));
                     ordered.Add(temp);
                 }
-                if (scratch.SplattedArgument != null) {
+                if (scratch.SplattedArgument != null && !scratch.SplattedArgumentIsFresh && SplatByReference &&
+                    IsSideEffectFree(((BlockReference)block).Expression)) {
+                    // A trailing splat of a list the arguments did not make (`f(*a, &b)', `f(x, *a, &b)', and `...'), with a block
+                    // argument that cannot run code before its #to_proc (a variable, a constant, a literal: IsSideEffectFree): CRuby 4.0
+                    // passes the list itself there (`splatarray false', prism_compile.c's pm_setup_args_dup_rest_p), which the call
+                    // expands once the block argument has been converted - a #to_proc that changes `a' shows in the arguments
+                    // (`f(*a, &o)' with `o.to_proc' appending to `a': the callee gets the item). Any other block argument
+                    // (`f(*a, &G.new(a))', `&method(:m)') gets the copy below, as in CRuby, where neither it nor its #to_proc sees `a' change.
+                    // So the list (after its #to_a, which comes before the block argument's #to_proc) is kept here, not copied, and
+                    // is not fresh: a rest parameter of the callee copies it as for any splat. IR_SPLAT_BY_REFERENCE=0 copies it.
+                    var temp = gen.CurrentScope.DefineHiddenVariable("#splat", typeof(System.Collections.IList));
+                    assignments.Add(Ast.Assign(temp, AstUtils.Convert(scratch.SplattedArgument, typeof(System.Collections.IList))));
+                    ordered.SplattedArgument = temp;
+                    ordered.SplattedArgumentIsFresh = false;
+                } else if (scratch.SplattedArgument != null) {
                     // The splat is expanded into an array here, before the block argument is evaluated: a copy, which nothing else
                     // refers to, and so fresh for the call (RubyCallFlags.HasFreshSplat): a rest parameter of the callee takes it
                     // rather than copying it again. A splat that is fresh already - an array the arguments made, or a rest parameter
@@ -230,6 +251,28 @@ namespace IronRuby.Compiler.Ast {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// A block argument whose evaluation runs no Ruby code, so that a splatted list cannot change before its #to_proc:
+        /// CRuby 4.0 passes such a call's trailing splat uncopied (prism_compile.c, pm_setup_args_dup_rest_p, which also counts
+        /// a few more shapes, such as `[]', that no #to_proc could tell apart).
+        /// </summary>
+        private static bool IsSideEffectFree(Expression/*!*/ expression) {
+            switch (expression) {
+                case LocalVariable _:
+                case InstanceVariable _:
+                case GlobalVariable _:
+                case ClassVariable _:
+                case SelfReference _:
+                case Literal _:
+                case SymbolLiteral _:
+                    return true;
+                case ConstantVariable constant:
+                    return constant.Qualifier == null || IsSideEffectFree(constant.Qualifier);
+                default:
+                    return false;
+            }
         }
 
         internal static MSA.Expression/*!*/ MakeCallWithBlockRetryable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ invoke,

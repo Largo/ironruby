@@ -935,6 +935,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binding", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("binding", RubyMethodAttributes.PublicSingleton)]
+        [RequiresRubyCaller]
         public static Binding/*!*/ GetLocalScope(RubyScope/*!*/ scope, object self) {
             var result = Binding.Create(scope, scope.SelfObject);
 
@@ -1942,6 +1943,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("eval", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("eval", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object Evaluate(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]MutableString/*!*/ code,
             [Optional]Binding binding, [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
 
@@ -2473,6 +2475,7 @@ namespace IronRuby.Builtins {
         #region send, public_send
 
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         public static object SendMessage(RubyScope/*!*/ scope, object self) {
             throw RubyExceptions.CreateArgumentError("no method name given");
         }
@@ -2520,6 +2523,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
@@ -2531,6 +2535,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0&
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
@@ -2542,6 +2547,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -2556,6 +2562,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1&
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -2569,6 +2576,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -2583,6 +2591,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2&
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -2596,6 +2605,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -2610,6 +2620,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3&
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -2623,6 +2634,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -2637,6 +2649,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("send")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,

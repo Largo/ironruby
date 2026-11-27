@@ -778,7 +778,14 @@ namespace IronRuby.Runtime {
                         // "Attempted to divide by zero."; MRI says "divided by 0".
                         clrMessage = "divided by 0";
                     }
-                    _message = MutableString.Create(clrMessage, RubyEncoding.UTF8);
+                    if (_exception is UndefinedConversionError || _exception is InvalidByteSequenceError ||
+                        _exception is ConverterNotFoundError) {
+                        // MRI builds the transcoders' messages with rb_sprintf into binary strings
+                        // ("\"\xFF\" on UTF-8", "code converter not found (x to y)").
+                        _message = MutableString.CreateBinary(System.Text.Encoding.UTF8.GetBytes(clrMessage));
+                    } else {
+                        _message = MutableString.Create(clrMessage, RubyEncoding.UTF8);
+                    }
                 }
                 return _message;
             }

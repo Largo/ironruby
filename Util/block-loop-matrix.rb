@@ -632,3 +632,75 @@ t('perm: a singleton swap on the receiver half way through a hot downto') do
   r = o.run(3000, 1500) { |me| def me.swap(i, j); @log << :single if @log.size < 2; end }
   [r, o.log, p2.run(3000, -1)]
 end
+
+# ---------------------------------------------------------------- block-locals first assigned in a nested list
+# (perf/sieve) A local first assigned by a statement of an `if' branch or a `while' body is admitted for the rest of that
+# list (Sieve's `k = i + i' under `if flags[i - 1]'), and any mention of it after the list keeps the block from being
+# outlined: there the block sees nil on an iteration that did not run the list, where a loop slot would carry the value
+# of an earlier one. Each runs hot, then probes.
+def bl_sieve(size)
+  flags = Array.new(size, true)
+  count = 0
+  (2..size).each do |i|
+    if flags[i - 1]
+      count += 1
+      k = i + i
+      while k <= size
+        flags[k - 1] = false
+        k += i
+      end
+    end
+  end
+  [count, flags.count(true)]
+end
+t('scoped: Sieve, hot') { 30.times { bl_sieve(N) }; bl_sieve(N) }
+t('scoped: Sieve with 2.upto') do
+  f = Array.new(N, true); c = 0
+  2.upto(N) { |i| if f[i - 1]; c += 1; k = i * 2; while k <= N; f[k - 1] = false; k += i; end; end }
+  c
+end
+t('scoped: read after the if is nil on iterations that skip it') do
+  r = []; (1..N).each { |i| if i.even?; k = i; end; r << k if i > N - 4 }; r
+end
+t('scoped: assigned in then and else') do
+  s = 0; (1..N).each { |i| if i.even?; k = i; s += k; else; k = -1; s += k; end }; s
+end
+t('scoped: assigned in elsif only, read after') do
+  r = []; (1..N).each { |i| if i % 3 == 0; s = 1; elsif i % 3 == 1; k = i; end; r << k if i > N - 3 }; r
+end
+t('scoped: while body, read in the condition (do-while)') do
+  c = 0; (1..N).each { |i| begin; x = (x || 0) + 1; c += 1; end while x < 2 if i.odd? }; c
+end
+t('scoped: while body, read after the loop') do
+  r = []; (1..N).each { |i| j = 0; while j < 2; m = i + j; j += 1; end; r << m if i > N - 3 }; r
+end
+t('scoped: read before the assignment in the same list') do
+  r = []; (1..N).each { |i| if i > 0; r << z if i > N - 2; z = i; end }; r
+end
+t('scoped: a deopt after the assignment (Float)') do
+  s = 0; (1..N).each { |i| if i.odd?; k = i * 2; k = k * 1.5 if i > N - 10; s += k; end }; s
+end
+t('scoped: an Integer leaving Int32 after the assignment') do
+  s = 0; (1..N).each { |i| if i.odd?; k = i * (1 << 30); s += k; end }; s
+end
+t('scoped: binding sees the block-local') do
+  r = nil; (1..N).each { |i| if i.even?; k = i; end; r = binding.local_variable_defined?(:k) if i == N }; r
+end
+t('scoped: map with a scoped local') do
+  (1..N).to_a.map { |i| if i.even?; k = i * 3; k + 1; else; i; end }.sum
+end
+t('scoped: select with a scoped local') do
+  (1..N).to_a.select { |i| if i % 3 == 0; k = i / 3; k.odd?; else; false; end }.size
+end
+t('scoped: times with a scoped local, Array grown under the loop') do
+  a = []; N.times { |i| if i % 7 == 0; k = i; a << k; a << a.size; end }; [a.size, a.last]
+end
+t('scoped: next inside the list') do
+  s = 0; (1..N).each { |i| if i.even?; k = i; next if k % 4 == 0; s += k; end }; s
+end
+t('scoped: break inside a while in the list') do
+  s = 0; (1..N).each { |i| if i.odd?; k = i; while k > 0; k -= 7; break if k < 3; end; s += k; end }; s
+end
+t('scoped: a nested block reads it') do
+  s = 0; (1..N).each { |i| if i.odd?; k = i; [1, 2].each { |x| s += k * x }; end }; s
+end

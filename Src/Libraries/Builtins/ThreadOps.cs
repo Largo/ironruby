@@ -808,7 +808,9 @@ namespace IronRuby.Builtins {
             }
             RubyArray trace = RubyExceptionData.CreateBacktrace(context, self);
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            string blockedIn = info.IsSleeping ? "Kernel#sleep" : info.BlockedLabel;
+            // the core method it is blocked in, which has no frame of its own: Mutex#lock, Queue#pop... or,
+            // for a plain sleep, Kernel#sleep
+            string blockedIn = info.BlockedLabel ?? (info.IsSleeping ? "Kernel#sleep" : null);
             if (trace != null && trace.Count > 0 && blockedIn != null) {
                 string caller = trace[0].ToString();
                 int label = caller.LastIndexOf(":in ", StringComparison.Ordinal);
@@ -898,6 +900,15 @@ namespace IronRuby.Builtins {
         /// Answers whether the thread finished within <paramref name="timeout"/>.
         /// </summary>
         private static bool JoinWithSafePoints(Thread/*!*/ self, int timeout) {
+            string previous = EnterBlockingMethod("Thread#join");
+            try {
+                return JoinWithSafePointsCore(self, timeout);
+            } finally {
+                ExitBlockingMethod(previous);
+            }
+        }
+
+        private static bool JoinWithSafePointsCore(Thread/*!*/ self, int timeout) {
             long deadline = (timeout == Timeout.Infinite) ? Int64.MaxValue : Environment.TickCount64 + timeout;
             while (true) {
                 try {
@@ -1294,8 +1305,32 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("value")]
         public static object Value(RubyContext/*!*/ context, Thread/*!*/ self) {
-            Join(context, self);
+            string previous = EnterBlockingMethod("Thread#value");
+            try {
+                Join(context, self);
+            } finally {
+                ExitBlockingMethod(previous);
+            }
             return RubyThreadInfo.FromThread(self).Result;
+        }
+
+        /// <summary>
+        /// Names the core method the current thread is in and may block in ("Thread::Mutex#lock") for
+        /// Thread#backtrace, which MRI shows on top of a blocked thread's stack and IronRuby has no frame
+        /// for - unless an outer one (Thread#value around its join) has named it already. Pass the answer
+        /// to <see cref="ExitBlockingMethod"/>.
+        /// </summary>
+        internal static string EnterBlockingMethod(string/*!*/ label) {
+            RubyThreadInfo info = RubyThreadInfo.Current;
+            string previous = info.BlockedLabel;
+            if (previous == null) {
+                info.BlockedLabel = label;
+            }
+            return previous;
+        }
+
+        internal static void ExitBlockingMethod(string previous) {
+            RubyThreadInfo.Current.BlockedLabel = previous;
         }
 
         //    stop?
@@ -1714,7 +1749,12 @@ namespace IronRuby.Builtins {
             if (RubyThreadInfo.GetRactorThreads(context).Length <= 1) {
                 throw new ThreadError("stopping only thread\n\tnote: use sleep to stop forever");
             }
-            DoSleep();
+            string previous = EnterBlockingMethod("Thread.stop");
+            try {
+                DoSleep();
+            } finally {
+                ExitBlockingMethod(previous);
+            }
         }
 
         internal static void DoSleep() {

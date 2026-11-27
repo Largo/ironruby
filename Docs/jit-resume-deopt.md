@@ -2,7 +2,8 @@
 
 Status: stage 1 is implemented behind `-X:JITResume` (off by default; `Src/Ruby/Runtime/Jit/JitResume.cs`,
 `JitCompiler.Resume.cs`, matrix section 11 of `Util/jit-matrix.rb`), narrowed as its section says; the rest
-is design only. It answers gap 1 of `Util/perf/LEDGER.md`
+is design only, including stage 3a at the end (a yield in an outlined loop, gap 18), whose matrix is
+`Util/yield-loop-matrix.rb`. It answers gap 1 of `Util/perf/LEDGER.md`
 ("Calls of other methods from hot bodies"): `CallSite.Target` is 24-32% of every benchmark,
 and Richards, Towers, DeltaBlue, Bounce and CD's `tree_insert` all wait on one rule of the
 method JIT.
@@ -377,3 +378,128 @@ the `while` statement with `#resume` clear, and the generic code evaluates the c
 the first's index, which would run an iteration whose condition nobody evaluated. Then
 `-X:JITResume` on by default, after a full sweep and the benchmark suite, if stages 1-4
 measured as faster.
+
+## Stage 3a: a yield in an outlined loop (gap 18)
+
+Status: design, with its matrix (`Util/yield-loop-matrix.rb`, which CRuby and the unchanged build print
+alike). Written in round thirty-seven (perf/yieldresume) after perf/yieldloop measured the gap:
+`def each; i = 0; while i < @a.size; yield @a[i]; i += 1; end; self; end` costs about 40 ns per element
+yielding to an empty block, CRuby 28. Of that the yield itself is about 11 ns (CRuby's about 10), and the
+rest is the loop running generic, because the loop compiler bails at the YieldCall (`[osr] emitter: node:
+YieldCall`). A typed copy of the loop with the yield as a call in it would be about 23 ns.
+
+This is a narrower problem than stage 3, and the OSR tier is the place for it, not the method JIT:
+
+- The method JIT never wraps a method that uses its block (the screen), and a yielding iterator is the
+  whole point. The OSR copy of a loop runs **inside the generic body** (a light frame's or a full one):
+  that body is the method's frame - its backtrace line, its `ensure`, its flow-control frame, its lazily
+  made scope - and the copy is entered at the top of an iteration and leaves at the top of one.
+- The yield stays a call: the block runs its own compiled code, so its frame (`block in ...`), its
+  `next`/`redo`, its TracePoint `:b_call` and its backtraces are the generic ones. Nothing is inlined.
+- The copy already leaves only at an iteration boundary: a deopt restores the snapshot taken at the top of
+  the iteration and answers `Retry`, and the generic loop runs that iteration again. That is sound up to
+  the yield - nothing observable has happened in the iteration - and it is the stage-1 rule applied per
+  iteration. So the only new question is the **tail**: the statements of the iteration after the yield.
+
+### The shape
+
+`while C; S1 ... Sk; yield E1, ..., En; T1 ... Tm; end`, with exactly one yield, in statement position,
+directly in the loop body (not in an `if`, a `begin`, a nested loop or the condition), the arguments
+plain (no splat, no block pass), and `C`, the `S` and the `E` what the copy compiles today. Anything else
+keeps today's answer (the loop bails). The method's block and its yield BlockParam are new inputs of the
+copy: the block is read once on entry, as the generic yield reads it (`MakeMethodBlockParameterRead`:
+the light frame's block parameter, or the scope's); the BlockParam is the copy's local, reused across
+iterations by `ReuseBfcForYield` as the generic loop reuses it.
+
+### The four ways out of an iteration after the yield
+
+Each of them ends either at the **next** iteration boundary, with the end-of-iteration state in the
+tuple, or by leaving the method; none restarts the iteration.
+
+1. **Normal.** Right after the yield the copy tests one guard, G: the global method version and the
+   constant version are the ones its prologue checked, `TracePoint.ActiveEvents` is 0, and the yield did
+   not break (`MethodYield`'s test). With G, the tail runs typed. A tail operation that would deopt
+   today must not: `i += 1` on an Int or Lng local that overflows has, with G (Integer#+ is still the
+   library's), a known result, the Bignum, which `JitRuntime` makes without calling Ruby; the local then
+   holds an `Obj` for the rest of the iteration. An operation whose guard fails for another reason
+   (an `Array#[]` on a receiver whose class moved, an attribute read) takes the same path: its result is
+   computed by its generic operation on the operands already evaluated, as stage 1's fallbacks are, and
+   is `Obj` from there. Once a tail operation has gone `Obj`, every later tail operation is emitted on
+   `Obj` (the self-guarded tail: stage 2's rule, applied to a tail only), and at the end of the iteration
+   the copy writes its locals into the tuple and answers **Handback**: a new answer of the site (next to
+   `Retry`) that the generic loop takes as "continue at the head, evaluating `C` yourself", the snapshot
+   not restored. A tail that went typed to the end goes on to the next iteration in the copy.
+2. **The world changed, or tracing came on** (G fails). The block may have redefined `Integer#+`
+   (`redefine +` in the matrix: CRuby calls the new `+` for the very `i += 1` that follows), reassigned
+   a constant, or enabled a TracePoint whose `:line` for `i += 1`, with a binding that sees `i`, CRuby
+   fires (`trace line`, `trace binding`). Neither can be had from typed code. The copy writes its locals
+   into the tuple and runs the **generic tail**: `T1 ... Tm` compiled by the AstGenerator exactly as the
+   generic body compiles them (the same sites, the same TraceLineExpressions), as a lambda over the
+   method's scope, built the first time it is needed and cached on the site (cold code). In a light frame
+   the scope is made as a TracePoint would make it (`LightFrame.MakeScopeIfTraced`), which needs the
+   frame's `#rfc`, self and block as copy inputs too, and is then the frame's for the rest of the call
+   (the light frame's `#scope` variable, so that the generic loop that follows uses the same one). Then
+   Handback. This is stage 3's resumable body for one resume point - after the yield - and without its
+   dispatch problem: the tail is a straight-line suffix of the loop body, inside no try region the
+   generic body would have to jump into, which is why the shape takes the yield only directly in the
+   loop body.
+3. **Break.** The block's `break v` makes the iterator return `v` (`MethodYield` answers true and the
+   generic yield returns from the method). The copy writes its locals into the tuple and answers
+   **MethodReturned(v)**, a new answer the generic loop's glue (`WhileLoopExpression`, the `osrResult`
+   test) turns into the method's own `return v` (`gen.Return`), so the method's `ensure`, the light
+   frame's finally and TracePoint's `:return` run as they do for the generic yield (`break ensure`).
+   `next` and `redo` are the block's own and need nothing.
+4. **An exception through the yield.** A `raise` or `throw` in the block, a `return` from it (a
+   MethodUnwinder aimed at the caller), Thread#raise or #kill: the copy's locals are written into the
+   tuple on the way out (a fault handler around the yield, or a finally keyed on a flag), so a `rescue`
+   or `ensure` of the method sees the loop's own counter (`raise rescue`: `["at 42", 41]`).
+
+Everything before the yield is as today: a deopt in `C`, the `S` or the `E` restores the snapshot and
+the iteration runs again generically, since nothing observable has happened in it. A redefinition by
+the block is seen by the next iteration's `C` through the prologue's version check moved to the
+iteration's safe point (it is there already: the copy's safe point checks the code epoch).
+
+### What else the state must hold
+
+- **Representation in the tuple.** A local that went `Obj` in the tail is written as the object; a typed
+  one through the representation funnel (`NarrowLong`), as the copy's exits do now.
+- **Threads and re-entrancy.** All of it is per invocation: the block, the BlockParam, the locals are
+  locals of the copy's delegate. The generic tail lambda is shared and stateless. A re-entrant call of the
+  iterator from the block (`re-entrant`, `recursion`) runs its own generic body and its own copy.
+- **The undo log.** The copy logs no element writes of its own in this shape; a tail with an element
+  write (`r << yield(x)` is a call, not a write) is declined until it is needed.
+- **The yield's arity and protocol.** `Yield0` ... `YieldN` by the argument count, as the generic yield
+  chooses; the yield's value is `Obj`.
+
+### The matrix's rows (`Util/yield-loop-matrix.rb`) and what each one checks
+
+| Rows | Checks |
+|---|---|
+| `hot`, `sizes`, `returns self`, `enumerator`, `each2` | the typed copy with a yield computes what the generic loop does, empty to 100 elements, two yielded values |
+| `break`, `break ensure`, `break each2`, `throw` | way 3: the block's break value is the method's, its `ensure` sees the loop's counter; a throw leaves through way 4 |
+| `next`, `redo`, `symbol`, `lambda`, `method`, `kept block` | the block's own protocol and the forms a block comes in, untouched by the copy |
+| `raise rescue`, `raise ensure`, `raise outside` | way 4: the counter is written back before a rescue or ensure of the method reads it |
+| `redefine +`, `redefine []` | way 2: the tail's `i += 1` calls the `+` the block defined, in the same iteration; the next `@a[i]` the `[]` |
+| `trace line`, `trace binding` | way 2: `:line` for the tail's statement, in the iteration that enabled it, with a binding that sees `i` |
+| `grow`, `shrink`, `freeze`, `ivar swap` | the next iteration's condition and element read see what the block did to the array or to `@a` (a deopt there replays nothing) |
+| `re-entrant`, `recursion`, `fiber`, `threads` | per-invocation state: the copy's block, BlockParam and locals are its own |
+| `big counter` | way 1: an `i += 2**61` past Int64 in the tail is the Bignum, handed back at the end of the iteration |
+
+### Order of work, each step gated by the matrix
+
+1. The two answers, Handback and MethodReturned, in `OsrLoopSite` and the glue, with a C# test that a
+   copy can hand back after a typed tail and that `MethodReturned` runs the method's ensure.
+2. The yield in the copy, with ways 2, 3 and 4: the block and BlockParam inputs, `Yield0`-`YieldN`, the
+   write-back on an exception, MethodReturned on a break, and the generic tail lambda run whenever G
+   fails. With G the tail runs typed only if it cannot fail - in this step a tail of `local += literal` on
+   Int/Lng locals, whose overflow makes the Bignum (way 1's first case) and hands back at the end of the
+   iteration - and any other tail always runs generic. No step may hand back *before* the tail: the
+   generic loop starts at the head, so a tail skipped there is a statement lost (`i += 1` never run), and
+   a tail run without its hooks is a `:line` lost (`trace line`, `trace binding`).
+3. The typed tail with its `Obj` continuation (way 1) for tails of more than local increments.
+
+Each step's rows: `Util/yield-loop-matrix.rb` in every mode and with the switch off; block-loop, osr,
+jit, jit-calls, parked-iterator and hot-shapes matrices; ruby/spec language/yield, break, while;
+`IR_OSR_VERBOSE=1` showing the iterator's loop specialized (the probe reaches the path). The measure is
+`Util/bench/yield-shapes.rb` (`ueach100`, `ueach100e` against CRuby) and the prelude's `take_while`,
+`sum`, `uniq` and `to_h` with a block, by clock.
