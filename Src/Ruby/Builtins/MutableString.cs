@@ -1539,6 +1539,29 @@ namespace IronRuby.Builtins {
             return String.Equals(content.Data, ascii) ? 1 : 0;
         }
 
+        /// <summary>
+        /// Which of a `case''s ASCII literals this String equals (CaseStringSite): the clause of the first
+        /// one, CaseStringSite.NoClause for none, CaseStringSite.NotHandled when only String#=== can tell.
+        /// The literals are in <paramref name="byChar"/> by their one character and in
+        /// <paramref name="byString"/> otherwise. The same reading of the String as EqualsAsciiLiteral's: a
+        /// shared one-character slice as it is, a String held as characters in an encoding where ASCII is its
+        /// own bytes by its characters, anything else not here.
+        /// </summary>
+        internal int FindAsciiLiteral(int[]/*!*/ byChar, System.Collections.Generic.Dictionary<string, int>/*!*/ byString) {
+            if (!_encoding.IsAsciiIdentity) { return Runtime.Calls.CaseStringSite.NotHandled; }
+            int shared = SharedAsciiChar;
+            if (shared >= 0) { return byChar[shared]; }
+            var content = _content as StringContent;
+            if (content == null) { return Runtime.Calls.CaseStringSite.NotHandled; }
+            string data = content.Data;
+            if (data.Length == 1) {
+                char c = data[0];
+                return (c < byChar.Length) ? byChar[c] : Runtime.Calls.CaseStringSite.NoClause;
+            }
+            int clause;
+            return byString.TryGetValue(data, out clause) ? clause : Runtime.Calls.CaseStringSite.NoClause;
+        }
+
         public int CompareTo(object other) {
             var ms = other as MutableString;
             if (ms != null) {
