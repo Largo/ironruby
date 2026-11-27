@@ -1797,6 +1797,24 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/hashwalk (/perf-core, 2026-11-27, on 52f4f22) - the prelude's Enumerable methods
+  walk a plain Hash with a one-value block (`__plain_each__?`, `IR_HASH_WALK`)** - clock only,
+  not gated. The lever perf/hsortby named: filter_map, min_by, max_by, sort_by, min_by(n),
+  max_by(n), flat_map and collect_concat walked a Hash with `|*values|` and __enum_item__,
+  though Hash#each yields one [key, value] pair per entry to that block and to `|item|` alike.
+  A Hash whose #each resolves to the built-in one now takes the Array's one-value walk.
+  - Clock (`ab.rb`, four rounds, ns, unchanged / this; the switch off equal to unchanged):
+    Hash `min_by` 1348 -> 999 (0.74; CRuby 650), `max_by` 0.73, `filter_map` 962 -> 772
+    (0.80), `flat_map` 1544 -> 1276 (0.83), `sort_by` 1905 -> 1678 (0.88), `min_by(2)` 2075 ->
+    1792 (0.86); the Array rows within the noise.
+  - `Util/hash-walk-matrix.rb` (new) prints the unchanged build's output (CRuby's but for two
+    tie orders of `min_by(2)`/`max_by(2)`, as before) in five modes, with the switch off and
+    R2R; sort-by, enum, enumerable2, the hash matrices, callable-parameters, caller and
+    hot-shapes unchanged; ruby/spec core/hash, core/enumerable the same examples.
+  - Left: Hash#sum (2.7x CRuby) and #each_with_object, #group_by, #uniq, #inject keep the
+    generic walk: their bodies are long and written once against `|*values|`; a second body
+    per method is the price of the same trick there. Hash#any? (3.8x) is C#, /perf-step's.
+
 - **perf/arymin (/perf-step, 2026-11-27, on ed49c52) - `Array#take` is Array's own, as MRI's
   `rb_ary_take`** - clock only, not gated. Array inherited Enumerable's C# take, a walk of
   #each through a Proc: `[1, 2, 3, 4].take(2)` 248.0 -> 83.1 ns (CRuby 71.5), `first_n`, `min`,
