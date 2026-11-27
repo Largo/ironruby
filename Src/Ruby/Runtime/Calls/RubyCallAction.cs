@@ -777,13 +777,18 @@ namespace IronRuby.Runtime.Calls {
                 }
                 method.Info.BuildCall(metaBuilder, args, methodName);
 
-                // While a TracePoint is enabled its hooks may read the frame's $~ through their binding (a :line or :return
-                // event): the call then stores $~ in the frame's scope, made for it (RubyOps.LightScopeRequired).
-                if (args.MatchSink && !metaBuilder.Error && metaBuilder.Result != null) {
-                    metaBuilder.Result = Ast.Condition(
-                        Ast.Equal(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), AstUtils.Constant(0)),
-                        AstUtils.Convert(metaBuilder.Result, typeof(object)),
-                        AstUtils.Constant(RubyOps.LightScopeRequired, typeof(object))
+                // The method stores $~ in a sink scope of the thread's, and the frame takes it from there (RubyOps.EnterMatchSink).
+                var sink = args.MatchSink ? args.MatchSinkVariable : null;
+                if (sink != null && !metaBuilder.Error && metaBuilder.Result != null) {
+                    var result = Ast.Variable(typeof(object), "#result");
+                    metaBuilder.Result = Ast.Block(new[] { sink, result },
+                        Ast.Assign(sink, Ast.Call(_EnterMatchSink, AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)))),
+                        Ast.TryFault(
+                            Ast.Assign(result, AstUtils.Convert(metaBuilder.Result, typeof(object))),
+                            Ast.Call(_AbortMatchSink)
+                        ),
+                        Ast.Call(_LeaveMatchSink),
+                        result
                     );
                 }
 
@@ -984,17 +989,31 @@ namespace IronRuby.Runtime.Calls {
         /// A library method of String, Symbol or Regexp (MutableStringOps, SymbolOps, RubyRegexOps): one that takes its caller's
         /// scope to store $~ in it and for the runtime, and for nothing else - not to resolve a call it makes, which goes through
         /// a site of its own without the caller's refinements, as CRuby's rb_funcall does. A site with RubyCallFlags.HasMatchSink
-        /// gives it the runtime's empty scope (CallArguments.MatchSink). Not while c_call is traced: the rule then reports the
+        /// gives it a sink scope of the thread's (CallArguments.MatchSink). Not while c_call is traced: the rule then reports the
         /// call with the caller's scope (RubyLibraryMethodInfo.AddCallTracing), and switching tracing rebinds every rule.
         /// </summary>
         internal static bool IsMatchSinkMethod(RubyContext/*!*/ context, RubyMemberInfo/*!*/ method) {
-            if (!(method is RubyLibraryMethodInfo) || TracePoint.CCallTracing) {
+            var library = method as RubyLibraryMethodInfo;
+            if (library == null || TracePoint.CCallTracing) {
                 return false;
             }
-            var owner = method.DeclaringModule;
-            return owner == context.GetClass(typeof(MutableString)) || owner == context.GetClass(typeof(RubySymbol)) ||
-                owner == context.GetClass(typeof(RubyRegex));
+            // By the CLR method that implements it, not the module it is in or the name it is called by: an alias may put
+            // another library method under a sink name. Of those classes' methods that take the scope, Regexp#~ reads $_ from
+            // it, Regexp.last_match reads $~, and Symbol#to_proc makes a Proc with it.
+            foreach (var overload in library.MethodBases) {
+                var type = overload.DeclaringType;
+                if (type == null || type.Namespace != "IronRuby.Builtins" ||
+                    type.Name != "MutableStringOps" && type.Name != "SymbolOps" && type.Name != "RegexpOps" ||
+                    overload.Name == "ImplicitMatch" || overload.Name == "LastMatch" || overload.Name == "ToProc") {
+                    return false;
+                }
+            }
+            return true;
         }
+
+        private static readonly MethodInfo/*!*/ _EnterMatchSink = typeof(RubyOps).GetMethod("EnterMatchSink");
+        private static readonly MethodInfo/*!*/ _LeaveMatchSink = typeof(RubyOps).GetMethod("LeaveMatchSink");
+        private static readonly MethodInfo/*!*/ _AbortMatchSink = typeof(RubyOps).GetMethod("AbortMatchSink");
 
         internal static MethodResolutionResult Resolve(MetaObjectBuilder/*!*/ metaBuilder, string/*!*/ methodName, CallArguments/*!*/ args,
             out RubyMemberInfo methodMissing) {

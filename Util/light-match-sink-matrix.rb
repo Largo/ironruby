@@ -1,6 +1,6 @@
 # Differential matrix for the frame-local $~ of a method that runs in a light frame and gives a regex to a String,
 # Symbol or Regexp method that stores $~ (MethodDefinition.IsMatchSink, RubyCallFlags.HasMatchSink,
-# IR_LIGHT_MATCH_SINK). CRuby's rules, which each row checks:
+# IR_LIGHT_MATCH_SINK=1, off by default). CRuby's rules, which each row checks:
 #
 # - $~ is the frame's own: a method's match does not set its caller's $~, and leaves it as it was (nil or a match);
 # - a block sees its method's $~ (and sets it), a lambda too;
@@ -11,12 +11,15 @@
 #   rpartition, byteindex and their bang forms sets $~ (or clears it on no match);
 # - a method calling String#=~ with an object of its own: that object's =~ runs in its own frame.
 #
+# A method that nothing in reads its $~ keeps it in a CLR variable of its light frame, and puts it into the scope if one is
+# made later (RubyOps.TakeMatchSink); rows 8-11 are about that.
+#
 # Every method is called hot (N times) so that its sites are bound and compiled, then once more for the row.
-# Run under CRuby and ./ir.sh (JIT on and off, light frames off, the switch off) and diff:
+# Run under CRuby and ./ir.sh (JIT on and off, light frames off, the switch on) and diff:
 #
 #   ruby Util/light-match-sink-matrix.rb > /tmp/mri.txt
 #   ./ir.sh Util/light-match-sink-matrix.rb > /tmp/ir.txt && diff /tmp/mri.txt /tmp/ir.txt
-#   IR_LIGHT_MATCH_SINK=0 ./ir.sh Util/light-match-sink-matrix.rb > /tmp/off.txt && diff /tmp/mri.txt /tmp/off.txt
+#   IR_LIGHT_MATCH_SINK=1 ./ir.sh Util/light-match-sink-matrix.rb > /tmp/on.txt && diff /tmp/mri.txt /tmp/on.txt
 #
 # Every row must match, and the last line be `end'.
 
@@ -226,12 +229,7 @@ end
 mx = Mixed.new
 row "9. scope made late", [hot { [mx.rt(STR), mx.bg(STR), mx.kw(STR), mx.opt(STR), mx.rescue_m(STR)] }, ("zz" =~ /z/; mx.rt(STR); mx.opt(STR); mx.rescue_m(STR); $~ && $~[0])]
 
-# 10. TracePoint enabled by a callee after the method's match: its :line and :return bindings see the match in CRuby.
-# The one row the switch changes: a match sink stored the match in no frame, and a scope made for the hooks after the
-# match has no $~ (`[[:line, nil], [:return, nil]]'). Not run unless MID=1, so that the matrix diffs clean; the light
-# frame's sites take the scope while a TracePoint is enabled (RubyCallAction.BuildCall), which covers every TracePoint
-# enabled before the method was entered.
-if ENV['MID']
+# 10. TracePoint enabled by a callee after the method's match: its :line and :return bindings see the match
 def mid_enabler
   $mid_tp = TracePoint.new(:line, :return) { |t| $mid_seen << [t.event, t.binding.eval("$~ && $~[0]")] if t.method_id == :mid }
   $mid_tp.enable
@@ -250,6 +248,28 @@ $mid_seen = []
 mid(STR)
 $mid_tp.disable
 row "10. TracePoint enabled mid-frame", $mid_seen
+
+# 11. a library method that runs Ruby code after it has stored $~: sub with a Hash whose default proc calls a method
+# that matches too (each frame keeps its own $~), and the same seen by a TracePoint
+class Nested
+  def inner(s) = s.sub(/q+/, "Q")
+  def outer(s, h); r = s.sub(/b+/, h); [r, Nested.peek_line]; end
+  def self.peek_line = nil
 end
+nh = Hash.new { |_, k| Nested.new.inner("qq" + k) }
+row "11. sub with a default proc that matches", [hot { Nested.new.outer(STR, nh) }, ("zz" =~ /z/; Nested.new.outer(STR, nh); $~ && $~[0])]
+seen = []
+tp3 = TracePoint.new(:return) { |t| seen << [t.method_id, t.binding.eval("$~ && $~[0]")] if t.method_id == :outer || t.method_id == :inner }
+tp3.enable { Nested.new.outer(STR, nh) }
+row "11a. their $~ seen by a TracePoint", seen
+
+# 12. String#=~ with an object whose =~ is private or protected: called anyway, as rb_funcall does
+class PrivMatcher
+  private def =~(_) = :private_called
+end
+class ProtMatcher
+  protected def =~(_) = :protected_called
+end
+row "12. String#=~ with a private =~", [hot { (S.eqt_obj(STR, PrivMatcher.new) rescue $!.class) }, (S.eqt_obj(STR, ProtMatcher.new) rescue $!.class)]
 
 puts "end"

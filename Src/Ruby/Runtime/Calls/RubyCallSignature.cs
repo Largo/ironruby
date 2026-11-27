@@ -80,8 +80,8 @@ namespace IronRuby.Runtime.Calls {
 
         // CallAction only, with HasLightScope: a call in a method that runs without its scope and that nothing in its body
         // reads $~ of (MethodDefinition.IsMatchSink). A library method of String, Symbol or Regexp, which takes the scope only to
-        // store $~ in it and for its runtime, is then given the runtime's empty scope instead of reading the frame's
-        // (CallArguments.MatchSink), and the frame makes no scope for it.
+        // store $~ in it and for its runtime, is then given a sink scope of the thread's instead of reading the frame's
+        // (CallArguments.MatchSink, RubyOps.EnterMatchSink), and the frame takes the match from it and makes no scope.
         HasMatchSink = 4096,
     }
         
