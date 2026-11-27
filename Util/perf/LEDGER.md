@@ -1091,7 +1091,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     method version (reading the code: `new` and `[]` added to the struct class's
     singleton class override `Class#new`, which invalidates sites on override), so it
     throws away every running loop's copy and every typed body's entry.
-    perf/struct (see Landed, not gated) measured it - 8 JIT invalidations for 30 `Struct.new`s
+    perf/struct (see Landed) measured it - 8 JIT invalidations for 30 `Struct.new`s
     beside a hot loop - and fixed it for anonymous classes (0); a reader and the first `new` on a
     new struct class take dispatchers instead of rules (4-9 and 10-25 us under IR_BIND_TRACE).
     `Struct.new(:a, :b)` plus a first new and getter 79.5 -> 51 us (CRuby 5.7); `Struct.new` alone
@@ -1150,10 +1150,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Tried in round thirty-one (see Rejected, perf/dmeth): without the method JIT the call is
     only about 1.15 times a `def`'s, and a pooled BlockParam and a direct rule bought 1.16-1.2;
     what is left is the JIT taking a block body (a `JitStub` over a `BlockDefinition`).
-    Round of 2026-11-26 (see Landed, perf/dmethjit, not gated): taken; `bm1` 51 -> 26.5 ns against
+    Round of 2026-11-26 (see Landed, perf/dmethjit): taken; `bm1` 51 -> 26.5 ns against
     CRuby's 24. Left: bodies over captured locals, `block_given?`/`yield` or `super`, and calls with a
     block or a splat, which still take the rule.
-    Round of 2026-11-26, second (see Landed, perf/dmethjit2, not gated): bodies that read captured
+    Round of 2026-11-26, second (see Landed, perf/dmethjit2): bodies that read captured
     locals, and setters called as `o.x = v`, taken (`{ @h[name] }` 69.8 -> 53.3 ns, a `def` 49.7).
     Left: bodies that write a captured local (4 of 154 in the stdlib and gems), `yield`/`super`, and
     the `*args, &block` forwarders.
@@ -1165,7 +1165,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the invoice shapes are at CRuby's time. Left: initializers taking keywords (`Product.new(sku:
     ...)`) at about 2x CRuby, `Hash#dup`, and Struct `keyword_init` as above. And
     `Data.singleton_methods` lists `:allocate`, which CRuby's does not (as on the baseline).
-    perf/struct (see Landed, not gated): Struct keyword creation is stored in C#, `kw_new` 1017 ->
+    perf/struct (see Landed): Struct keyword creation is stored in C#, `kw_new` 1017 ->
     198 ns against CRuby's 299 (`kw_hash` 147 against 196, `sub_kw` 379 against 356). Left from this
     gap: keyword initializers (`kwinit` 236 against 132) and `Hash#dup`.
     perf/struct2 (see Rejected) measured both in a method's loop rather than the shape file's
@@ -1623,9 +1623,46 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
+  perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
+  perf/deadconst2, perf/permute, perf/havlak, perf/dmethjit2, perf/jitsettle; the rejected
+  perf/struct2, perf/lsite2 and perf/startup's hot-rule bridge, ledger and tools only): the branch
+  `claude/happy-gauss-95wm2j` at 15285eb against master f81fc19, Release net10.0, four cores: **PASS**.
+  IronRuby.Tests (`parallel-tests.sh`): 1,352 tests, every one executed, no failed or flaky name (the
+  script's INCOMPLETE is the driver's `Current culture: ` banner, as at round thirty-seven's gate).
+  `gate-matrices.rb --all`, 171 matrices in 11 modes (the six default ones, and `IR_FAST_DUP`,
+  `IR_JIT_REST`, `IR_JIT_UNSAMPLED`, `IR_KWREST_IN_PLACE`, `IR_LIGHT_ENTRY` off): 1,502 same, 353
+  baseline, 26 DIFF, each explained. callable-parameters-matrix (11): `method(:puts).to_proc`'s prelude
+  line moved again (CRuby says nil). thread-backtrace-matrix (3): the main thread's line 87 or 88 by
+  timing, 88 alone on both trees. caller-matrix's R2R row m8b: the R2R host leaves out Kernel#eval's
+  frames on both trees when run alone (master healed by timing in the sweep); a defect of the R2R
+  host's own, handed to perf/crubydiff. fiber-reclaim-matrix (11): its native-enumerator probe took
+  `each_with_index` over a Hash, which perf/extiter3 gave a cursor, so there was no fiber left to
+  reclaim; the probe now takes `combination(2)` (15285eb), and the matrix is then the same as the
+  baseline's in all 12 modes. The older switches (`IR_LIGHT_GLOBALS`, `IR_LIGHT_LEXICAL`,
+  `IR_LIGHT_KEYWORD_REST`, `IR_LIGHT_KEYWORD_SPLAT`, `IR_JIT_DEADCONST`, `IR_FAST_SEARCH`, `IR_FAST_NEXT`,
+  `IR_FAST_STRUCT`, `IR_JIT_DMETH`) over the 49 matrices of the code they touch: 440 same, 50 baseline.
+  Probes for the gate's questions (a million deep through the new frames, visibility around
+  define_method bodies, captured locals of a making method parked or called again, `$!` around the
+  deferred StopIteration) print CRuby's output with the JIT on and off; 2,000 abandoned enumerators
+  leave no more threads or memory than on master.
+  ruby/spec, all five suites (32,285 examples): no failure the known list does not name.
+  Census against master: light frames 91.7% -> 94.1% of methods (658 up, none down), method JIT
+  compiles 11.6% -> 11.9% (131 up, none down).
+  AWFY, 8 iterations: all fourteen verify. Timing at load about 1: micro-table in both orders, no line
+  more than 5% slower in both (`arr` 1.07 / 1.00, `cmp` 1.13 / 1.00, `nil?` 1.14 / 1.01, one order
+  each). AWFY 12 in both orders: geomean new/base 0.989 and 1.013, none more than 5% slower in both
+  (Richards 0.996 / 1.039; Havlak 0.95 / 1.12, which follows the order). Alone, five rounds in each
+  order, medians new/base: NBody 1.023 / 1.005, List 1.004 / 1.000, Bounce 0.996 / 0.993.
+  Start-up on the R2R host, best of ten alternating, two runs, base -> new ms: `-e 1` 509 -> 528 and
+  534 -> 562 (1.038, 1.052), `gem --version` 579 -> 598 and 632 -> 613, `gem list` 1073 -> 1056 and
+  1052 -> 1098, `require "irb"` 986 -> 1036 and 1031 -> 1054 (1.050, 1.021), irb 1+1 1129 -> 1166 and
+  1180 -> 1169. None more than 5% slower in both runs, but `-e 1` is 4-5% (20-28 ms) slower in both:
+  open, for perf/startup3 and 4 (round 5) to win back, and measured again at round 5's gate.
+
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
-  (`IR_KWREST_IN_PLACE`, gap 38's first cost)** - instructions only, not gated. A keyword
+  (`IR_KWREST_IN_PLACE`, gap 38's first cost)** - instructions only, gated 2026-11-27 (round 4's gate entry). A keyword
   call into a method whose rest takes the hash (`def r(*a)` called `r(i, k: 2)`; send,
   method_missing, `define_method { |*a| }`, every delegator without `ruby2_keywords`) paid
   about 1,400 instructions over passing the same Hash positionally. Bisected: the rule's
@@ -1715,7 +1752,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   method": the candidate's method is resolved on the candidate class with the lookup's visibility
   (`InlinableCallee`), and a subclass never takes the inlined body (exact class check).
 
-- **perf/jitsettle (2026-11-26) - a retired entry's cool-down costs nothing per call** - not gated.
+- **perf/jitsettle (2026-11-26) - a retired entry's cool-down costs nothing per call** - gated 2026-11-27 (round 4's gate entry).
   A method whose typed body keeps failing (`x + 1` called with an Integer and a Float in turn) ran
   10-16% slower than with the JIT off, as a `def` and as a define_method method. What it does per call,
   from a trace (`IR_JIT_VERBOSE=1`, a phase-by-phase timing of 12.5 million calls): after the first
@@ -1754,7 +1791,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     32 calls, where it needed 1024 calls and the cool-down.
 
 - **perf/dmethjit2 (2026-11-26) - a define_method body that reads captured locals, and setters, in the
-  method JIT (gap 23)** - not gated. Chosen by a survey of the 154 `define_method` blocks in the
+  method JIT (gap 23)** - gated 2026-11-27 (round 4's gate entry). Chosen by a survey of the 154 `define_method` blocks in the
   standard library and the bundled gems (Prism, by parameters and what the body does with the
   enclosing scopes' locals): 66 have plain or no parameters and *read* a captured local with nothing
   else in the way (`{ @options[name] }`, `{ params[name] }`, `{ code }`, `{ @major_version >= v }`,
@@ -1838,7 +1875,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   `Util/perf/callgrind/count.sh` counts instructions instead.
 
 - **perf/extiter3 (2026-11-26) - `with_index`, `each_with_index` and `with_object` enumerators
-  take `next` on a cursor over their source's (gap 35)** - not gated. Base 1efd7e6 (the merged
+  take `next` on a cursor over their source's (gap 35)** - gated 2026-11-27 (round 4's gate entry). Base 1efd7e6 (the merged
   branch at 2f8c31c with perf/extiter2). The prelude's Enumerator#with_index (and so
   #each_with_index) and #with_object made without a block are generators; they now mark the
   enumerator they return with its source and offset or memo (`__iter_index_source__`), and
@@ -1869,7 +1906,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   Loop*, Fiber*, Backtrace*, Exception*, Raise*, Rescue*) pass.
 
 - **perf/extiter2 (2026-11-26) - `map`, `collect`, `select`, `filter`, `find_all` and `reject`
-  enumerators take `next` on a cursor, with no fiber (gap 35)** - not gated. Base: the merged
+  enumerators take `next` on a cursor, with no fiber (gap 35)** - gated 2026-11-27 (round 4's gate entry). Base: the merged
   branch at 2f8c31c, which has perf/extiter. An enumerator of Array's own #map / #collect /
   #select / #filter / #reject, or of Enumerable's #map / #collect / #select / #filter /
   #find_all / #reject over a receiver whose #each a cursor walks (Range, Hash#map and
@@ -1897,7 +1934,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/lexical2 (/perf-step, 2026-11-26, on 2f8c31c) - keywords beside a rest or post
   parameter, and a hash passed on as keywords, in light frames (`IR_LIGHT_KEYWORD_REST`,
-  `IR_LIGHT_KEYWORD_SPLAT`, gap 9)** - census only, not gated. Chosen over the other "not a
+  `IR_LIGHT_KEYWORD_SPLAT`, gap 9)** - census only, gated 2026-11-27 (round 4's gate entry). Chosen over the other "not a
   light frame" lines of the census of 2f8c31c because it is the one the prelude has: 24 of its
   101 methods (`String#each_line`, `String#lines`, `IO#initialize`, `File#initialize`,
   `Data#initialize`, `Kernel#open`, `IO.readlines`, `Enumerator.produce`), against 2 of the 71
@@ -1952,7 +1989,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `Util/lexical-light-matrix.rb` probes both again and prints CRuby's output in every mode.
 
 - **perf/deadconst2 (/perf-step, 2026-11-26, on claude/happy-gauss-95wm2j 2f8c31c) - a typed method body
-  whose loop folded a constant sees it reassigned at the loop's next safe point (gap 29)** - not gated.
+  whose loop folded a constant sees it reassigned at the loop's next safe point (gap 29)** - gated 2026-11-27 (round 4's gate entry).
   The fault perf/deadconst found: a method body's `while` that folded a constant, with nothing else that
   may deopt (a Float counter: an Int one's overflow check is a deopt), went on with the old value after
   another thread reassigned the constant, until the call returned; CRuby's next read sees the new one.
@@ -1993,7 +2030,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   before `LoopGuard.Set` publishes the epoch.
 
 - **perf/jitscreen2 (2026-11-26) - a multiple assignment of a list in a body the method JIT
-  compiles** (`a, b = b, a`, `@a, @b = x, y`) - census only, not gated. With the census
+  compiles** (`a, b = b, a`, `@a, @b = x, y`) - census only, gated 2026-11-27 (round 4's gate entry). With the census
   counting honestly, the lines after the Hash literal were String literals (101) and multiple
   assignment (75). The String literals left are arguments of calls on self (`add_tag :BOLD,
   "\e[1m"`, Json's `read_char('-')`: taking them was perf/strlit's rejected first build, gap 1's
@@ -2043,7 +2080,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   typed compiler makes (its TransformReadCore throws).
 
 - **perf/jitscreen (2026-11-26) - a Hash literal in a body the method JIT compiles** (`{}`,
-  `{a: x}`, `{"k" => v}`, `opts = {}`) - census only, not gated. The screen refused every Hash
+  `{a: x}`, `{"k" => v}`, `opts = {}`) - census only, gated 2026-11-27 (round 4's gate entry). The screen refused every Hash
   literal, the largest line of "JIT never, one thing only" that is not a call once the census
   counts honestly (first commit below). `EmitHashLiteral` makes the Hash the generic body makes
   (`HashConstructor.TransformReadCore`): keys and values in order, through the same code
@@ -2057,7 +2094,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   operand of a binary operator.
   JIT compiles 11.6% -> 11.9% (3,296 -> 3,370), maybe 10.3% -> 10.5% (2,923 -> 2,981), never
   78.1% -> 77.6% (22,157 -> 22,025), light frames unchanged (Src/StdLib + AWFY, 28,376 methods;
-  132 methods moved up - 74 to `compiles`, 58 to `maybe` - none down) - census only, not gated.
+  132 methods moved up - 74 to `compiles`, 58 to `maybe` - none down) - census only, gated 2026-11-27 (round 4's gate entry).
   `HashConstructor` refused at all 977 -> 331, alone 136 -> 5 (keys that are not plain literals,
   and literals of more than five pairs, stay refused). Moved: mostly `initialize` methods that set `@h = {}`, `to_h` and
   `marshal_dump` methods returning `{key: @ivar, ...}`, and `opts = {}` defaults; in the prelude
@@ -2097,7 +2134,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   strlit's literal makers were; not tried here.
   For the gate: no IronRuby.Tests or spec run; the decline above.
 
-- **perf/strdup (2026-11-26, not gated) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
+- **perf/strdup (2026-11-26, gated 2026-11-27 (round 4's gate entry)) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
   24's dup note). Kept as a CRuby-compatibility fix, not as a speed-up. `Util/dup-matrix.rb` (new: String,
   Object and Array dup and clone - content, encodings, broken bytes, frozen and chilled, ivars,
   singleton classes, subclasses, a refinement, TracePoint, and the hooks redefined in String, Object
@@ -2117,7 +2154,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   on both builds.
 
 - **perf/strsearch2 (2026-11-26) - `#start_with?` with one String prefix takes no scope; an
-  ASCII prefix is compared in place (gap 21, round two)** - not gated. Commit dc1d136 on
+  ASCII prefix is compared in place (gap 21, round two)** - gated 2026-11-27 (round 4's gate entry). Commit dc1d136 on
   `claude/perf-strsearch`, based on the merged branch 2f8c31c. `start_with?` had one overload,
   which takes the caller's scope to store `$~` for a Regexp prefix, so a light frame calling it
   with a String made its scope on the call (`RubyOps.LightScopeRequired`) and called again. A
@@ -2147,7 +2184,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   TypeError if it's not a kind of String`, run as a directory).
 
 - **perf/lframe (/perf-frame, 2026-11-26) - a cheaper method entry: the alias name and the
-  traced test** (switch `IR_LIGHT_ENTRY`, on unless `=0`) - instructions only, not gated.
+  traced test** (switch `IR_LIGHT_ENTRY`, on unless `=0`) - instructions only, gated 2026-11-27 (round 4's gate entry).
   Built on 2f8c31c. What gap 16's profiles left on every light frame, looked at on its own
   with `Util/bench/frame-cost.rb` (new: a method that does nothing, one, three calls, a yield,
   `block_given?`, and `String#bytesplice`), `-X:NoJIT` so that the generic bodies run.
