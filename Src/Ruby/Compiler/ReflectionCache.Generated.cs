@@ -664,6 +664,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _TakeBfcForBlockYield;
         public static MethodInfo/*!*/ TakeFreshSplat { get { return _TakeFreshSplat ?? (_TakeFreshSplat = CallInstruction.CacheFunc<System.Collections.IList, IronRuby.Builtins.RubyArray>(RubyOps.TakeFreshSplat)); } }
         private static MethodInfo _TakeFreshSplat;
+        public static MethodInfo/*!*/ TakeParkedLocals { get { return _TakeParkedLocals ?? (_TakeParkedLocals = CallInstruction.CacheFunc<IronRuby.Runtime.ParkedScopeSlot, IronRuby.Runtime.ParkedProcs, Microsoft.Scripting.MutableTuple>(RubyOps.TakeParkedLocals)); } }
+        private static MethodInfo _TakeParkedLocals;
         public static MethodInfo/*!*/ TakeParkedScope { get { return _TakeParkedScope ?? (_TakeParkedScope = CallInstruction.CacheFunc<IronRuby.Runtime.ParkedScopeSlot, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Runtime.ParkedProcs>(RubyOps.TakeParkedScope)); } }
         private static MethodInfo _TakeParkedScope;
         public static MethodInfo/*!*/ TakePendingCallee { get { return _TakePendingCallee ?? (_TakePendingCallee = CallInstruction.CacheFunc<System.String, System.String>(RubyOps.TakePendingCallee)); } }

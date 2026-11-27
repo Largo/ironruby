@@ -394,13 +394,15 @@ namespace IronRuby.Compiler.Ast {
             // A light frame keeps its locals in CLR variables if it can and makes few calls (MaxRegisterLocalsCalls):
             // `def one(x); yield x; end' would otherwise allocate their tuple on every call.
             MSA.Expression enter = null;
+            scope.ReusedLocals = ParkedLocals(parkSlot, null);
+            scope.ReusedLocalsWithScope = ParkedLocals(parkSlot, currentMethod.ParkedVariable);
             if (light != null) {
                 var registerBody = (CountCalls() <= MaxRegisterLocalsCalls) ? scope.TryUseRegisterLocals(body) : null;
                 if (registerBody != null) {
                     body = registerBody;
                     enter = light.EnterWithRegisterLocals(scope);
                 } else {
-                    enter = light.Enter(scope);
+                    enter = light.Enter(scope, scope.ReusedLocals);
                 }
             }
 
@@ -409,7 +411,7 @@ namespace IronRuby.Compiler.Ast {
                 var locals = scope.LocalsTupleVariable;
                 var parked = currentMethod.ParkedVariable;
                 enter = Ast.Block(
-                    scope.MakeLocalsStorage(),
+                    scope.MakeLocalsStorage(scope.ReusedLocals),
                     Ast.Assign(parked, Methods.TakeParkedScope.OpCall(Ast.Constant(parkSlot), declaringScope, declaringModule)),
                     Ast.Condition(Ast.NotEqual(parked, AstUtils.Constant(null, typeof(ParkedProcs))),
                         Methods.ReuseParkedScope.OpCall(parked, locals, selfParameter, blockParameter, EnterInterpretedFrameExpression.Instance),
@@ -470,6 +472,14 @@ namespace IronRuby.Compiler.Ast {
         /// IR_LIGHT_BLOCKS=0 keeps every method with a literal block out of light frames (see TransformLightFrame).
         /// </summary>
         internal static readonly bool LightBlocksEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCKS") != "0";
+
+        // The tuple the entry of a body with a parking slot takes from the scope its last call parked (RubyOps.TakeParkedLocals),
+        // or null for a body without one.
+        private static MSA.Expression ParkedLocals(ParkedScopeSlot parkSlot, MSA.Expression taken) {
+            return (parkSlot != null && RubyOps.ParkedLocalsEnabled)
+                ? Methods.TakeParkedLocals.OpCall(Ast.Constant(parkSlot), taken ?? AstUtils.Constant(null, typeof(ParkedProcs)))
+                : null;
+        }
 
         /// <summary>
         /// IR_PARKED_SCOPES=0 makes a new scope on every call of a method whose literal blocks reuse their Procs (see
@@ -653,10 +663,10 @@ namespace IronRuby.Compiler.Ast {
             /// Replaces CreateMethodScope: the locals, the safe point and the call's flow-control frame, the alias
             /// the method was called by, and a scope only if a TracePoint listens for calls.
             /// </summary>
-            internal MSA.Expression/*!*/ Enter(ScopeBuilder/*!*/ scope) {
+            internal MSA.Expression/*!*/ Enter(ScopeBuilder/*!*/ scope, MSA.Expression reusedLocals) {
                 return Ast.Block(
                     StackCheck,
-                    scope.MakeLocalsStorage(),
+                    scope.MakeLocalsStorage(reusedLocals),
                     Ast.Assign(Rfc, EnterMethod),
                     Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
                     // the test inline, as in EnterWithRegisterLocals: a call of CreateMethodScopeIfTraced, with its nine
