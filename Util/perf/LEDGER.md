@@ -1203,6 +1203,15 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     with perf, which decides the rest; A, `[BlockNotKept]` library iterators with narrow
     literals; B, Ruby methods that only yield; C, pass-on; D, literals that read the frame's
     locals - each with its matrix and an upper bound.
+    perf/stage0 measured it (`Src/IronRuby.Tests/Perf/BlockCostHarness.cs`, `IronRuby.Tests
+    /blockcost`): the steps the compiled code calls, timed alone and together against the same
+    calls end to end. A literal costs 50-54 ns over a stored Proc (`nyl` - `nyp`, `e1` - `ep`),
+    and the parked cycle with the locals tuple is 52: the literal's cost is the parked cycle,
+    about 16 ns of it its two atomics (one `CompareExchange` 10.4 ns here, a `Volatile.Write`
+    2.5). Passing any block and yielding costs another 55-63 ns, of which the yield is 16 and
+    the call site, rule and frames around it 35-45, which the convention does not reach.
+    Stage A pays most per round (up to ~50 ns of `e1`); the park's compare-exchange as a release
+    write is a step of its own, about 8 ns per call (perf/iter3 could not see it end to end).
 
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per

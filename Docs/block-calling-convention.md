@@ -1,6 +1,7 @@
 # A block that is not a Proc until it escapes: design
 
-Status: design only (round thirty-seven, perf/bcc). It follows `Docs/light-frame-literal-blocks.md`,
+Status: design (round thirty-seven, perf/bcc); stage 0, the attribution, done in perf/stage0 - see
+"Stage 0: measured" below, which replaces the arithmetic bounds of section 4. It follows `Docs/light-frame-literal-blocks.md`,
 whose three experiments removed the candidates one by one: the full call site costs nothing
 (perf/literalsite), publishing the frame's scope costs nothing (perf/procscope), and allocating the
 scope and the Proc costs what reusing them does (`IR_PARKED_SCOPES=0` leaves every time as it is). What
@@ -120,6 +121,68 @@ What each kind of callee does with it:
 | `yield` after the callee returned (a Proc kept and called) | only a materialized Proc can be kept; its scope's frame header says the method left |
 | `block_given?` in the callee | true: the descriptor is a block |
 | `Proc#==`, `object_id` of the block | only on a materialized Proc |
+
+## Stage 0: measured (perf/stage0)
+
+`Src/IronRuby.Tests/Perf/BlockCostHarness.cs`, run as `IronRuby.Tests /blockcost [N]` (not a test: the
+driver runs it only for that switch). It hosts a runtime, takes real objects from Ruby code - a literal's
+compiled block dispatcher, a method scope, its declaring scope and module - and times the runtime calls the
+compiled code makes, each alone and then together, Stopwatch over 3,000,000 iterations, best of five after
+a warm-up, Release net10.0; then the same calls end to end through Ruby. Two runs agree to a few ns.
+
+| step (ns per call) | alone |
+|---|---|
+| the locals tuple (`MakeLocalsStorage`) | 6 |
+| a scope made (`CreateMethodScopeLazy`, allocation and its collection) | 45-55 |
+| a Proc made (`new Proc`) | 16-17 |
+| **the parked cycle**: take the scope, reinitialize it, make the Proc again, stage, park | **45-48** |
+| - take and park with nothing between (`TakeParkedScope`, `BeginPark`, `EndPark`) | 23-25 |
+| - plus the scope reinitialized (`ReuseParkedScopeLazy`) | +6 |
+| - plus the Proc made again and staged (`InstantiateParkedBlock`, `StageParkedProc`) | +8 |
+| - the scope's fields cleared and set again, alone (`ClearCallState`, `Reinitialize`) | 7 |
+| - one `Interlocked.CompareExchange`, against a `Volatile.Write` | 10.4 against 2.5 |
+| the light callee's entry and exit (`EnterLightMethod`, `LeaveLightMethodFrame`) | 3 |
+| a yield to `{ 1 }` (`ReuseBfcForYield`, `Yield0`, the block, `LightMethodYield`) | 15-17 |
+| a `[BlockNotKept]` yield to `{ \|x\| }` (`CreateBfcForBlockNotKept`, `Yield`, `LeaveProcConverter`) | 15-17 |
+| `nyl`, all its steps together (parked on every call) | 68-73 |
+| `e1`, all its steps together | 52-53 |
+
+End to end, ns per call with the caller's loop: `nb0` (a call without a block) 42-53, `nyp` (`ny(&PY)`, a stored
+Proc) 98-101, `nyl` (`ny { 1 }`) 148-155; `e0` (no call) 24-26, `ep` (`a.each(&PE)`) 86-92, `e1` (`a.each { |x| }`)
+133-145. So:
+
+- **The literal itself costs 50-54 ns** (`nyl` - `nyp`, `e1` - `ep`), and the parked cycle plus the locals
+  tuple is 52: **the literal's cost is the parked cycle, entirely.** Of it, about 16 ns are its two atomics
+  (the take's and the park's), 6 the scope's reinitialization, 8 the Proc made again, 6 the tuple, and the
+  rest the cycle's checks and clearing.
+- **Passing any block and yielding to it costs another 55-63 ns** (`nyp` - `nb0`, `ep` - `e0`): the yield 16,
+  the callee's conversion 3, and 35-45 ns in the compiled code around them - the call site with a block, the
+  library rule's flow-control frame, the light frames' prologues and epilogues - which no runtime call
+  stands for and the harness cannot split further. CRuby's whole `ny { 1 }` is 14 ns over its `nb`.
+- **The sums hold**: `nyl`'s steps (68-73) are its end to end minus `nb0` (about 100) less those 35 ns; `e1`'s
+  (52) are its end to end minus `e0` less the 60 of calling `each` with a block at all.
+
+### The stages, by these numbers
+
+| stage | what it removes | measured bound per call | of |
+|---|---|---|---|
+| A: `[BlockNotKept]` iterators, narrow literals | the parked cycle and the tuple for those calls | up to ~50 ns (`e1` 133-145 -> ~85-90, `ep`'s) | CRuby 73 |
+| B: Ruby methods that only yield | the parked cycle, and the conversion | up to ~55 ns (`nyl` 148-155 -> ~95-100, `nyp`'s) | CRuby 50 |
+| C: pass-on | the 336 bytes and the unparked Proc of every pass-on | not measured here | |
+| D: literals that read locals | as A and B for those | as A and B | |
+| (none) the call with a block, the yield | 35-63 ns of compiled-code work around a block call | not reached by the convention: gap 1's call sites | |
+
+**Which pays most for one round's work: A.** It needs the descriptor only on the library side (a
+`CreateBfcForBlockNotKept` overload, the narrow shape's instantiation in the caller) and takes up to the
+same ~50 ns as B, which needs the light callee's entry, yield and `block_given?` to take a descriptor.
+
+**A step cheap to cut by itself, without the new convention: the park's atomic.** `EndPark` publishes the
+parked scope with `Interlocked.CompareExchange`; a `Volatile.Write` does the same job (a call that parked in
+the meantime loses its scope to the garbage; a taker's exchange still makes what it takes its own) and is
+8 ns cheaper per call of every method with a parked literal - about 15% of the literal's cost. perf/iter3
+tried exactly this and saw nothing end to end, where the host's noise was larger than 8 ns; the harness
+shows it. It is a round of its own (the take must stay atomic: two threads may reach for the same parked
+scope).
 
 ## 4. Stages
 
