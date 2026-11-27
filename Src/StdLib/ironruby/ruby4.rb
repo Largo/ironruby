@@ -246,6 +246,8 @@ module Enumerable
     end
     result
   end unless method_defined?(:filter_map)
+  # Enumerator#next walks a #filter_map with a cursor while this is the method (Enumerator.cs).
+  ::Enumerator.__iter_cursor_method__(self, :filter_map)
 
   # The optional Hash counts into it instead of into a fresh one, which also
   # means the frozen check happens before the first element is looked at.
@@ -487,6 +489,7 @@ module Enumerable
     each { |*values| yield(__enum_item__(values), memo) }
     memo
   end unless method_defined?(:each_with_object)
+  ::Enumerator.__iter_cursor_method__(self, :each_with_object)
 
   # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
   #
@@ -698,6 +701,8 @@ module Enumerable
     end
     __ir_same_method__(:collect_concat, :flat_map)
   end
+  ::Enumerator.__iter_cursor_method__(self, :flat_map)
+  ::Enumerator.__iter_cursor_method__(self, :collect_concat)
 
   def uniq(&block)
     seen = {}
@@ -5897,9 +5902,11 @@ class Enumerator
 
   # The fiber's half of #next (op 0: the values of the next step, taken), #peek
   # (op 1: the same values, left for the next #next; the caller copies them) - and
-  # the FiberError of a cursor another thread started (op 2).
+  # the FiberErrors of a cursor another thread started (op 2) and of one in use (op 3).
   def __iter_slow__(op)
     ::Kernel.raise(::FiberError, "fiber called across threads") if op == 2
+    # a cursor's #flat_map converting the block's answer, which calls back into this enumerator (op 3)
+    ::Kernel.raise(::FiberError, "attempt to resume the current fiber") if op == 3
     __iter_advance__
     values = @__peek__
     if op == 0

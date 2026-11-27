@@ -25,6 +25,10 @@ KINDS = {
   "gen_block_local"   => -> { e = Enumerator.new { |y| y << 1; y << 2 }; e.next },
   # a cursor: no fiber at all
   "map_local"         => -> { e = [1, 2, 3].map; e.next },
+  "hash_select_local" => -> { e = { a: 1, b: 2 }.select; e.next },
+  "filter_map_local"  => -> { e = [1, 2, 3].filter_map; e.next },
+  "flat_map_local"    => -> { e = [1, 2, 3].flat_map; e.next },
+  "ewo_local"         => -> { e = { a: 1, b: 2 }.each_with_object([]); e.next },
 }
 abort(KINDS.keys.join("\n")) unless ARGV[0]
 kind = ARGV[0]

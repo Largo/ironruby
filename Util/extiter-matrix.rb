@@ -626,3 +626,55 @@ probe("lz_frozen")       { e = [1].lazy.map { |x| x }.freeze; (e.next rescue $!.
 probe("lz_dup_fresh")    { e = [1, 2].lazy.map { |x| x * 5 }; d = e.dup; [d.next, e.next] }
 probe("lz_thread")       { e = [1, 2].lazy.map { |x| x }; e.next; Thread.new { begin; e.next; rescue => x; "#{x.class}: #{x.message}"; end }.value }
 probe("lz_raises")       { e = [1, 2].lazy.map { |x| x == 2 ? raise(ArgumentError, "two") : x }; [e.next, (e.next rescue "#{$!.class}: #{$!.message}"), e.next] }
+
+# --- Hash#select / #filter / #reject (a Hash), filter_map, flat_map, each_with_object taken with #next ---
+probe("hs_select")        { fed_result({ a: 1, b: 2, c: 3 }.select, [true, nil, 1]) }
+probe("hs_filter")        { fed_result({ a: 1, b: 2 }.filter, [false, :y]) }
+probe("hs_reject")        { fed_result({ a: 1, b: 2, c: 3 }.reject, [true, nil, false]) }
+probe("hs_no_feed")       { [stop_of({ a: 1 }.select).result, stop_of({ a: 1 }.reject).result, stop_of({}.select).result] }
+probe("hs_values")        { e = { a: 1 }.select; [e.peek, e.peek_values, e.next_values] }
+probe("hs_result_class")  { c = Class.new(Hash); h = c[a: 1]; r = stop_of(h.select).result; [r, r.class == Hash] }
+probe("hs_default")       { h = Hash.new(5); h[:a] = 1; r = stop_of(h.reject).result; [r, r.default, r[:zz]] }
+probe("hs_default_proc")  { h = Hash.new { |_, k| k }; h[:a] = 1; r = stop_of(h.select).result; [r.default_proc.nil?, r[:q]] }
+probe("hs_identity")      { h = {}.compare_by_identity; h["a"] = 1; e = h.select; e.next; e.feed true; r = stop_of(e).result; [r.compare_by_identity?, r] }
+probe("hs_add_during")    { h = { a: 1 }; e = h.select; e.next; h[:b] = 2; e.feed true; [(e.next rescue :stop), h] }
+probe("hs_delete_during") { h = { a: 1, b: 2 }; e = h.reject; e.next; h.delete(:b); [e.next, stop_of(e).result, h] }
+probe("hs_change_during") { h = { a: 1, b: 2 }; e = h.select; e.next; h[:b] = 9; e.feed true; [e.next, stop_of(e).result] }
+probe("hs_frozen_src")    { h = { a: 1 }.freeze; e = h.select; e.next; e.feed true; r = stop_of(e).result; [r, r.frozen?] }
+probe("hs_peek_feed")     { e = { a: 1, b: 2 }.select; e.peek; e.next; e.feed true; e.peek; e.next; [stop_of(e).result] }
+probe("hs_rewind")        { e = { a: 1, b: 2 }.select; e.next; e.feed true; e.rewind; e.next; stop_of(e).result }
+probe("hs_loop")          { e = { a: 1, b: 2, c: 3 }.select; loop { _, v = e.next; e.feed v.odd? } }
+probe("hs_singleton")     { h = { a: 1 }; def h.select; yield :own, 0; :own_r; end; e = h.select; [e.next, stop_of(e).result] }
+probe("hs_subclass_redef"){ c = Class.new(Hash) { def reject; return to_enum(:reject) unless block_given?; super.merge(extra: 1); end }; e = c[a: 1].reject; e.next; [stop_of(e).result] }
+probe("hs_with_index")    { e = { a: 1 }.select.with_index; [e.next, stop_of(e).result] }
+probe("hs_thread")        { e = { a: 1, b: 2 }.select; e.next; Thread.new { begin; e.next; rescue => x; "#{x.class}: #{x.message}"; end }.value }
+probe("fm_array")         { fed_result([1, 2, 3].filter_map, [:a, false, nil]) }
+probe("fm_hash")          { e = { a: 1, b: 2 }.filter_map; [e.next, e.peek_values].tap { e.feed :x; e.next; e.feed nil }.push(stop_of(e).result) }
+probe("fm_range")         { fed_result((1..3).filter_map, [1, nil, :c]) }
+probe("fm_no_feed")       { stop_of([1, 2].filter_map).result }
+probe("fm_redef")         { c = Class.new(Array) { def filter_map; return to_enum(:filter_map) unless block_given?; [:own]; end }; e = c.new([1]).filter_map; [e.next, stop_of(e).result] }
+probe("fm_module_redef")  { m = Module.new { def filter_map(&b) = b ? [:mod] : to_enum(:filter_map) }; c = Class.new(Array) { include m }; e = c.new([1]).filter_map; e.next; stop_of(e).result }
+probe("flm_array")        { fed_result([1, 2, 3].flat_map, [[:a, :b], 5, nil]) }
+probe("flm_concat")       { fed_result([1, 2].collect_concat, [[1, [2]], []]) }
+probe("flm_hash")         { e = { a: 1 }.flat_map; [e.next, e.next_values.size].tap { } rescue [$!.class] }
+probe("flm_hash_feed")    { e = { a: 1, b: 2 }.flat_map; e.next; e.feed [:x, :y]; e.next; [stop_of(e).result] }
+probe("flm_range")        { fed_result((1..2).flat_map, [[9], [8, 7]]) }
+probe("flm_to_ary")       { o = Object.new; def o.to_ary = [:t, :u]; fed_result([1].flat_map, [o]) }
+probe("flm_to_ary_nil")   { o = Object.new; def o.to_ary = nil; r = fed_result([1].flat_map, [o]); [r[0], r[1].size, r[1][0].equal?(o)] }
+probe("flm_bad_to_ary")   { o = Object.new; def o.to_ary = 5; e = [1, 2].flat_map; e.next; e.feed o; [(e.next rescue "#{$!.class}"), e.next, e.next, (e.next rescue $!.result)] }
+probe("flm_raise_to_ary") { o = Object.new; def o.to_ary = raise(IOError, "x"); e = [1].flat_map; e.next; e.feed o; [(e.next rescue "#{$!.class}: #{$!.message}"), e.next] }
+probe("flm_to_ary_next")  { e = [1, 2].flat_map; o = Object.new; o.define_singleton_method(:to_ary) { [e.peek] rescue [$!.class] }; e.next; e.feed o; [e.next, (e.next rescue $!.result)] }
+probe("flm_mm_to_ary")    { o = Class.new { def method_missing(n, *) = n == :to_ary ? [:mm] : super; def respond_to_missing?(n, p = false) = n == :to_ary || super }.new; fed_result([1].flat_map, [o]) }
+probe("flm_peek")         { e = [1, 2].flat_map; e.next; e.feed [:p]; [e.peek, e.peek, e.next, stop_of(e).result] }
+probe("flm_loop")         { e = [1, 2].flat_map; loop { x = e.next; e.feed [x, x] } }
+probe("ewo_array")        { m = []; e = [1, 2].each_with_object(m); [e.next, e.next_values, stop_of(e).result.equal?(m)] }
+probe("ewo_hash")         { e = { a: 1 }.each_with_object(:m); [e.next, e.peek_values.size].tap { }.push(stop_of({ a: 1 }.each_with_object(:m)).result) }
+probe("ewo_range")        { [drain((1..2).each_with_object(0)), stop_of((1..2).each_with_object(0)).result] }
+probe("ewo_struct")       { S4 = Struct.new(:w) unless defined?(S4); [drain(S4.new(5).each_with_object(nil))] }
+probe("ewo_feed")         { e = [1, 2].each_with_object([]); e.next; e.feed :ignored; e.next; stop_of(e).result }
+probe("ewo_append")       { a = [1]; e = a.each_with_object(:m); x = e.next; a << 2; [x, e.next, (e.next rescue :stop)] }
+probe("ewo_memo_mutate")  { e = [1, 2].each_with_object([]); e.next[1] << :x; [e.next, stop_of(e).result] }
+probe("ewo_singleton")    { a = [1]; def a.each_with_object(m); yield :own, m; :r; end; e = a.each_with_object(0); [e.next, stop_of(e).result] }
+probe("ewo_size")         { [[1, 2].each_with_object(0).size, { a: 1 }.each_with_object(0).size, (1..3).each_with_object(0).size] }
+probe("ewo_thread")       { e = [1, 2].each_with_object(0); e.next; Thread.new { begin; e.next; rescue => x; "#{x.class}: #{x.message}"; end }.value }
+probe("ewo_inspect")      { e = [1].each_with_object(:m); e.next; e.inspect }

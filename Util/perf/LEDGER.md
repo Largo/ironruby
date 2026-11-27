@@ -1563,12 +1563,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     and perf/extiter (Landed) defers that walk; perf/extiter2 (Landed) gives `map`, `collect`,
     `select`, `filter`, `find_all` and `reject` cursors of their own, and perf/extiter3 (Landed)
     `with_index`, `each_with_index` and `with_object` on an enumerator, and Enumerable#
-    each_with_index over a Hash, a Range or a Struct. Still on a fiber, 5-16 us of process CPU
-    per `next` against 0.25-0.37: `each_with_object` and `with_object` over a source with no
-    cursor, `filter_map` and `flat_map` (the prelude's), Hash#select and #reject (Hash's own, whose
-    result is a Hash), `Enumerator::Lazy`, `Enumerator.produce` (generators of the prelude, which
-    run Ruby code between two values: a cursor would call blocks under its lock) and
-    `Enumerator.new`. A raw fiber round trip is 2.3 us of wall clock and 4.7-6 us of CPU (two
+    each_with_index over a Hash, a Range or a Struct, and perf/extiter5 (Landed) Hash#select,
+    #filter and #reject, `filter_map`, `flat_map` / `collect_concat` and `each_with_object`.
+    Still on a fiber, 5-16 us of process CPU per `next` against 0.25-0.40: any of these over a
+    source with no cursor (an IO, a custom #each, a generator), `Enumerator::Lazy`,
+    `Enumerator.produce` (generators of the prelude, which run Ruby code between two values: a
+    cursor would call blocks under its lock) and `Enumerator.new`. A raw fiber round trip is 2.3 us of wall clock and 4.7-6 us of CPU (two
     threads spinning), so the prelude's machinery around it is not where the time is.
     **An abandoned fiber-backed enumerator** costs 1.1-1.6 ms of process CPU to make and take one
     value from (starting its thread), and its thread and about 60 KB stay until the handle's
@@ -1632,6 +1632,46 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/extiter5 (2026-11-27) - Hash#select / #filter / #reject, `filter_map`, `flat_map` and
+  `each_with_object` take `next` on a cursor (gap 35)** - not gated. Base 1fca3c7 (the round-38
+  branch at b887bc1 with perf/extiter4). Hash's own #select, #filter and #reject copy the
+  receiver when the iteration starts, as IDictionaryOps.Filter and MRI's rb_hash_select do (a
+  plain Hash with its compare_by_identity, the entries with their hash codes), walk the copy with
+  key and value as the two values of a step, and drop a pair the fed answer does not keep: the
+  copy is StopIteration#result. The prelude's Enumerable#filter_map (the true answers),
+  #flat_map / #collect_concat (an answer's elements when it is an Array or Array.try_convert
+  makes one, MRI's rb_check_array_type; the answer itself otherwise), and #each_with_object (the
+  memo beside each step, `IndexCursor`), and Array's own #each_with_object, over any receiver
+  whose #each a cursor walks, while they are the methods registered with `__iter_cursor_method__`.
+  #flat_map's conversion runs Ruby code, so a cursor whose answer does (`ResumesWithRubyCode`)
+  resumes before the cursor's lock is taken, on the owning thread, where MRI's flat_map_i
+  converts; an error ends that iteration and the next #next starts again (next_init), and a
+  conversion that calls back into the same enumerator raises FiberError "attempt to resume the
+  current fiber", as MRI's does (the fiber path answers instead: the base differs from CRuby in
+  that one probe). `next`, `peek`, `next_values` and `peek_values` take a second call-site
+  storage for the conversion: a storage holds one site. A trap on the way: the handler around
+  that Resume, written in CursorStep, made every StopIteration a cursor throws 15% slower
+  (`ary_small` 1251 -> 1435, `rescue_end` 3853 -> 4483 ns, eight rounds) - a handler in the
+  method an exception is thrown from cost about 600 ns a throw - and in a NoInlining method of
+  its own it is level (1.01, 0.99, 1.02). `IR_FAST_NEXT=0` leaves them to the fiber. `ab.rb -r
+  6`, ns per `next`, CRuby / base / off / new: a Hash's `select` with `feed` 314 / 14113 / 14310
+  / 257, `reject` 279 / 10871 / 9841 / 194, `[1000].filter_map` 240 / 7743 / 5305 / 105,
+  `flat_map` 312 / 8820 / 5663 / 132, `each_with_object` 255 / 5419 / 5746 / 155, a Hash's 340
+  / 10319 / 9376 / 228; the earlier rounds' shapes level with base (`lazy_next` 0.96 of off;
+  `generator` read 2.23 of off after shapes that use a fiber only when switched off, and 0.93 of
+  base alone). Abandoned after one `next` (`extiter-abandoned.rb`, 10,000 each): 1.04-1.31 ms
+  and a thread each (reclaimed after GC: these were detached Enumerators already), 330-340 MB ->
+  8-20 us, no thread, 139-147 MB. `Util/extiter-matrix.rb` (312 probes, 50 new: results with and
+  without feed, the result Hash's class, default and compare_by_identity, a frozen receiver, the
+  receiver changed during the iteration, peek, next_values, rewind, loop, with_index, to_ary, a
+  #to_ary that answers nil, raises, returns an Integer or calls back in, method_missing, a
+  subclass's, a module's and a singleton's method, threads, size, inspect) prints CRuby's output
+  on new; base and off differ from it in the call-back probe only. enum-next-, block-loop-,
+  hash-order-, raise-, full-message-, enum- and enumerable2-matrix the same on base, new and off.
+  spec/core/enumerator, hash, enumerable and kernel/loop_spec: 1,541 examples, the same one error
+  in all three (Hash.try_convert's `into`/`to`); 117 named IronRuby.Tests pass (three verbose
+  runs).
 
 - **perf/extiter4 (2026-11-26) - an abandoned lazy enumerator's fiber is reclaimed: its #next walks
   a copy (gap 35)** - not gated. Base 3bf570d (the round-37 branch at 79a2c30 with
