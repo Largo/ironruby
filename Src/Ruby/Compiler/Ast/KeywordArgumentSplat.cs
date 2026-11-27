@@ -79,6 +79,17 @@ namespace IronRuby.Compiler.Ast {
             return new KeywordArgumentSplat(hash, converted, keywords);
         }
 
+        /// <summary>
+        /// `f(..., **h)` with h a variable, a constant or a literal (MethodCall.IsSideEffectFree): reading it runs no Ruby code,
+        /// so a positional splat before it need not be copied before it is read (Arguments.TransformToCallInternal).
+        /// </summary>
+        internal bool IsLoneSideEffectFree {
+            get {
+                return _converted != null && _keywords == null &&
+                    Argument is SimpleAssignmentExpression assignment && MethodCall.IsSideEffectFree(assignment.Right);
+            }
+        }
+
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             if (_converted != null) {
                 return MSA.Expression.Coalesce(

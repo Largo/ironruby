@@ -19,12 +19,19 @@ using MSA = System.Linq.Expressions;
 using System.Collections;
 using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
+using IronRuby.Builtins;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 	
 namespace IronRuby.Compiler.Ast {
 
     public class Arguments {
         internal static readonly Arguments Empty = new Arguments();
+
+        /// <summary>
+        /// IR_KWSPLAT_BY_REFERENCE=0: `f(*a, **h)' copies a and appends h's one-or-zero element array to the copy, as it
+        /// used to (see TransformToCallInternal).
+        /// </summary>
+        internal static readonly bool KeywordSplatByReference = System.Environment.GetEnvironmentVariable("IR_KWSPLAT_BY_REFERENCE") != "0";
 
         private readonly Expression/*!*/[]/*!*/ _expressions;
         
@@ -92,6 +99,27 @@ namespace IronRuby.Compiler.Ast {
                 var method = gen.CurrentMethod;
                 fresh = method != null && gen.CurrentBlock == null && ReferenceEquals(_expressions[firstSplatted], method.ForwardedRestSplat);
                 return _expressions[firstSplatted].TransformRead(gen);
+            } else if (splattedCount == 2 && firstSplatted == _expressions.Length - 2 && KeywordSplatByReference &&
+                !(_expressions[firstSplatted] is KeywordArgumentSplat) &&
+                _expressions[firstSplatted + 1] is KeywordArgumentSplat keywords && keywords.IsLoneSideEffectFree) {
+                // `f(*a, **h)', the forward of `(*a, **h)' and `(*, **)': CRuby 4.0 passes the list itself (`splatarray false'
+                // when the keyword splat is a variable) and an empty or nil h as no argument at all. So the list is not copied:
+                // it is what the call splats when h passes nothing, and `[*a, h]' - one array, of the size it ends up - when
+                // it passes a hash. UnsplatArguments copied the list, made a one-or-zero element array of the hash and appended
+                // that, three arrays for a call that passed none. Not fresh: a rest parameter of the callee copies the list as
+                // for `f(*a)'. IR_KWSPLAT_BY_REFERENCE=0 goes through UnsplatArguments.
+                var list = gen.CurrentScope.DefineHiddenVariable("#splat", typeof(IList));
+                var hash = gen.CurrentScope.DefineHiddenVariable("#kwsplat", typeof(Hash));
+                return MSA.Expression.Block(
+                    MSA.Expression.Assign(list, AstUtils.Convert(_expressions[firstSplatted].TransformRead(gen), typeof(IList))),
+                    MSA.Expression.Assign(hash, keywords.TransformToArgument(gen)),
+                    MSA.Expression.Condition(
+                        MSA.Expression.ReferenceEqual(hash, AstUtils.Constant(null)),
+                        list,
+                        AstUtils.Convert(Methods.SplatAppendItem.OpCall(list, hash), typeof(IList)),
+                        typeof(IList)
+                    )
+                );
             } else if (splattedCount >= 1) {
                 fresh = true;
                 return UnsplatArguments(gen, firstSplatted);

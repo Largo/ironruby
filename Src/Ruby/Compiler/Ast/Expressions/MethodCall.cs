@@ -258,7 +258,7 @@ namespace IronRuby.Compiler.Ast {
         /// CRuby 4.0 passes such a call's trailing splat uncopied (prism_compile.c, pm_setup_args_dup_rest_p, which also counts
         /// a few more shapes, such as `[]', that no #to_proc could tell apart).
         /// </summary>
-        private static bool IsSideEffectFree(Expression/*!*/ expression) {
+        internal static bool IsSideEffectFree(Expression/*!*/ expression) {
             switch (expression) {
                 case LocalVariable _:
                 case InstanceVariable _:
