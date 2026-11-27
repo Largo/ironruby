@@ -5909,11 +5909,14 @@ class Enumerator
 
   # The fiber's half of #next (op 0: the values of the next step, taken), #peek
   # (op 1: the same values, left for the next #next; the caller copies them) - and
-  # the FiberErrors of a cursor another thread started (op 2) and of one in use (op 3).
+  # the FiberErrors of a cursor another thread started (op 2) and of one in use (op 3), and the
+  # end of a cursor's iteration raised as the fiber's is (op 4).
   def __iter_slow__(op)
     ::Kernel.raise(::FiberError, "fiber called across threads") if op == 2
     # a cursor's #flat_map converting the block's answer, which calls back into this enumerator (op 3)
     ::Kernel.raise(::FiberError, "attempt to resume the current fiber") if op == 3
+    # the end of a cursor's iteration, when StopIteration is made with the program's #new or #initialize (op 4)
+    __iter_stop__ if op == 4
     __iter_advance__
     values = @__peek__
     if op == 0
