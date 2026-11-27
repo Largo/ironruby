@@ -6485,6 +6485,32 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/dotsfwd (/perf-frame, 2026-11-27) - `...` forwarding without the rest Array: stopped
+  before building, the forwarded values are reachable after the call** (no code; on bbe4b1a,
+  4320d4a with claude/perf-lsite and perf/delegate's shape files). The target was the callee's
+  rest taking the caller's anonymous Array, sound only if nothing can name it (the gate turned
+  off perf/forward's ForwardedRest for a named rest that eval and a TracePoint binding could read).
+  - **What CRuby 4.0 does** (`Util/anon-forward-matrix.rb`, new). Nothing *names* them:
+    `local_variables`, `binding.local_variables` and a TracePoint `:return` binding's
+    `local_variables` are empty, `binding.local_variable_get(:"...")` and `(:*)` raise NameError.
+    But the method's own body can forward them again after the call, and must then pass what it
+    was given: a second `raw(...)`, `raw(*)` and `raw(**)` after a callee that grew its rest or
+    added to its kwrest see the original values; so do `eval("raw(...)")`, `binding.eval`,
+    `instance_eval`, `send(:eval, ...)`, `eval` through an alias (`alias_method :e2, :eval`) and a
+    TracePoint `:return` hook's `binding.eval("raw(...)")`; `eval("raw(*)")`, `("raw(**)")`,
+    `("raw(&)")` re-forward the anonymous ones. IronRuby prints the same in all of these (as built,
+    `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`), so there is no difference to fix.
+  - **So sharing is not sound.** A callee that keeps or mutates its rest would change what a later
+    forward sees, and a static guard ("forwards once, no eval in the body") cannot see an eval
+    reached through `send`, an alias or a TracePoint hook. Per the brief, stopped here.
+  - **What the 60 ns are not.** `...` costs IronRuby 111.7 ns against fixed 51.9 (perf/nilblock),
+    CRuby 45.7 against 37.3: CRuby's forward costs ~8 ns, IronRuby's ~60. The copy a sound forward
+    keeps is one Array; most of the 60 is the rest Array built at the wrapper's entry (which an
+    eval may reach, so it stays) and the splat call's own dispatch (the rule unpacking it, the
+    callee's entry) - machinery that can be made cheaper without sharing anything: for a callee
+    that takes the elements positionally (`two(a, b)`) no second Array is made at all, so the
+    question there is only what the splat site costs. That is the next step for `...`.
+
 - **perf/nilblock (/perf-frame, 2026-11-27) - a nil block parameter or argument: measured by
   clock, no cost to remove** (no code; built on d206f90, which is 4320d4a with claude/perf-lsite).
   perf/delegate (3ea2ea5) counted a nil `&k` parameter or `&nil` argument at 440-600 instructions
