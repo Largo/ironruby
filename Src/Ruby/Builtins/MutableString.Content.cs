@@ -130,22 +130,44 @@ namespace IronRuby.Builtins {
                 return this;
             }
 
+            // The switched content is published only if this one is still the string's (MutableString.PublishSwitch); a
+            // mutable content makes the conversion holding itself. Either way the caller gets it: a reader reads it, and a
+            // writer that writes to it finds it is not the string's content if it was not published, and writes to that.
             protected BinaryContent/*!*/ WrapContent(byte[]/*!*/ bytes, int count) {
                 BinaryContent result = new BinaryContent(bytes, count, _owner);
-                _owner.SetContent(result);
+                _owner.PublishSwitch(this, result);
                 return result;
             }
             
             protected CharArrayContent/*!*/ WrapContent(char[]/*!*/ chars, int count) {
                 var result = new CharArrayContent(chars, count, _owner);
-                _owner.SetContent(result);
+                _owner.PublishSwitch(this, result);
                 return result;
             }
 
             protected StringContent/*!*/ WrapContent(string/*!*/ str) {
                 var result = new StringContent(str, _owner);
-                _owner.SetContent(result);
+                _owner.PublishSwitch(this, result);
                 return result;
+            }
+
+            /// <summary>
+            /// Sets the owner's encoding holding this content, if it is still the owner's - and, with
+            /// <paramref name="bytesOnly"/>, if it holds bytes; false otherwise (MutableString.ForceEncoding). A reader's switch
+            /// of representation, made holding the content, then either comes before (and this one is no longer current) or
+            /// after, with the new encoding.
+            /// </summary>
+            internal virtual bool TrySetOwnerEncoding(RubyEncoding/*!*/ encoding, bool bytesOnly) {
+                if (bytesOnly || !IsCurrent) {
+                    return false;
+                }
+                _owner.SetEncodingHeld(encoding);
+                return true;
+            }
+
+            /// <summary>Whether this content, held for a write, is still its string's (a content of no string is).</summary>
+            protected bool IsCurrent {
+                get { return _owner == null || _owner.IsCurrentContent(this); }
             }
 
             /// <summary>
