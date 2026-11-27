@@ -3997,11 +3997,10 @@ class String
         when "b" then out << "\b"
         when "a" then out << "\a"
         when "e" then out << "\e"
-        when "s" then out << " "
         when "\\" then out << "\\"
         when '"' then out << '"'
         when "#" then out << "#"
-        when "0" then out << "\0"
+        # (not \s nor \0: #dump writes neither, and MRI's undump passes them through as they are)
         when "x"
           hex = body[(i + 1), 2]
           ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/

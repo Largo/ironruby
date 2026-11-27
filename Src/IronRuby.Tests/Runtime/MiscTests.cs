@@ -8944,5 +8944,29 @@ require 'ruby4'
 ""ab"" C@* [97]
 ");
         }
+
+        /// <summary>
+        /// String#undump passes \s and \0 through as they are, as MRI's str_undump does with every escape #dump does not write.
+        /// Util/string-methods-matrix.rb.
+        /// </summary>
+        public void String_UndumpUnknownEscapes1() {
+            TestOutput(@"
+require 'ruby4'
+['""\\s""', '""\\0""', '""\\e""', '""\\a\\b\\t\\n\\v\\f\\r""', '""\\q""', '""\\1""', '""\\x41""', '""\\u0041""', '""\\#""', '""\\""""'].each { |s| p((s.undump rescue $!)) }
+p ""a\0b\e あ"".dump.undump == ""a\0b\e あ""
+", @"
+""\\s""
+""\\0""
+""\e""
+""\a\b\t\n\v\f\r""
+""\\q""
+""\\1""
+""A""
+""A""
+""#""
+""\""""
+true
+");
+        }
     }
 }
