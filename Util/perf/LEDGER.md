@@ -1166,6 +1166,21 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     made twice cost. Nothing was built; the about 800 methods of the census's regex lines stay
     out. A step on them has to make the second call or the late scope cheaper (perf/lsite and
     perf/lsite2 tried the second and were rejected), not the light entry.
+    Round thirty-seven (perf/lazyproc, measured and designed, not built;
+    `Docs/light-frame-literal-blocks.md`): a literal block is this gap's commonest case. A light
+    method calling `nb { }` is 116-123 ns against `nb(&P)`'s 52-62 and CRuby's 35-40. About 15 ns
+    of the difference is the Proc (`nbl` against `nbx`); about 45 is that, in a body with a
+    literal, a call with a block leaves the light site for the full one with the scope made on
+    demand (`blockPass = ... && !BlockLiterals`): the same `nb(&P)` is 108 in a body that also has
+    a literal (`nbx`) and 62 in one without, while a call without a block there stays at 56
+    (`nby`). How those 45 ns divide between the full site, the scope's publication (the frame's
+    exit with a scope, the parking around it) and the object is not measured - no profiler on
+    this host - and decides which of the doc's two changes to build: A, a literal that reads no
+    enclosing local and has no `return`, `binding` or nested literal called through the light
+    site; B, its Proc's scope made but not published as the frame's (no slow exit, no parking,
+    the frame's calls still light), with one scope per invocation and the frame's exit marking it
+    left when the Proc escaped.
+
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
