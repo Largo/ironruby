@@ -328,22 +328,48 @@ namespace IronRuby.Compiler.Ast {
             // n compiled methods was thrown n + 1 times. Any other exception now goes through with its
             // CLR trace growing as it passes, and the frame that finally handles it - a rescue, a block,
             // an interpreted frame, the top level - captures the same backtrace from there.
+            //
+            // The handler does not return from the method itself: it keeps the value and the method returns it after the try,
+            // once the finally has run, as it would have. A jump out of a catch handler through a finally makes the .NET JIT
+            // leave every cast of the whole method to the runtime's helper (CORINFO_HELP_CHKCASTCLASS, ~17 instructions, for
+            // every closure constant a compiled body loads), even to a sealed class (perf/castcheck; IR_UNWIND_RETURN=0 jumps).
+            MSA.ParameterExpression unwound = null, unwinding = null;
+            MSA.Expression handlerResult;
+            if (UnwindReturnAfterTry) {
+                unwound = Ast.Variable(typeof(object), "#unwound");
+                unwinding = Ast.Variable(typeof(bool), "#unwinding");
+            }
+            unwinder = Ast.Parameter(typeof(MethodUnwinder), "#u");
+            handlerResult = (unwound != null)
+                ? (MSA.Expression)Ast.Block(
+                    Ast.Assign(unwound, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder)),
+                    Ast.Assign(unwinding, AstUtils.Constant(true)),
+                    AstUtils.Empty()
+                )
+                : Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder));
             MSA.Expression body = AstUtils.Try(
                 countCall,
                 recordRefinements,
                 profileStart,
                 optionalsInitialization,
                 statements
-            ).Filter(unwinder = Ast.Parameter(typeof(MethodUnwinder), "#u"),
+            ).Filter(unwinder,
                 // a light frame makes a scope for the filter only when a MethodUnwinder passes:
                 Methods.IsMethodUnwinderTargetFrame.OpCall((light != null) ? Ast.Coalesce(scopeVariable, light.MakeScope) : (MSA.Expression)scopeVariable, unwinder),
-                Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
+                handlerResult
             ).Finally(  
                 // leave frame:
                 (light != null) ? Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
                 Ast.Empty(),
                 profileEnd
             );
+            if (unwound != null) {
+                body = Ast.Block(new[] { unwound, unwinding },
+                    Ast.Assign(unwinding, AstUtils.Constant(false)),
+                    body,
+                    Ast.IfThen(unwinding, Ast.Return(gen.ReturnLabel, unwound))
+                );
+            }
 
             // TracePoint :return: falling off the end reports the line of `end'; an explicit
             // `return' reports its own line and jumps past this hook (see ReturnStatement).
@@ -454,6 +480,12 @@ namespace IronRuby.Compiler.Ast {
         /// IR_LIGHT_FRAMES=why also says, for each method that is not one, why not (WhyNotLightFrameCandidate).
         /// </summary>
         internal static readonly bool LightFramesEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") != "0";
+
+        /// <summary>
+        /// IR_UNWIND_RETURN=0: a method's frame returns the value a `return' from one of its blocks carries from inside its
+        /// handler, through its finally, as it used to (see TransformBody: that jump disables the JIT's inline casts).
+        /// </summary>
+        internal static readonly bool UnwindReturnAfterTry = Environment.GetEnvironmentVariable("IR_UNWIND_RETURN") != "0";
 
 
         /// <summary>
