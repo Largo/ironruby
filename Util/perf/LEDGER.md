@@ -1771,6 +1771,18 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     perf/strswitch (see Landed) took cause 2: no write is lost to a reader's switch and no
     writer fails on one (21 and 25 rows of 252 on master, 0 and 0 now, 20 runs). Causes 1 and 3
     remain: 89 rows of readers that answer wrongly or raise.
+    What closing them takes (2026-11-27, analysis, not tried): holding the content inside each
+    content call stops a single call's torn read (the IndexOutOfRange and RangeError rows) for a
+    compare-exchange per call, about +1-2% instructions and +5-8% time on a short operation (the
+    cost perf/strcow measured for a held slice), but not the wrong answers: most String methods make
+    several content calls - end_with? reads the byte count, then compares the tail - and a writer
+    runs between them, so the answer mixes two states. Matching CRuby needs each whole String method
+    atomic: a lock per string (a Monitor on the MutableString, no new field) around every String
+    library method, in the call and dispatch layer and in the method JIT's inlined String
+    operations, with methods that take a block left out (CRuby lets other threads run between
+    yields too, and holding a lock across user code can deadlock). Estimated 10-20 ns a call,
+    +15-40% on a short String operation - not measured. Two-string operations take both locks in a
+    fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
 
