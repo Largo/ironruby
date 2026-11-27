@@ -119,7 +119,8 @@ namespace IronRuby.Runtime {
             long traceStart = StartupTrace.Now();
             try {
                 if (noAdaptiveCompilation) {
-                    return lambda.Compile();
+                    // as the light compiler's compilation would (CompiledConstantsRewriter)
+                    return CompiledConstantsRewriter.Rewrite(lambda).Compile();
                 }
 
                 return lambda.LightCompile(compilationThreshold);
