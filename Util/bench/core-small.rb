@@ -102,6 +102,9 @@ class H
   def m87; (1..4).sort_by { |x| -x }.size; end
   def m88; @h.max_by(2) { |k, v| v }.size; end
   def m89; @h.sort_by { |pair| pair[1] }.size; end
+  def m90; @h.min_by { |k, v| v }.size; end
+  def m91; @h.filter_map { |k, v| v if v > 2 }.size; end
+  def m92; @h.flat_map { |k, v| [v] }.size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 # INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
@@ -209,3 +212,6 @@ t("rstrip", N) { |n| i = 0; s = 0; while i < n; s += h.m86; i += 1; end; s }
 t("range_sort_by", N) { |n| i = 0; s = 0; while i < n; s += h.m87; i += 1; end; s }
 t("hash_max_by_n", N) { |n| i = 0; s = 0; while i < n; s += h.m88; i += 1; end; s }
 t("hash_sort_by_pair", N) { |n| i = 0; s = 0; while i < n; s += h.m89; i += 1; end; s }
+t("hash_min_by", N) { |n| i = 0; s = 0; while i < n; s += h.m90; i += 1; end; s }
+t("hash_filter_map", N) { |n| i = 0; s = 0; while i < n; s += h.m91; i += 1; end; s }
+t("hash_flat_map", N) { |n| i = 0; s = 0; while i < n; s += h.m92; i += 1; end; s }

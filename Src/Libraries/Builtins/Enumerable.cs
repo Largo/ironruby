@@ -57,6 +57,40 @@ namespace IronRuby.Builtins {
             return own.Found && builtin.Found && ReferenceEquals(own.Info, builtin.Info);
         }
 
+        // IR_HASH_WALK=0 keeps a Hash on the generic walk (__plain_each__? answers for Arrays only).
+        private static readonly bool _hashWalk = Environment.GetEnvironmentVariable("IR_HASH_WALK") != "0";
+
+        /// <summary>
+        /// True for an Array as <see cref="IsPlainList"/> says, and for a Hash whose #each is the
+        /// built-in Hash#each: that one yields each entry once, as one [key, value] Array to a block
+        /// that takes one parameter or a rest (IDictionaryOps.Each splits the pair only for a block
+        /// that takes two or more). The prelude's Enumerable methods written in Ruby then walk it
+        /// with a one-value block, `each { |item| }`, and get the same item that a `|*values|` block
+        /// and __enum_item__ make, without the Array and the call per entry. MRI's Enumerable
+        /// methods call #each with no refinements in scope, and so does the prelude: a refined
+        /// Hash#each is not seen by either.
+        /// </summary>
+        [RubyMethod("__plain_each__?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsPlainEach(RubyContext/*!*/ context, object self) {
+            if (!(self is Hash)) {
+                return IsPlainList(context, self);
+            }
+            if (!_hashWalk) {
+                return false;
+            }
+            RubyClass hashClass = context.GetClass(typeof(Hash));
+            if (!IListOps.IsBuiltinMethod(hashClass, "each")) {
+                return false;
+            }
+            RubyClass cls = context.GetImmediateClassOf(self);
+            if (ReferenceEquals(cls, hashClass)) {
+                return true;
+            }
+            var own = cls.ResolveMethod("each", VisibilityContext.AllVisible);
+            var builtin = hashClass.ResolveMethod("each", VisibilityContext.AllVisible);
+            return own.Found && builtin.Found && ReferenceEquals(own.Info, builtin.Info);
+        }
+
         // Enumerable#group_by over a plain list (see IsPlainList): the prelude's loop with the
         // result Hash filled in directly, as MRI's group_by_i does. Array#each yields one value
         // per element, so enum_yield yields it plainly: a lambda is not forced to take an Array
