@@ -1,7 +1,8 @@
 # A literal block in a light frame: what it costs, and a Proc without a method scope
 
 Status: measured and designed in round thirty-seven (perf/lazyproc); change A built in perf/literalsite
-(`IR_LIGHT_LITERAL_CALLS`, on), which also attributed the cost - see "What A measured" below. B is not built. It is the remainder of
+(`IR_LIGHT_LITERAL_CALLS`, on), which also attributed the cost - see "What A measured" below. B was
+prototyped in perf/procscope and rejected by its measurement - see "What B's prototype measured". It is the remainder of
 gap 13 of `Util/perf/LEDGER.md` (the fixed cost of calling an iterator) and a case of gap 16 (a light
 frame that ends up making its scope).
 
@@ -56,6 +57,36 @@ changes nothing (`nbl`); where it does not, A takes the whole 45 ns (`nbx` falls
 no longer makes the scope (208 -> 24 bytes a call with parking off). The 45 ns is the scope being made and
 published: the object, `LeaveLightMethodFrameSlow`, the parking around it. That is B's ground, and B is
 what the literal's own cost (`nbl`, `each1`) needs.
+
+## What B's prototype measured (perf/procscope)
+
+A prototype of B, for timing only (`IR_PROC_SCOPE=1`, not kept): a narrow literal's Proc made over a scope
+held in `#proc-scope`, made by the same code as the frame's scope on demand but never published as the
+frame's (`#scope` stays null, so the frame leaves through the inlined fast path and does not park; the
+frame's own scope on demand takes `#proc-scope` if it exists). Six alternating rounds, ns per call:
+
+| shape | off | prototype | CRuby |
+|---|---|---|---|
+| `nbl`: `nb { }` (the callee ignores the block) | 120 | 120 | 40 |
+| `nyl`: `ny { 1 }` (the callee yields) | 164 | 169 | 54 |
+| `eachl`: `a.each { }` | 148 | 160 (1.08) | 70 |
+| `map1`: `a.map { \|x\| x + 1 }` | 193 | 198 | 117 |
+
+**Publishing costs nothing measurable** (`nbl`, where neither arm parks: 120 and 120), and where the scope
+is parked today the unpublished one cannot be, so it is allocated on every call and is slower (`eachl`).
+With A's result: neither the full site nor the publication is the literal's cost. It is the scope object
+and the Proc themselves - made, or taken parked and made again, which cost the same (`IR_PARKED_SCOPES=0`
+leaves every shape's time as it is) - and, for a callee that yields, the conversion and the yield
+(`nyl` 164 against CRuby's 54). What would take it is no heap scope and no heap Proc for a literal that
+does not escape: a block passed as the frame's locals and code, as CRuby passes a block (a pointer to the
+caller's frame), with the scope and Proc made when something asks for them - the TruffleRuby way, which in
+IronRuby means a block calling convention that is not a Proc. That is a project, not a step.
+
+A finding on the side: **parking never works for a literal given to a method that ignores its block**
+(`def nb; 1; end; nb { }`: 288 bytes a call with parking on, against 48 for `ny { }`, which yields). Such a
+callee never converts the block, as far as the bytes show, so its Proc is not marked reusable and staging
+fails on every call (not traced further). The shape is rare in real code; noted for whoever next touches
+the parking.
 
 ## How a literal reaches its method today
 

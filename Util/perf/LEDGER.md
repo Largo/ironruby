@@ -1186,6 +1186,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the full site costs about nothing, and the literal's own ~60 ns is the scope made and
     published (the object, `LeaveLightMethodFrameSlow`, the parking around it) plus the Proc:
     change B is what is left for `nb { }` and `a.each { }`.
+    perf/procscope then prototyped B for timing (not kept, see Rejected) and it measured nothing
+    to take: publishing the scope costs nothing (`nb { }` 120 -> 120 ns), and an unpublished
+    scope cannot be parked, so `a.each { }` got slower (148 -> 160). The literal's cost is the
+    scope object and the Proc themselves, made or taken parked - which cost the same - and for a
+    callee that yields the conversion and the yield (`ny { 1 }` 164 against CRuby's 54). No step
+    of the frame's bookkeeping is left to cut; what would take it is a block that is not a heap
+    Proc over a heap scope until it escapes, a calling convention of its own.
 
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
@@ -7407,6 +7414,23 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/procscope (round thirty-seven, 2026-11-28) - a literal's Proc over a scope made but not
+  published as the frame's (change B of `Docs/light-frame-literal-blocks.md`): prototyped, measured,
+  not kept** (gaps 16 and 13). A timing prototype (`IR_PROC_SCOPE=1`): for a body whose literals are all
+  narrow, the literal's instantiation took `#proc-scope ?? (#proc-scope = MakeScope)` instead of the
+  frame's scope made on demand, and the frame's own scope on demand took `#proc-scope` if it existed, so
+  `#scope` stayed null, the frame left through the inlined fast path and did not park. Six alternating
+  rounds, ns per call, off against prototype (CRuby): `nb { }` 120 / 120 (40), `ny { 1 }` 164 / 169 (54),
+  `a.each { }` 148 / 160, 1.08 (70), `a.map { |x| x + 1 }` 193 / 198 (117), controls level. Publishing
+  is not the cost, and an unpublished scope gives up parking. With perf/literalsite (the site is not it
+  either), what a literal costs its caller is the scope object and the Proc themselves; the frame's
+  bookkeeping around them has nothing left to cut. So the escape hazards the round was to build for (a
+  LightScopeRequired after the Proc was made, binding in a callee after an escape, the kept Proc called
+  after the return, two literals sharing `#proc-scope`, threads, a TracePoint enabled mid-call) got no
+  matrix: the prototype ran only `Util/literal-block-light-matrix.rb` (CRuby's output) as a smoke test.
+  Found on the side: `def nb; 1; end; nb { }` allocates 288 bytes a call with parking on, where a callee
+  that yields gets 48: a literal given to a method that never touches its block is never parked.
 
 - **perf/dotsfwd (/perf-frame, 2026-11-27) - `...` forwarding without the rest Array: stopped
   before building, the forwarded values are reachable after the call** (no code; on bbe4b1a,

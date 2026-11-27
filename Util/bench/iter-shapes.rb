@@ -17,6 +17,8 @@ $stdout.sync = true
 P = proc { }
 class O
   def nb; 1; end
+  def ny; yield; end
+  def nyl(a) = ny { 1 }
   def nb0(a) = nb
   def nbp(a) = nb(&P)
   def nbl(a) = nb { }
@@ -87,3 +89,4 @@ t("eachl", N)  { |n| i = 0; s = 0; while i < n; s += o.eachl(a1); i += 1; end; s
 t("nbx", N)    { |n| i = 0; s = 0; while i < n; s += o.nbx(a1); i += 1; end; s }
 t("nby", N)    { |n| i = 0; s = 0; while i < n; s += o.nby(a1); i += 1; end; s }
 t("nbz", N)    { |n| i = 0; s = 0; while i < n; s += o.nbz(a1); i += 1; end; s }
+t("nyl", N)    { |n| i = 0; s = 0; while i < n; s += o.nyl(a1); i += 1; end; s }
