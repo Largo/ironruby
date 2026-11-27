@@ -248,7 +248,19 @@ namespace IronRuby.Runtime.Jit {
             if (compiled.GetType() == _generic.GetType()) {
                 Volatile.Write(ref _compiledGeneric, compiled);
             }
+            Volatile.Write(ref _compiledAt, Stopwatch.GetTimestamp());
             _genericCompiled = true;
+            lock (_sync) {
+                if (_genericCostInterpreted) {
+                    // The generic cost was the interpreter's - a probe waits only MaxProbeDelays windows for the compile,
+                    // which go by in microseconds when every other call deopts - and many times the compiled body's: it
+                    // made an entry that deopts on every other call look worth keeping (4 us against 0.16, perf/jitprobe).
+                    // Forget it, so that the next window times the compiled body (Probe).
+                    _genericCost = 0;
+                    _genericCostInterpreted = false;
+                    _probeAfter = 0;
+                }
+            }
             if (_compiledGeneric == null) { return; }
             bool settled;
             lock (_sync) {
@@ -615,6 +627,14 @@ namespace IronRuby.Runtime.Jit {
         // never interpreted. A probe waits for it, for at most MaxProbeDelays windows.
         private volatile bool _genericCompiled;
         private int _probeDelays;
+        // _genericCost was timed before the generic body was compiled (GenericCompiled forgets it).
+        private bool _genericCostInterpreted;
+        // When GenericCompiled ran (Stopwatch ticks), and the probes taken before the compiled body warmed up (Probe).
+        private long _compiledAt;
+        private int _warmProbes;
+        private const int WarmMs = 100;
+        private const int WarmProbeIntervalMs = 10;
+        private const int MaxWarmProbes = 16;
 
         private static MSA.Expression/*!*/ CountEntry(Specialization/*!*/ spec) {
             var countdown = Ast.Field(Ast.Constant(spec), Specialization.CountdownField);
@@ -711,8 +731,21 @@ namespace IronRuby.Runtime.Jit {
         private void Probe(Specialization/*!*/ spec, int entries, long deopt) {
             lock (_sync) {
                 if (_state != Specialized || spec != _current || _probes >= MaxProbes) { return; }
-                _probeAfter = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * ProbeIntervalMs / 1000) * (1L << _probes);
-                _probes++;
+                // While the generic body is not compiled, or compiled WarmMs ago or less - its first calls run the CLR's
+                // quick first-tier code - a probe reads it high, which keeps an entry that deopts on every other call
+                // (1.75 us a generic call 2 ms after the compile, 0.12 at 100 ms; perf/jitprobe). Such a probe takes
+                // none of the MaxProbes, and the next may come WarmProbeIntervalMs on: the cost is the least any probe
+                // read, so it comes down to the warm one's soon. At most MaxWarmProbes of them.
+                long now = Stopwatch.GetTimestamp();
+                bool warm = _warmProbes < MaxWarmProbes &&
+                    (!_genericCompiled || now - Volatile.Read(ref _compiledAt) < Stopwatch.Frequency * WarmMs / 1000);
+                if (warm) {
+                    _warmProbes++;
+                    _probeAfter = now + Stopwatch.Frequency * WarmProbeIntervalMs / 1000;
+                } else {
+                    _probeAfter = now + (Stopwatch.Frequency * ProbeIntervalMs / 1000) * (1L << _probes);
+                    _probes++;
+                }
                 if (JitRuntime.Verbose) {
                     Console.Error.WriteLine("[jit] timing the generic body of {0}/{1} arity {2}: {3} deopts in {4} calls (deopt {5:F1} us){6}",
                         _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries, deopt * 1e6 / Stopwatch.Frequency,
@@ -824,9 +857,10 @@ namespace IronRuby.Runtime.Jit {
 
                 if (_coolSampleCount > 0) {
                     long median = Median(_coolSamples, Math.Min(_coolSampleCount, MaxDeopts));
-                    if (_genericCost == 0 || median < _genericCost) { _genericCost = median; }
+                    if (_genericCost == 0 || median < _genericCost) { _genericCost = median; _genericCostInterpreted = !_genericCompiled; }
                 } else if (_coolRaisedCount > 0 && _genericCost == 0) {
                     _genericCost = Median(_coolRaised, Math.Min(_coolRaisedCount, MaxDeopts));
+                    _genericCostInterpreted = !_genericCompiled;
                 }
                 var spec = _current;
                 spec.Countdown = 0;
