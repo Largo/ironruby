@@ -1058,6 +1058,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site is inside an expression, which control cannot enter). Left: the arms still double a
     large light frame's IL without register locals (m48 11.7 KB against 5.7), and a body with
     a multiple assignment and more than 24 calls loses 2-4% light for a reason not yet found.
+    **Re-measured after perf/lframe** (perf/regexlight, 2026-11-27, on b887bc1 + perf/lexical
+    a8feb83; `Util/perf/callgrind/count.sh`, `ab.rb -i -r 1 -n 20000 Util/bench/regex-shapes.rb`,
+    default against `IR_LIGHT_REGEX=all`): the regex literals that go to a method storing the
+    caller's `$~` still lose light - `gsub` 12,666 -> 12,887 (1.017), `split` 10,836 -> 11,050
+    (1.020), `kase` 8,575 -> 8,843 (1.031), `eqt` 5,767 -> 5,998 (1.040), the controls `size`
+    1.000 and `matchp` 0.985. 214-268 instructions a call, the +232 perf/lsite measured: the
+    cheaper light entry of perf/lframe did not change what the scope made late and the call
+    made twice cost. Nothing was built; the about 800 methods of the census's regex lines stay
+    out. A step on them has to make the second call or the late scope cheaper (perf/lsite and
+    perf/lsite2 tried the second and were rejected), not the light entry.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
