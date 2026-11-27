@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Text;
@@ -256,6 +257,9 @@ namespace IronRuby.StandardLibrary.StringScanner {
         private Utf8Map _map;
         private string _unmappedText;
 
+        // IR_FAST_SEARCH, read here so that the check every scan makes needs no other class
+        private static readonly bool MapEnabled = MutableStringOps.FastSearchEnabled;
+
         // the map _match's CLR offsets are offsets into; null when the match was not made through one
         private Utf8Map _matchMap;
 
@@ -265,27 +269,31 @@ namespace IronRuby.StandardLibrary.StringScanner {
         /// already know), or not valid. IR_FAST_SEARCH=0 makes none.
         /// </summary>
         private Utf8Map Map {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get {
-                if (!MutableStringOps.FastSearchEnabled) {
-                    return null;
-                }
+                // what every scan on an ASCII or non-UTF-8 subject asks: kept small enough to inline
                 MutableString subject = _scanString;
-                if (subject.Encoding != RubyEncoding.UTF8 || subject.IsAscii()) {
+                if (!MapEnabled || subject.Encoding != RubyEncoding.UTF8 || subject.IsAscii()) {
                     return null;
                 }
-                // a string held as bytes is decoded once, as a match would
-                subject.PrepareForCharacterRead();
-                string text = subject.ConvertToString();
-                Utf8Map map = _map;
-                if (map != null && ReferenceEquals(map.Text, text)) {
-                    return map;
-                }
-                if (ReferenceEquals(text, _unmappedText) || subject.ContainsInvalidCharacters()) {
-                    _unmappedText = text;
-                    return null;
-                }
-                return _map = new Utf8Map(text);
+                return MapFor(subject);
             }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private Utf8Map MapFor(MutableString/*!*/ subject) {
+            // a string held as bytes is decoded once, as a match would
+            subject.PrepareForCharacterRead();
+            string text = subject.ConvertToString();
+            Utf8Map map = _map;
+            if (map != null && ReferenceEquals(map.Text, text)) {
+                return map;
+            }
+            if (ReferenceEquals(text, _unmappedText) || subject.ContainsInvalidCharacters()) {
+                _unmappedText = text;
+                return null;
+            }
+            return _map = new Utf8Map(text);
         }
 
         private int ByteLength {
@@ -301,13 +309,19 @@ namespace IronRuby.StandardLibrary.StringScanner {
             }
             Utf8Map map = Map;
             if (map != null) {
-                int clrStart = map.ClrOf(start);
-                int clrEnd = (clrStart >= 0) ? map.ClrOf(start + count) : -1;
-                if (clrEnd >= 0) {
-                    return MutableString.Create(map.Text.Substring(clrStart, clrEnd - clrStart), _scanString.Encoding);
+                MutableString mapped = ByteSliceMapped(map, start, count);
+                if (mapped != null) {
+                    return mapped;
                 }
             }
             return MutableString.CreateBinary(_scanString.GetBinarySlice(start, count), _scanString.Encoding);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private MutableString ByteSliceMapped(Utf8Map/*!*/ map, int start, int count) {
+            int clrStart = map.ClrOf(start);
+            int clrEnd = (clrStart >= 0) ? map.ClrOf(start + count) : -1;
+            return (clrEnd >= 0) ? MutableString.Create(map.Text.Substring(clrStart, clrEnd - clrStart), _scanString.Encoding) : null;
         }
 
         private MutableString/*!*/ RestString() {
@@ -482,38 +496,53 @@ namespace IronRuby.StandardLibrary.StringScanner {
             }
         }
 
+        /// <summary>
+        /// MatchRegex on a subject with a map: 1 matched, 0 did not, -1 the scan pointer is inside a
+        /// character and the old path is to decide.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private int MatchRegexMapped(Utf8Map/*!*/ map, RubyRegex/*!*/ pattern, bool anchored, bool advance) {
+            int clrPosition = map.ClrOf(_position);
+            if (clrPosition < 0) {
+                return -1;
+            }
+            // The MatchData is made here rather than left pending: the window match makes it anyway
+            // for a subject that is not one byte per character (see MatchWindowBounds).
+            MatchData data = _fixedAnchor
+                ? pattern.Match(_scanString, clrPosition, false)
+                : pattern.MatchWindow(_scanString, clrPosition, anchored, false);
+            int clrStart, clrEnd;
+            if (data == null || !data.TryGetGroupClrOffsets(0, out clrStart, out clrEnd)) {
+                return 0;
+            }
+            int byteStart = map.ByteOf(clrStart);
+            int byteEnd = (byteStart >= 0) ? map.ByteOf(clrEnd) : -1;
+            if (byteEnd >= 0) {
+                if (anchored && byteStart != _position) {
+                    return 0;
+                }
+                _match = data;
+                _matchMap = map;
+                _matchBase = 0;
+                return Matched(byteStart, byteEnd, advance) ? 1 : 0;
+            }
+            if (!data.TryGetGroupByteOffsets(0, out byteStart, out byteEnd) || (anchored && byteStart != _position)) {
+                return 0;
+            }
+            _match = data;
+            _matchBase = 0;
+            return Matched(byteStart, byteEnd, advance) ? 1 : 0;
+        }
+
         private bool MatchRegex(RubyRegex/*!*/ pattern, bool anchored, bool advance, bool lazyGroups) {
             ClearMatch();
 
             Utf8Map map = Map;
-            int clrPosition = (map != null) ? map.ClrOf(_position) : -1;
-            if (clrPosition >= 0) {
-                // The MatchData is made here rather than left pending: the window match makes it anyway
-                // for a subject that is not one byte per character (see MatchWindowBounds).
-                MatchData data = _fixedAnchor
-                    ? pattern.Match(_scanString, clrPosition, false)
-                    : pattern.MatchWindow(_scanString, clrPosition, anchored, false);
-                int clrStart, clrEnd;
-                if (data == null || !data.TryGetGroupClrOffsets(0, out clrStart, out clrEnd)) {
-                    return false;
+            if (map != null) {
+                int mapped = MatchRegexMapped(map, pattern, anchored, advance);
+                if (mapped >= 0) {
+                    return mapped != 0;
                 }
-                int byteStart = map.ByteOf(clrStart);
-                int byteEnd = (byteStart >= 0) ? map.ByteOf(clrEnd) : -1;
-                if (byteEnd >= 0) {
-                    if (anchored && byteStart != _position) {
-                        return false;
-                    }
-                    _match = data;
-                    _matchMap = map;
-                    _matchBase = 0;
-                    return Matched(byteStart, byteEnd, advance);
-                }
-                if (!data.TryGetGroupByteOffsets(0, out byteStart, out byteEnd) || (anchored && byteStart != _position)) {
-                    return false;
-                }
-                _match = data;
-                _matchBase = 0;
-                return Matched(byteStart, byteEnd, advance);
             }
 
             if (lazyGroups && !_fixedAnchor) {
