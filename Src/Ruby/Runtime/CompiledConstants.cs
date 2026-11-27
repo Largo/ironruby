@@ -42,7 +42,26 @@ namespace IronRuby.Runtime {
         }
 
         internal static LambdaExpression/*!*/ Rewrite(LambdaExpression/*!*/ lambda) {
-            return Enabled ? (LambdaExpression)new CompiledConstantsRewriter().Visit(lambda) : lambda;
+            if (!Enabled) {
+                return lambda;
+            }
+            try {
+                return (LambdaExpression)new CompiledConstantsRewriter().Visit(lambda);
+            } catch (TooDeepException) {
+                // compiled as it is: LambdaCompiler goes on deep trees on a new thread of its own (StackGuard)
+                return lambda;
+            }
+        }
+
+        // A visitor recurses once a level of the tree, and has no StackGuard as LambdaCompiler does: a body nested some 500
+        // levels deep (DeepNesting1, begin/rescue compiled up front) overflowed the stack of the thread that compiled it.
+        private sealed class TooDeepException : Exception { }
+
+        public override Expression Visit(Expression node) {
+            if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
+                throw new TooDeepException();
+            }
+            return base.Visit(node);
         }
 
         protected override Expression/*!*/ VisitExtension(Expression/*!*/ node) {
