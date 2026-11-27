@@ -1446,6 +1446,7 @@ namespace IronRuby.Tests {
                 Struct_InspectMemberNames1,
                 Integer_BitwiseCoerce1,
                 Integer_FDivCoerced1,
+                Integer_RemainderCoerced1,
                 Comparison_AnonymousClassName1,
             };
         }

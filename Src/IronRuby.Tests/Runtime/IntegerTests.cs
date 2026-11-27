@@ -1623,5 +1623,37 @@ require 'ruby4'
 #<TypeError: String can't be coerced into Integer>
 ");
         }
+
+        /// <summary>
+        /// Integer#remainder: a Fixnum's is num_remainder, which answers the dividend itself for an infinite divisor of the other
+        /// sign (-3, not -3.0); a Bignum's is rb_big_remainder, which coerces and calls #remainder (Complex has none).
+        /// </summary>
+        public void Integer_RemainderCoerced1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { (2**70).remainder(Complex(1,1)) }, -> { 3.remainder(Complex(1,1)) }, -> { -3.remainder(Float::INFINITY) }, -> { 3.remainder(-Float::INFINITY) },
+ -> { (2**70).remainder(Float::INFINITY) }, -> { -3.remainder(2.5) }, -> { (-(2**70)).remainder(-Float::INFINITY) }, -> { 3.remainder(Rational(1,2)) },
+ -> { -3.remainder(Rational(1,2)) }, -> { -3.0.remainder(Float::INFINITY) }, -> { 0.remainder(Float::INFINITY) }].each { |l| p((l.call rescue $!)) }
+[2**64, -(2**64), 2**63 - 1].each { |x| [Complex(1, 1), 2].each { |a| p((x.__send__(:remainder, a) rescue $!)) } }
+", @"
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+#<NoMethodError: undefined method '%' for an instance of Complex>
+-3
+3
+1.1805916207174113e+21
+-0.5
+-1.1805916207174113e+21
+(0/1)
+(0/1)
+-3.0
+0.0
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+0
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+0
+#<NoMethodError: undefined method 'remainder' for an instance of Complex>
+1
+");
+        }
     }
 }
