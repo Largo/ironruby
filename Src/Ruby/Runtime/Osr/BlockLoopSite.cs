@@ -97,6 +97,11 @@ namespace IronRuby.Runtime.Osr {
         // The body's last statement is an iterator run in place (NestedBlockLoop), whose value the copy
         // does not compute: only the kinds that drop the block's value may take the block.
         internal readonly bool LastIsNested;
+        // The parking slot of the method whose own literal this is, if the block holds a nested literal (BlockDefinition,
+        // IR_NESTED_PROCS): every call that yields to the block generically makes the nested Proc, which keeps the method's
+        // scope from being parked, so the slot may have given up (ParkedScopeSlot.MaxFailures) before the loop was outlined.
+        // A run of the copy, which makes none, gives it one more try (BlockLoopSite.Run); then this is null.
+        internal ParkedScopeSlot ParkSlot;
 
         private BlockLoopInfo(BlockDefinition/*!*/ ast, RubyContext/*!*/ context, int depth, LocalVariable parameter,
             LocalVariable/*!*/[]/*!*/ locals, string/*!*/ name, int calls, bool lastIsNested) {
@@ -667,6 +672,12 @@ namespace IronRuby.Runtime.Osr {
             }
             try {
                 RunIn(args, own, block, scope, depth, from, limit, result, keptBefore, out resume, out kept);
+                var parkSlot = _info.ParkSlot;
+                if (parkSlot != null && resume != from && parkSlot.Failures > ParkedScopeSlot.MaxFailures) {
+                    // (not exact under threads, as the count itself is not: at worst the slot gives up once more)
+                    _info.ParkSlot = null;
+                    parkSlot.Failures = 0;
+                }
             } finally {
                 // Nothing a run held stays reachable from the site: the block's locals, the receiver,
                 // the result, self and the scopes. A copy that stopped part way (an exception, a throw)

@@ -229,7 +229,7 @@ namespace IronRuby.Runtime {
 
         #region Parked method scopes
 
-        // A method whose block literals all reuse their Procs (BlockDispatcher.ReusesProc: no lambda or nested block in them)
+        // A method whose block literals all reuse their Procs (BlockDispatcher.ReusesProc: no lambda, no nested block that does not keep them: KeepEnclosingProcs)
         // and which calls no super makes a scope and a Proc per literal on every call, the Proc's parent (`def each; (a..b).each
         // { |i| yield @s[i] }; end'). Once such a call has returned normally, if nothing captured the scope (RubyScope.IsCaptured:
         // binding, eval, a method or Symbol proc made in it, a TracePoint, a Proc of a literal replaced) and the last Proc of
@@ -1071,6 +1071,24 @@ namespace IronRuby.Runtime {
                 return previous;
             }
             return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
+        /// <summary>
+        /// The Proc of a literal nested in a block, made in <paramref name="scope"/> (the enclosing block's, or a scope inside
+        /// it): it reaches the Procs of the blocks that scope runs in, which are therefore not made again (Proc.ClearReusable) -
+        /// and so not parked with their method's scope either (RubyOps.StageParkedProc). The enclosing literal reuses its Proc
+        /// only on calls that make no nested Proc (BlockDefinition, IR_NESTED_PROCS). Nothing else changes for a block that
+        /// makes one: its scope is not reused (BlockDefinition, reuseScope) and its BlockParams are handed on as they were.
+        /// </summary>
+        [Emitted]
+        public static Proc/*!*/ KeepEnclosingProcs(Proc/*!*/ proc, RubyScope/*!*/ scope) {
+            for (RubyScope s = scope; s is RubyBlockScope blockScope; s = s._parent) {
+                var bfc = blockScope.BlockFlowControl;
+                if (bfc != null) {
+                    bfc.Proc.ClearReusable();
+                }
+            }
+            return proc;
         }
 
         [Emitted]

@@ -362,6 +362,11 @@ namespace IronRuby.Compiler.Ast {
             internal List<MSA.Expression> ParkProcVariables;
             internal bool HasUnparkableNestedBlock;
 
+            // This block may be outlined into an iterator's loop (BlockLoopInfo), which runs the nested iterators it holds in
+            // place and makes no Proc of their literals: its own Proc may be reused all the same (IR_NESTED_PROCS), and a literal
+            // nested in it keeps the enclosing Procs from being made again when it does make one (RubyOps.KeepEnclosingProcs).
+            public bool ReusesProcWithNested;
+
             // The lexical depth of the block's own scope (LexicalScope.Depth): a local defined at a
             // smaller depth belongs to an enclosing scope.
             internal int LexicalDepth;

@@ -288,7 +288,8 @@ namespace IronRuby.Builtins {
             _scope = scope;
             _dispatcher = dispatcher;
             // (no RubyScope.MarkCaptured here: a literal block makes a Proc over its enclosing scope on every
-            // call, and a block with a nested block literal never reuses its scope - see BlockDefinition)
+            // call, and a block with a nested block literal never reuses its scope - see BlockDefinition; the
+            // nested literal's Proc keeps the enclosing Procs from being made again: RubyOps.KeepEnclosingProcs)
         }
 
         protected Proc(Proc/*!*/ proc)
