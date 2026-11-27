@@ -915,6 +915,19 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Round of 2026-11-27 (see Landed, perf/twospeed, not gated): found and fixed - an interpreted shared rule
     left ahead of its compiled one in a site's rules, run on every call to fail (DLR patch 0111). `neq2`
     still varies 59-102 ns on both builds, which is something else.
+    Round of 2026-11-27, second (perf/twospeed2, a finding, no code): `neq2`'s spread is the CLR's dynamic PGO,
+    not IronRuby's or the DLR's. Alone `neq2` is 60-64 ns in 12 of 12 processes; after `eq1` and `call1` (either
+    alone does not do it) 61-104. With `DOTNET_TieredPGO=0` it is 67-75 in 8 of 8, with
+    `DOTNET_TieredCompilation=0` 66-71: no slow process and no fast one. The site holds two rules, one a class
+    (the negated-builtin `!=` rule is per class, not shared), so every other call misses its target and runs
+    `System.Dynamic.UpdateDelegates.UpdateAndExecute3` (dotnet-trace: 20-25% of the loop, the rules 13-19%) -
+    .NET's own code, tiered and instrumented, which the calls before it trained: guarded devirtualization of the
+    rule delegates it invokes then guesses well (62 ns) or badly (100 ns) depending on what it saw. The rules and
+    the loop are dynamic methods, not tiered. Left: the lever is IronRuby's - one rule for both classes (a
+    version set, as a shared rule has), so that the site never misses; that is a change to how `!=`/`==` on
+    plain objects is bound (#215), for its own step. Bounce, 10 processes each (`harness.rb Bounce 20 1500`,
+    median of the last 10 iterations, ms): with DLR patch 0111 473-511 (median 495), without 477-507 (498): not
+    bimodal on either, and level.
 13. **Calling an iterator at all costs twice what it does in CRuby**: `a.each { |x| s +=
     x }` over one element from a method is 166 ns against 79, `n.times` 182 against 88,
     `a.map` 194 against 101, and `a.any? { |x| x > 1000 }` 414 against 67, 438 against
