@@ -1193,6 +1193,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is raised**: `def r(x) begin; x + 1; rescue StandardError; 0; end end` 106 ns against
     CRuby's 24, the same with `ensure` 112 against 27 (`Util/bench/zjit-post-shapes.rb`,
     one loaded run: factors). Gap 9 seen from the caller: no light frame, no typed body.
+    Since then (perf/rescuelight, 2026-11-27, see Landed): such methods are light frames
+    (b72da7b), and with `$!` left alone on a run that raises nothing, `ensure` is 52 ns and
+    `rescue` 52 against a plain light frame's 45 and CRuby's 29-32 (`-X:NoJIT`); what is left
+    is the typed body the method JIT refuses (`Body`: 27 against 35 ns for `x + 1`) and the
+    read of `$!` at a rescue's entry.
     A .NET `try` costs nothing on the path that does not throw, so the experiment is to
     find what the method does around the handler (the scope, the saving of `$!`, the
     frame) and let a body whose handler is not entered run as light as one without.
@@ -1808,6 +1813,95 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   and hot-shapes in the same five modes: the same as the base (forward-rest's six bind_call-of-binding rows
   differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
   base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
+
+- **perf/splatpos (/perf-step, 2026-11-27) - `f(*a, &b)' passes `a' itself, not a copy, when
+  `b' is a variable, a constant or a literal** (switch `IR_SPLAT_BY_REFERENCE`, on unless `=0`).
+  Built on 288cc13 (claude/perf-lsite, which has 4320d4a).
+  - **What the round asked, and where the cost was.** A splat into a fixed-arity Ruby callee
+    already costs what the call written out does (`two(*a)` 46 ns, `two(a[0], a[1])` 51,
+    CRuby 40 and 40). The slow ones were the splats that also pass a block: `rest_blk` (`(*a,
+    &b) = two(*a, &b)`) 103, `dots` 104, `lead_dots` 104 (CRuby 82, 44, 90). A call with a
+    block argument evaluates its receiver and arguments into temporaries first (the block is
+    computed first for a literal block's retry), and a trailing splat was copied there into a
+    fresh RubyArray: an allocation and a copy per call, for every forwarder.
+  - **What CRuby 4.0 does.** `splatarray false` - the list itself, expanded by the call after
+    the block argument's #to_proc - when the block argument is a variable, a constant or a
+    literal (prism_compile.c, pm_setup_args_dup_rest_p; `--dump=insns`); `splatarray true`, a
+    copy made before the block argument, for anything else (`&G.new(a)`, `&method(:m)`,
+    `&(g.x)`). So it is observable: with `g = o` whose #to_proc appends to `a`, `f(*a, &g)`
+    gets the new item and `two(*a, &g)` raises `given 3, expected 2`; `f(*a, &Grow.new(a))`
+    does not. IronRuby copied always, which was wrong for the first kind.
+  - **What changed.** MethodCall.TransformRead keeps the list (after #to_a) in the temporary,
+    not fresh, when the block argument is a local, instance, global or class variable, self,
+    a literal, a symbol or an unqualified (or constant-qualified) constant
+    (MethodCall.IsSideEffectFree; a subset of CRuby's set - the shapes it leaves out, `[]`,
+    `{}`, `1..2`, have no #to_proc that could change a list). A rest parameter of the callee
+    copies it as for any splat. `...` and `(*, &)` forward a local, so they take it.
+  - **Checks.** New `Util/splat-blockarg-matrix.rb` (order of receiver/args/to_a/to_proc, the
+    list growing and shrinking under to_proc with `&local`, `&@ivar`, `&$gvar`, `&CONST` and
+    with a call, length mismatches, to_a and nil splats, optional/keyword/block callees,
+    ruby2_keywords, frozen list, forwarders, callee redefined after bind, method_missing,
+    break, super): same as CRuby in default, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls`; `=0` shows the old difference. splat-pass, kwrest-call, block-pass,
+    anon-forward, light-entry, hot-shapes, jit, jit-calls matrices same as CRuby in every mode
+    and with the switch off; forward-rest's two `binding` lines differ from CRuby the same way
+    on the unchanged build. language/send and def specs as before (send's one error is the
+    known `into`/`to` wording). IronRuby.Tests in full: PASSED.
+  - **Clock** (`ab.rb -r 6`, Release net10.0, ns; CRuby / off / on): splat-shapes `dots` 44.0 /
+    103.8 / 75.6, `rest_blk` 82.4 / 103.3 / 74.9, `lead_dots` 90.0 / 103.7 / 71.7, the rest
+    unchanged (`splat` 39.9 / 47.9 / 46.0, `rest_kw_blk` 117.7 / 187.8 / 182.9, `anon` 89.7 /
+    259.1 / 259.5). forward-shapes `rest` 116 / 78, `rest_blk` 102 / 68, `dots` 99 / 76, `anon`
+    98 / 60 (off / on; wide spreads). delegate-shapes `dc_two` 137 / 100, `fw_two` 120 / 80,
+    `fw_blk` 156 / 120, `mm_two` 238 / 198, `sd_two` 375 / 334; `direct_*` unchanged.
+  - **Left.** `anon` of splat-shapes (`(*, **, &)`, 259 against CRuby's 90) and `rest_kw_blk`
+    pass a keyword splat too and go another way (KeywordSplatMerge); `f(*a, k: g, &g)` still
+    copies where CRuby does not (the splat is not trailing there; pre-existing).
+
+- **perf/rescuelight (/perf-frame, 2026-11-27) - `$!` left alone in a begin/rescue/ensure that
+  raises nothing** (switch `IR_LAZY_ERRINFO`, on unless `=0`) - timed, not gated. Built on
+  4320d4a with claude/perf-lsite merged (d83116b).
+  - **What gap 22 is now.** Its 80 ns predate b72da7b: `resc` and `ens` of zjit-post-shapes are
+    light frames (`IR_LIGHT_FRAMES=why`), and the method JIT refuses them (`screen rejected
+    B/resc: Body`). `ab.rb -r 8` (ns; CRuby / IronRuby / `-X:NoJIT`): `x + 1` 21.1 / 27.0 /
+    35.0, rescue 20.4 / 39.0 / 40.0, ensure 24.2 / 50.5 / 50.1. So two parts: no typed body
+    (~8 ns, 27 against 35), and the handler in the light frame (rescue ~5 ns, ensure ~15).
+  - **What the handler pays** (callgrind, calls only - its code is MinOpts, see perf/castcheck):
+    `$!` - `GetCurrentException` and `SetCurrentException`, each a `[ThreadStatic]` read or
+    write, a call into the runtime from a compiled body (`__tls_get_addr`). Per call with
+    nothing raised: a rescue read it at entry and wrote it back in its finally; an ensure read
+    it at entry, read it again in the clause and wrote it back after, and asked
+    `RubyUtils.IsReclaimingFiber`, a third thread-static.
+  - **What changed.** The rescue's finally restores `$!` only if an exception was taken or the
+    statements were left otherwise (a jump, an exception going through): run to their end they
+    left `$!` as they found it (nested handlers and callees restore their own). The save at the
+    rescue's entry stays: when the handler runs, an inner frame that threw the exception on may
+    already have set `$!` to it, so a save there would restore the wrong value. The ensure
+    clause reads and restores `$!` only for an exception it runs for. `IsReclaimingFiber` asks
+    the thread-static only while some thread has a safe point requested (a thread reclaiming a
+    fiber does for as long as it is, `BeginFiberReclamation`).
+  - **Timed** (`Util/bench/rescue-shapes.rb`, `ab.rb -r 8`, `-X:NoJIT`, ns; CRuby / off / on):
+    ensure 31.6 / 60.8 / 52.0 (0.86), else_ 35.7 / 62.7 / 56.0, begin_r 39.0 / 62.2 / 56.0,
+    modifier 30.2 / 48.0 / 45.1, rescue 29.3 / 52.9 / 52.3, rescue_e 30.4 / 48.0 / 47.7; the
+    plain control 28.7 / 46.5 / 45.3 (all but ensure overlap). AWFY, ten processes each
+    (median, base / candidate / switch off): Json 45,741 / 45,650 / 45,598 us, CD 337,463 /
+    329,373 / 331,432, Havlak 2,604,039 / 2,595,776 / 2,554,229 - no change beyond the noise.
+  - **Checked.** `Util/errinfo-matrix.rb` (new: `$!` after a rescue and an ensure that raised
+    nothing, also inside a rescue clause; after a rescue clause ends; a callee's rescue; an
+    exception through a rescue that does not match; return through ensure inside a rescue; an
+    exception raised in ensure and its cause; retry; else/ensure order and `$!` in each; next
+    and break through ensure; throw through ensure; binding, local_variables and caller in a
+    rescue clause; TracePoint `:raise`/`:rescue`; Timeout and Thread#raise mid-body; a
+    million-deep recursion through ensure: SystemStackError) prints CRuby's output on the
+    baseline and the candidate, switch on and off. With it, rescue-light, jit-raise,
+    jit-rescue, raise, light-entry, block-pass, parked-scope, jit and hot-shapes in five modes
+    (as built, `IR_LAZY_ERRINFO=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`):
+    50 runs, the candidate's output the baseline's in every one (raise-matrix differs from
+    CRuby on both alike). ruby/spec language/rescue (60 examples), language/ensure (31),
+    language/retry (3), core/exception (250), library/timeout (7): 0 failures on both trees.
+    IronRuby.Tests: the 79 registered tests named Exception/Rescue/Ensure/Retry/Raise: PASSED.
+    Not run: the whole suite, a sweep, the census (no verdict moves).
+  - Left: the typed body (`Body` refused: a handler in the typed body, gap 22's last line);
+    the read of `$!` at a rescue's entry.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
@@ -6468,6 +6562,102 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/dotsfwd (/perf-frame, 2026-11-27) - `...` forwarding without the rest Array: stopped
+  before building, the forwarded values are reachable after the call** (no code; on bbe4b1a,
+  4320d4a with claude/perf-lsite and perf/delegate's shape files). The target was the callee's
+  rest taking the caller's anonymous Array, sound only if nothing can name it (the gate turned
+  off perf/forward's ForwardedRest for a named rest that eval and a TracePoint binding could read).
+  - **What CRuby 4.0 does** (`Util/anon-forward-matrix.rb`, new). Nothing *names* them:
+    `local_variables`, `binding.local_variables` and a TracePoint `:return` binding's
+    `local_variables` are empty, `binding.local_variable_get(:"...")` and `(:*)` raise NameError.
+    But the method's own body can forward them again after the call, and must then pass what it
+    was given: a second `raw(...)`, `raw(*)` and `raw(**)` after a callee that grew its rest or
+    added to its kwrest see the original values; so do `eval("raw(...)")`, `binding.eval`,
+    `instance_eval`, `send(:eval, ...)`, `eval` through an alias (`alias_method :e2, :eval`) and a
+    TracePoint `:return` hook's `binding.eval("raw(...)")`; `eval("raw(*)")`, `("raw(**)")`,
+    `("raw(&)")` re-forward the anonymous ones. IronRuby prints the same in all of these (as built,
+    `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`), so there is no difference to fix.
+  - **So sharing is not sound.** A callee that keeps or mutates its rest would change what a later
+    forward sees, and a static guard ("forwards once, no eval in the body") cannot see an eval
+    reached through `send`, an alias or a TracePoint hook. Per the brief, stopped here.
+  - **What the 60 ns are not.** `...` costs IronRuby 111.7 ns against fixed 51.9 (perf/nilblock),
+    CRuby 45.7 against 37.3: CRuby's forward costs ~8 ns, IronRuby's ~60. The copy a sound forward
+    keeps is one Array; most of the 60 is the rest Array built at the wrapper's entry (which an
+    eval may reach, so it stays) and the splat call's own dispatch (the rule unpacking it, the
+    callee's entry) - machinery that can be made cheaper without sharing anything: for a callee
+    that takes the elements positionally (`two(a, b)`) no second Array is made at all, so the
+    question there is only what the splat site costs. That is the next step for `...`.
+
+- **perf/nilblock (/perf-frame, 2026-11-27) - a nil block parameter or argument: measured by
+  clock, no cost to remove** (no code; built on d206f90, which is 4320d4a with claude/perf-lsite).
+  perf/delegate (3ea2ea5) counted a nil `&k` parameter or `&nil` argument at 440-600 instructions
+  a call into `two(a, b)` with the callgrind counter (`Util/bench/forward-shapes.rb`).
+  - **By clock it is not there.** `ab.rb -r 12 -n 2000000`, `-X:NoJIT` so that every wrapper is
+    the same kind of frame (ns; CRuby / IronRuby): fixed 37.3 / 51.9, an unused `&k` 46.0 / 50.0,
+    `&nil` 37.9 / 52.0, `&k` passed on (nil) 47.9 / 53.3 - the four within IronRuby's spread
+    (7-20%) of each other, where CRuby pays 9-10 ns for a block parameter. With the method JIT
+    (`ab.rb -r 8`): fixed 40.0, `&k` unused 44.0, `&nil` 46.3, `&k` passed 51.7 (CRuby 35.7,
+    44.0, 35.9, 46.3).
+  - **What the counter saw.** Its code is MinOpts (perf/castcheck), and the wrappers differ in
+    the typed body: `fixed` is specialized (`FW/fixed arity 2 -> Int`), a method with a block
+    parameter is never wrapped (`JitStub.ParameterShape`: "block parameter"), and one that
+    passes `&nil` is refused by the screen (`MethodCall two`). That refusal is the 4-6 ns left
+    with the JIT on; it is the method JIT's to take, a typed body that takes a block and hands
+    it on (gap 9), not a frame's.
+  - **What the clock does show:** `...` 111.7 ns against fixed 51.9 (CRuby 45.7: 2.44), and
+    `(*, &)` 117.9 (CRuby 83.6) - the rest Array a forwarding layer builds and splats (gap 16's
+    second part; perf/delegate's 1,170 instructions). That is the forwarding cost worth a
+    step, not the block.
+
+- **perf/castcheck (/perf-frame, 2026-11-27) - why the JIT expands no cast in Ruby's compiled
+  bodies, and a fix that was not worth keeping** (switch `IR_UNWIND_RETURN`, reverted; built on
+  15285eb with claude/perf-lsite merged, 054d132). perf/lconst found every `castclass` in a Ruby
+  body to be a call of `CORINFO_HELP_CHKCASTCLASS`, even to a sealed class, while a probe lambda
+  of the same runtime got the one-compare inline check.
+  - **What decides it.** Not the tier (`DOTNET_JitDisasmSummary`: `F#f0` and `F#fc3` FullOpts,
+    IL 460 and 1,106 bytes), the class's assembly (IronRuby.dll's sealed `ConstantSiteCache` is
+    checked inline from a probe, in its own process and inside `ir`), skip-visibility, a
+    try/finally, a fault, a catch, a catch with rethrow, a try-catch-finally, nested tries, 32
+    casts, a constant cached in a local (three or more uses), or `PrecompiledFrames.Current`.
+    Found by bisecting Ruby's own trees in the compile hook (a temporary switch that dropped or
+    emptied parts of each TryExpression, then a dump of the reduced tree): a **jump out of a
+    catch handler through an enclosing finally**. Every method frame has one: the handler of
+    a `return` from a block (`MethodUnwinder`) did `return GetMethodUnwinderReturnValue(u)`
+    through the frame's finally (`LeaveMethodFrame`/`LeaveLightMethodFrame`). Reproduced in a
+    lambda of its own: `TryFault(Block(casts, Label(TryCatchFinally(Return(label), catch:
+    Return(label), finally: call))))` - 0 inline checks, every cast a helper call; take away
+    the catch's `Return` or the finally and all of them are inline again. A second, unrelated
+    cliff on the way: a lambda with 664 or more variables (663: inline) loses every inline cast
+    too, which looks like the JIT's "too many locals" bail-out (1,024 locals with its own
+    temporaries); `DOTNET_JitMaxLocalsToTrack` does not move it in this release runtime. No
+    Ruby body seen comes near it.
+  - **Who else.** The rule bodies (`CallSite.Target`) and the method JIT's typed bodies have no
+    such jump and already check inline: in a regex-shapes run, 32 rules had 100-120 inline checks
+    (the helper calls beside them are the expansions' slow paths), the typed body 4. Only the
+    generic bodies of methods suffer.
+  - **The fix tried.** The handler keeps the value and a flag in two locals and the method
+    returns after the try, once the finally has run - the same order. A block's `return` (in an
+    `each`, from inside `ensure`, a `map`) still answers right. The six Ruby bodies of a
+    regex-shapes run: 23 -> 102 inline checks; `F#fc3` with `IR_SEALED_CONSTANTS=0`: 0 -> 9.
+  - **Why rejected.** The casts it frees are mostly the closure constants perf/lconst already
+    loads without a cast (`Unsafe.As`), and nothing showed a gain: `ab.rb -r 10` of frame-cost,
+    `-X:NoJIT`, both switches off / this one on / both on - `f0` 39.9 / 35.9 / 36.0 ns, `fc3`
+    72.0 / 71.9 / 71.6, `bytesplice` 912 / 898 / 826, every small shape within its 10-70% spread.
+    It costs a store and a test a call, and two locals live into the handler.
+  - **And the callgrind counter cannot judge such a change.** Under valgrind the runtime compiles
+    many methods MinOpts that it compiles FullOpts natively, `DOTNET_TieredCompilation=0`
+    notwithstanding: 4,588 of 8,011 compilations of an `ir` run of frame-cost (natively 0 of
+    5,445), among them `Host:Main`, `RubyContext..cctor` and the Ruby body `F#fc3` (4,485
+    bytes of code against 2,721) - MinOpts expands no cast, so the counter measured the helper
+    calls whichever way this switch was. A probe program shows the same (60 of 89 MinOpts, its
+    expression-tree lambda FullOpts); `DOTNET_JITMinOpts=0`, `DOTNET_JitMinOpts=0` and
+    `DOTNET_ZapDisable=1` change nothing. So `Util/perf/callgrind/count.sh` counts are a fair
+    measure of work a change removes (calls, allocations, helper calls) but not of what the JIT
+    does with optimized code: perf/lframe's and perf/lconst's numbers are of the first kind,
+    but what they are worth natively is owed to a clock or a machine with a counter.
+  - Left: the jump is easy to remove if a later change (another helper expansion, a cheaper
+    `isinst`) can show a gain from it; the commits are d7398a6 (the change) and 2ad002b.
 
 - **perf/delegate (2026-11-27) - Ruby's delegation patterns against CRuby: measured, nothing built - a
   delegation layer costs what its calls cost.** A call through each to a trivial method, ns, IronRuby
