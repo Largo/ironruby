@@ -330,6 +330,18 @@ class Kr
   def v_unused(*a, k: 1) = 3
   def v_kwrest(*a, **o) = a.size + o.size
   def v_two(a, b) = a
+  # gap 38, the keyword prologue: the same method with a keyword, left out, required, **o, and two keywords
+  def p_opt(a, k: 1) = a
+  def p_req(a, k:) = a
+  def p_rest(a, **o) = a
+  def p_two(a, j: 1, k: 1) = a
+  def p_opt_only(k: 1) = k
+  def p_plain_opt(a, b = 1) = a
+  # an untaken raise in the body: does its presence cost?
+  def d_none(a) = a
+  def d_one(a); raise ArgumentError, "x" unless a; a; end
+  def d_two(a); raise ArgumentError, "x" unless a; raise ArgumentError, "y" unless a; a; end
+  def d_cond(a); b = a ? a : 0; b; end
 end
 
 def cpu
@@ -508,3 +520,14 @@ t("v_hash_literal_arg", N) { |n| i = 0; s = 0; while i < n; s += kr.v_hash_into_
 t("v_two_kw", N) { |n| i = 0; s = 0; while i < n; s += kr.v_two(i, k: 2); i += 1; end; s }
 t("v_two_lit", N) { |n| i = 0; s = 0; while i < n; s += kr.v_two(i, {k: 2}); i += 1; end; s }
 t("v_two_pos", N) { |n| i = 0; s = 0; while i < n; s += kr.v_two(i, 2); i += 1; end; s }
+t("p_opt", N) { |n| i = 0; s = 0; while i < n; s += kr.p_opt(i, k: 2); i += 1; end; s }
+t("p_opt_omitted", N) { |n| i = 0; s = 0; while i < n; s += kr.p_opt(i); i += 1; end; s }
+t("p_req", N) { |n| i = 0; s = 0; while i < n; s += kr.p_req(i, k: 2); i += 1; end; s }
+t("p_rest", N) { |n| i = 0; s = 0; while i < n; s += kr.p_rest(i, k: 2); i += 1; end; s }
+t("p_two", N) { |n| i = 0; s = 0; while i < n; s += kr.p_two(i, k: 2); i += 1; end; s }
+t("p_opt_only", N) { |n| i = 0; s = 0; while i < n; s += kr.p_opt_only(k: i); i += 1; end; s }
+t("p_plain_opt", N) { |n| i = 0; s = 0; while i < n; s += kr.p_plain_opt(i); i += 1; end; s }
+t("d_none", N) { |n| i = 0; s = 0; while i < n; s += kr.d_none(i); i += 1; end; s }
+t("d_one", N) { |n| i = 0; s = 0; while i < n; s += kr.d_one(i); i += 1; end; s }
+t("d_two", N) { |n| i = 0; s = 0; while i < n; s += kr.d_two(i); i += 1; end; s }
+t("d_cond", N) { |n| i = 0; s = 0; while i < n; s += kr.d_cond(i); i += 1; end; s }

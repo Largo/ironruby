@@ -1620,6 +1620,14 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     did not move: theirs is the prologue's cost below. Separately, the keyword prologue of
     `def kw(a, k: 1) = a + k` costs about 1,300-1,500 with the JIT off (4,017 against
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
+    The prologue's parts (perf/kwprologue, Rejected, JIT off): the separation checks 242, the
+    `unless KeywordArgumentsMatch` statement 380-640, each read 160-210 - 850 for
+    `def p_opt(a, k: 1) = a` called with the keyword left out, against 1,904 for the same
+    method with a plain optional. Folding the checks into one call saved 62. The method JIT
+    takes such methods and pays none of it (1,507); what pays is a keyword method it declines
+    (`**o`, `p_rest` 3,906). Unexplained: why one runtime call with four or five arguments
+    costs 350 or more in the interpreted body. A profiler that names the DLR interpreter's
+    frames (perf with jitdump, where perf_event_open is allowed) is the next tool.
 
 ## Landed
 
@@ -5299,6 +5307,34 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/kwprologue (/perf-step, 2026-11-26, on 78aab00) - a keyword method's prologue checks
+  the call in one runtime call** (gap 38's second cost; switch `IR_KW_PROLOGUE`, reverted).
+  Measured first by switching the prologue's parts off one at a time in a throwaway build
+  (`Util/perf/callgrind/count.sh`, `-X:NoJIT`, instructions a call): in `def p_opt(a, k: 1) =
+  a` the separation checks cost 242, the statement guarded by `KeywordArgumentsMatch` 380 (467
+  with the keyword given, 640 for a required one), the read 160-210 a keyword - 850 in all
+  against a plain optional (`p_plain_opt` 1,904, `p_opt_omitted` 2,765). The helpers are a few
+  instructions each (`HasKeywords` returns at once on the empty hash); an untaken `raise ...
+  unless a` costs 108 and the next 76, so a statement costs what its test does to execute, not
+  by being there; light frames do not change it (885 without them against 860). Tried: one
+  `[Emitted]` helper, `KeywordPrologueMatch(last, kw, names, required, rest)`, as the condition
+  of the `unless` that guards the prologue, with the separation checks moved into its body ahead
+  of the missing/unknown ones - the same errors in the same order, and the shape `JitKeywords`
+  recognizes (the JIT still specialized `kw`, `p_opt`, `p_req`, `p_two`; census 0 moved).
+  Result: `p_opt_omitted` 2,764 -> 2,702, `p_opt` 3,680 -> 3,618 (-62, 2%) with the JIT off,
+  nothing with it on; the controls 1.000. Rejected: 62 instructions do not pay for a new emitted
+  helper and a second prologue shape. Learned: the cost is not the number of statements but each
+  runtime call in the interpreted body (one call with five arguments cost about 560, where the
+  three it replaced cost 622), and the DLR's call instructions are the generic ones up to ten
+  arguments, so it is not a reflection fallback either - unexplained, see gap 38. Kept:
+  `Util/kw-prologue-matrix.rb` (which error wins when several things are wrong, default order
+  and side effects, ruby2_keywords, send, method_missing, super, define_method, Method#call, a
+  module function; CRuby's output on the unchanged build in every mode, and on the candidate
+  with the switch on and off), `Method_KeywordPrologue1`, and the shapes in `prelude-cost.rb`
+  (`p_*`, `d_*`). The parent's other idea - a call site that binds literal keywords without the
+  hash, guarded on the callee's signature - is untried; it would save the hash (about 670 at the
+  site) and the reads for a callee the JIT declines.
 
 - **perf/lexical3 (/perf-step, 2026-11-26, on 3cabf57) - bind the positionals of `def m(a, *r,
   k: 1)` in the calling convention instead of out of one splat** (the idea perf/lexical2's entry
