@@ -8091,6 +8091,44 @@ r.each { |x| p x }
         }
 
         /// <summary>
+        /// IR_EVAL_LITERALS: a text with regexp and range literals shares its compiled code between evals, its literals' objects
+        /// kept per eval (EvalLiterals): a new one per eval, the same one for every pass and block call of one eval and for a
+        /// Proc that escaped it, /o once per eval, threads each with their own (Util/eval-literals-matrix.rb).
+        /// </summary>
+        public void Eval_SharedLiterals1() {
+            TestOutput(@"
+require 'ruby4'
+B = binding
+def distinct(a) = a.map(&:object_id).uniq.size
+p distinct(3.times.map { eval(""/a\\w/"", B) }), distinct(eval(""4.times.map { /a\\w/ }"", B)), eval(""[/s/, /s/]"", B).then { |r| r[0].equal?(r[1]) }
+pr = eval(""proc { /esc/ }"", B); first = pr.call; other = eval(""proc { /esc/ }"", B).call
+p pr.call.equal?(first), first.equal?(other), pr.dup.call.equal?(first)
+V = binding.tap { |b| b.local_variable_set(:v, ""z"") }
+p distinct(3.times.map { eval('/#{v}/o', V) }), distinct(eval('3.times.map { /#{v}/o }', V)), distinct(eval('3.times.map { /#{v}/ }', V))
+p eval(""(1..2)"", B).frozen?, distinct(3.times.map { eval(""(1..2)"", B) }), distinct(eval(""3.times.map { (1...4) }"", B))
+eval('""xab"" =~ /a(b)/', binding); p $~[1]
+rs = 4.times.map { Thread.new { 20.times.map { eval(""2.times.map { /th/ }"", B) } } }.map(&:value).flatten(1)
+p rs.all? { |pair| pair[0].equal?(pair[1]) }, distinct(rs.map(&:first)) == rs.size
+", @"
+3
+1
+false
+true
+false
+true
+3
+1
+3
+true
+3
+1
+""b""
+true
+true
+");
+        }
+
+        /// <summary>
         /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
         /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
         /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any

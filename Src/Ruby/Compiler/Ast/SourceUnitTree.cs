@@ -115,6 +115,12 @@ namespace IronRuby.Compiler.Ast {
             );
             gen.CurrentMethod.HasOwnCompiledFrame = true;
 
+            // a plain string eval's regexp and Integer range literals are kept per eval, so that its code can be shared
+            // (EvalCodeCache, IronRuby.Runtime.EvalLiterals)
+            if (gen.CompilerOptions.FactoryKind == TopScopeFactoryKind.None && EvalCodeCache.KeepsLiteralsPerEval(this)) {
+                gen.EvalLiteralsVariable = scope.DefineHiddenVariable("#evalLiterals", typeof(EvalLiterals));
+            }
+
             MSA.Expression body;
 
             if (_statements.Count > 0) {
@@ -199,6 +205,11 @@ namespace IronRuby.Compiler.Ast {
 
                 default:
                     throw Assert.Unreachable;
+            }
+
+            if (gen.EvalLiteralsVariable != null) {
+                prologue = Ast.Block(prologue,
+                    Ast.Assign(gen.EvalLiteralsVariable, Methods.CreateEvalLiterals.OpCall(AstUtils.Constant(gen.EvalLiteralCount))));
             }
 
             body = Ast.Block(prologue, body);

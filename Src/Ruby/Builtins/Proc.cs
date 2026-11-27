@@ -84,6 +84,8 @@ namespace IronRuby.Builtins {
             public string SymbolName;
             public bool IsIsolated;
             public string CalleeName;
+            // the literals of the eval whose text this Proc's block is written in (IronRuby.Runtime.EvalLiterals)
+            public EvalLiterals EvalLiterals;
         }
 
         private RareState _rare;
@@ -270,6 +272,15 @@ namespace IronRuby.Builtins {
             set { if (value || _rare != null) { Rare.IsIsolated = value; } }
         }
 
+        /// <summary>
+        /// The literals of the eval whose text this Proc's block is written in, which its block's code reads its regexp and
+        /// range literals from (RubyOps.GetBlockEvalLiterals); null for any other block. A copy of the Proc keeps them.
+        /// </summary>
+        internal EvalLiterals EvalLiterals {
+            get { var r = _rare; return (r != null) ? r.EvalLiterals : null; }
+            set { if (value != null || _rare != null) { Rare.EvalLiterals = value; } }
+        }
+
         public string SourcePath {
             get { return _dispatcher.SourcePath; }
         }
@@ -297,6 +308,7 @@ namespace IronRuby.Builtins {
             Converter = proc.Converter;
             IsIsolated = proc.IsIsolated;
             SymbolName = proc.SymbolName;
+            EvalLiterals = proc.EvalLiterals;
         }
 
         /// <summary>
@@ -308,6 +320,7 @@ namespace IronRuby.Builtins {
             result.Converter = Converter;
             result.SymbolName = SymbolName;
             result.IsIsolated = true;
+            result.EvalLiterals = EvalLiterals;
             return result;
         }
 

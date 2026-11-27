@@ -88,6 +88,45 @@ namespace IronRuby.Runtime {
         /// </summary>
         private static readonly bool ShareDefinedEnabled = Environment.GetEnvironmentVariable("IR_EVAL_SHARE_DEFINED") != "0";
 
+        /// <summary>
+        /// IR_EVAL_LITERALS=0 refuses a text with a regexp or range literal again, and compiles its literals' objects into its
+        /// code as before (see KeepsLiteralsPerEval).
+        /// </summary>
+        internal static readonly bool EvalLiteralsEnabled = Environment.GetEnvironmentVariable("IR_EVAL_LITERALS") != "0";
+
+        /// <summary>
+        /// Whether a plain string eval of the tree keeps its literals' objects per eval (IronRuby.Runtime.EvalLiterals): it
+        /// has a regexp literal or a range, whose objects CRuby makes once per eval of the text.
+        /// </summary>
+        internal static bool KeepsLiteralsPerEval(SourceUnitTree/*!*/ ast) {
+            if (!EvalLiteralsEnabled) {
+                return false;
+            }
+            var finder = new LiteralFinder();
+            finder.Walk(ast);
+            return finder.Found;
+        }
+
+        private sealed class LiteralFinder : Walker {
+            internal bool Found;
+            public override bool Enter(RegularExpression/*!*/ node) { Found = true; return false; }
+            public override bool Enter(RangeExpression/*!*/ node) { Found = true; return false; }
+
+            protected internal override void Walk(MethodCall/*!*/ node) {
+                base.Walk(node);
+                if (node.Block != null) {
+                    node.Block.Walk(this);
+                }
+            }
+
+            protected internal override void Walk(ParallelAssignmentExpression/*!*/ node) {
+                base.Walk(node);
+                foreach (var value in node.Right) {
+                    value.Walk(this);
+                }
+            }
+        }
+
         private sealed class Screen : Walker {
             internal bool Shareable = true;
 
@@ -100,10 +139,12 @@ namespace IronRuby.Runtime {
             public override bool Enter(ModuleDefinition/*!*/ node) => Refuse();
             public override bool Enter(SingletonDefinition/*!*/ node) => Refuse();
             public override bool Enter(MethodDefinition/*!*/ node) => Refuse();
-            public override bool Enter(RangeExpression/*!*/ node) => Refuse();
+            // A regexp literal and an Integer range literal keep their object per eval (KeepsLiteralsPerEval); any other range
+            // makes its object every time, with a call site for <=> (IR_EVAL_LITERALS).
+            public override bool Enter(RangeExpression/*!*/ node) => EvalLiteralsEnabled || Refuse();
             public override bool Enter(RangeCondition/*!*/ node) => Refuse();
-            public override bool Enter(RegularExpression/*!*/ node) => Refuse();
-            public override bool Enter(RegularExpressionCondition/*!*/ node) => Refuse();
+            public override bool Enter(RegularExpression/*!*/ node) => EvalLiteralsEnabled || Refuse();
+            public override bool Enter(RegularExpressionCondition/*!*/ node) => EvalLiteralsEnabled || Refuse();
             public override bool Enter(ShutdownHandlerStatement/*!*/ node) => Refuse();
             // `defined?' keeps what the code of its operand keeps and nothing more (IR_EVAL_SHARE_DEFINED): of a local, the
             // answer the compile found in the locals the key holds; of a call, a call site; of a constant, a constant's cache,
