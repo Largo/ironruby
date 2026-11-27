@@ -1970,6 +1970,116 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region all?, any?, none?
+
+        // Array's own in CRuby 4.0 (rb_ary_all_p, rb_ary_any_p, rb_ary_none_p), as Enumerable's answered for an Array before:
+        // they walk the array and never call #each (Enumerable.TrueForList). The block forms only yield to their block, so
+        // they are [BlockNotKept], as #find is. Not inlined: a backtrace taken in the block names the frame by this method
+        // ('Array#any?'), and ReadyToRun folds a forwarder this small into its caller.
+
+        [RubyMethod("all?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
+        public static object TrueForAll(BlockParam predicate, IList/*!*/ self) {
+            return Enumerable.TrueForList(predicate, self, false, false);
+        }
+
+        [RubyMethod("none?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
+        public static object TrueForNone(BlockParam predicate, IList/*!*/ self) {
+            return Enumerable.TrueForList(predicate, self, true, false);
+        }
+
+        [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
+        public static object TrueForAny(BlockParam predicate, IList/*!*/ self) {
+            return Enumerable.TrueForList(predicate, self, true, true);
+        }
+
+        [RubyMethod("all?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object TrueForAll(BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, IList/*!*/ self, object pattern) {
+            return PatternForList(caseEquals, predicate, self, pattern, false, false);
+        }
+
+        [RubyMethod("none?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object TrueForNone(BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, IList/*!*/ self, object pattern) {
+            return PatternForList(caseEquals, predicate, self, pattern, true, false);
+        }
+
+        [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object TrueForAny(BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, IList/*!*/ self, object pattern) {
+            return PatternForList(caseEquals, predicate, self, pattern, true, true);
+        }
+
+        private static object PatternForList(BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, IList/*!*/ self, object pattern,
+            bool stop, bool positiveResult) {
+            if (predicate != null) {
+                caseEquals.Context.ReportWarning("given block not used");
+            }
+            // MRI calls #=== with rb_funcall, which a private #=== answers too, as this site's does.
+            return Enumerable.PatternForList(caseEquals.GetCallSite("==="), self, pattern, stop, positiveResult);
+        }
+
+        #endregion
+
+        #region find, detect
+
+        // Array#find and #detect are Array's own in CRuby 4.0 (rb_ary_find): they walk the array, re-reading its length, yield
+        // each element with a plain rb_yield - a lambda of two parameters is not handed an element taken apart - and do not
+        // call #each, so a subclass's #each is not what they search. Enumerable#find, which an Array answered before, calls
+        // #each with a block of its own: a Proc, a closure and an Array per element (885 bytes to find in [1]). They only
+        // yield to their block, so they are [BlockNotKept]: a literal given to them reuses its Proc, and the method it is in
+        // may park its scope (MethodDefinition.IsNeverParkedIterator).
+
+        [RubyMethod("find")]
+        [RubyMethod("detect")]
+        public static Enumerator/*!*/ GetFindEnumerator([CalledName]string/*!*/ name, BlockParam predicate, IList/*!*/ self, [Optional]object ifNone) {
+            Debug.Assert(predicate == null);
+            // the Enumerator calls the method again, as MRI's does: it shows as #<Enumerator: obj:find>
+            return (ifNone != Missing.Value) ? new Enumerator(self, name, ifNone) : new Enumerator(self, name);
+        }
+
+        // a method of its own to have a frame of its own (see Map)
+        [RubyMethod("detect")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Find")]
+        [BlockNotKept]
+        public static object Detect(CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage, [NotNull]BlockParam/*!*/ predicate,
+            IList/*!*/ self, [Optional]object ifNone) {
+            return Find(callStorage, predicate, self, ifNone);
+        }
+
+        [RubyMethod("find")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
+        public static object Find(CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage, [NotNull]BlockParam/*!*/ predicate,
+            IList/*!*/ self, [Optional]object ifNone) {
+            for (int i = 0; i < self.Count; i++) {
+                object item = self[i];
+                object blockResult;
+                if (predicate.Yield(item, out blockResult)) {
+                    return blockResult;
+                }
+                if (Protocols.IsTrue(blockResult)) {
+                    return item;
+                }
+            }
+
+            // rb_ary_find calls the if-none object's #call, whatever it is, unless it is nil
+            if (ifNone == Missing.Value || ifNone == null) {
+                return null;
+            }
+            var site = callStorage.GetCallSite("call", 0);
+            return site.Target(site, ifNone);
+        }
+
+        #endregion
+
         #region include?, find_index/index, rindex
 
         [RubyMethod("include?")]
@@ -1995,11 +2105,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("index")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [SameRubyMethod("FindIndex")]
+        [BlockNotKept]
         public static object Index([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             return FindIndex(predicate, self);
         }
 
         [RubyMethod("find_index")]
+        [BlockNotKept]
         public static object FindIndex([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             for (int i = 0; i < self.Count; i++) {
                 object blockResult;

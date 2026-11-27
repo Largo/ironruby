@@ -1004,6 +1004,33 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     allocates), 0.51-0.70 of the time. Left: `any?`, `find` and `each_with_index` (Enumerable's
     C# goes through `each` and a SplattingBlock: the bytes are its own, not the parking's) and
     the literal given to a core iterator outside the parked list.
+    perf/iter2 (see Landed, not gated) took `find` and `any?`: Array's own, as in CRuby 4.0, and
+    parked - `find1` 298 ns / 885 B -> 113 / 69 (CRuby 66), `any1` 172 / 397 -> 107 / 69 (CRuby
+    55). `upto` and `downto` were tried the same way and left out: a parked slot around them
+    takes Permute from 124.5 to 53.9 MB per iteration and costs 3.8% more instructions, its time
+    level (1.00 over six rounds), as perf/deadconst found. Left: `each_with_index` (the prelude's,
+    `*args, &block`), `inject`, and `upto`/`downto`'s entry, which is not their bytes.
+    perf/iter3 (round thirty-seven, measured, nothing kept; `Util/bench/iter-shapes.rb`) put
+    the gap where it stands now, ns per call of a method that calls the iterator, alternating
+    rounds: `each` over 1, 2, 4 elements 128, 159, 184 against CRuby's 78, 108, 176 (1.64,
+    1.47, 1.05), `times` 1.40, 1.27, 1.05, `map` 1.42, 1.16, 0.88. Per element IronRuby is now
+    cheaper than CRuby (about 13 ns against 30); what is left is the fixed part, and it is
+    not the iterator, the yield or the BlockParam: a light method that ignores its block,
+    called with a literal `{ }` (`nbl`), is 116 ns against 59 with a stored Proc (`nbp`) and 39
+    with none, where CRuby's literal costs nothing (36, 36, 32); `a.each { }` 120 against
+    `a.each(&P)` 84. With every light frame off (`IR_LIGHT_FRAMES=0`) the stored Proc costs
+    98 and the literal 107: once the method has a scope the literal adds almost nothing. So
+    the ~57 ns is the caller's scope, which a light frame makes (or takes parked) because the
+    literal's Proc is over it, and the Proc made over it. Not the parking protocol's atomics:
+    publishing the parked scope with a release write instead of a compare-exchange
+    (`EndPark`) moved nothing in eight rounds (1.03, 0.92, 1.02 overlapping), and with parking
+    off (allocating scope and Proc) the time is the same. What would take it is a Proc that
+    needs no method scope until something can see one - a literal whose body reads and writes
+    only its own locals and the method's through the frame, given to a callee that does not
+    keep it - with the scope made, from the frame's live locals, when it escapes (`&b`,
+    `binding`, a `return` from the block, a TracePoint). That is the light frame's lazy scope
+    reached from a Proc instead of from the frame's own code: gap 16's design, not one step.
+
 14. **DeltaBlue: `Vector#each`** (`(@first_idx..(@last_idx - 1)).each { |i| yield
     @storage[i] }`) is about 20% of its samples by nearest Ruby frame (8.9% the method,
     11.3% its block), and no call site owns more than 1.2% of the 24% in
@@ -1127,6 +1154,32 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     iterator compiled with its block, and at twice CRuby's time for the same source: the
     loop compiler gives up on `yield` (see the Rejected entry "A block whose body is
     `yield <expr>`"). This is what keeps per-element loops in C#.
+    Round thirty-seven (perf/yieldloop, measured, not built; see Rejected) took it apart with
+    `Util/bench/yield-shapes.rb`, per element over 100: the loop alone (`loop100`) 10 ns with
+    the tiers on, 28 with them off, CRuby 18; the same loop yielding to an empty block
+    (`ueach100e`) 39-40 either way, CRuby 28; to `{ |x| s += x }` (`ueach100`) 55-57, CRuby
+    30. So the `yield` itself is about 11 ns - CRuby's is about 10, C#'s `Array#each` yielding
+    the same empty block without its compiled copy 12 - and the rest is the loop around it
+    running generic: the loop compiler bails at the YieldCall (`[osr] emitter: node:
+    YieldCall`) and the light frame's `while` keeps its four dynamic sites. A typed loop
+    with the `yield` as a call in it would be about 23 ns against CRuby's 28. What stands in
+    the way is not the yield's cost but the iteration it would sit in (see Rejected).
+    The second step of round thirty-seven (perf/yieldresume, design only) wrote that down:
+    `Docs/jit-resume-deopt.md`, "Stage 3a: a yield in an outlined loop", with its matrix
+    `Util/yield-loop-matrix.rb` (31 rows; CRuby's output on the unchanged build in all six
+    modes). The OSR copy is the place, not the method JIT: it runs inside the generic body,
+    which stays the method's frame, and it already leaves only at iteration boundaries, so
+    everything before the yield is sound as it is. What is new is the iteration's tail after
+    the yield, which must end at the next boundary and never restart: four ways out - a typed
+    tail under one guard taken after the yield (method and constant versions, tracing, no
+    break), with an overflow making the Bignum; a generic tail, the loop body's statements
+    after the yield compiled as the generic body compiles them, when that guard fails (the
+    block redefined `Integer#+`, or enabled a TracePoint whose `:line` for `i += 1` CRuby fires
+    in the same iteration with `i` in its binding); a new site answer, MethodReturned, for the
+    block's break, turned into the method's own return; and the locals written back when an
+    exception leaves through the yield. Two new answers of `OsrLoopSite` (Handback,
+    MethodReturned) and the generic tail lambda are the work; the doc orders it in three steps,
+    none of which may hand back before the tail.
 19. **`Object.new.extend(M)` is 200 to 300 times CRuby's time and grows with the number
     of objects extended**: 20,000 in a `while` loop take 4.5 s, 40,000 11.0 s, 200,000
     72 s, with and without the JIT and OSR; CRuby takes 0.23 s for 200,000 (1.1 us each).
@@ -3640,6 +3693,55 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   build in both modes; spec/core/string (3,963 examples) and spec/library/stringscanner (240):
   the same on both builds, 0 failures, one error on both (`String.try_convert ... raises
   TypeError if it's not a kind of String`, run as a directory).
+
+- **perf/iter2 (round thirty-seven, 2026-11-27) - Array#find, #detect, #any?, #all? and #none? are
+  Array's own and, with #find_index and #index, let the method that gives them a literal park
+  (gap 13)** - instructions, bytes and time, not gated. An Array's `find` and `detect` were
+  Enumerable's: a call site to `each`, a C# SplattingBlock (a Proc, a closure) and an Array per
+  element - 885 bytes to find in `[1]` - and, being in `NeverParkedIterators`, no parked slot for
+  the method that called them. CRuby 4.0 has them as Array's own (`rb_ary_find`), with `any?`,
+  `all?` and `none?`: they walk the array, re-reading its length, yield each element with a plain
+  `rb_yield` (a lambda of two parameters raises), and never call `#each` - so a subclass's `each`
+  is not what they search, and a backtrace names `Array#find`, where IronRuby said `Array#each`
+  and `Enumerable#find`. Now they are IListOps methods (`Find`, `Detect`, `TrueForAll`/`None`/`Any`
+  with their pattern forms, over `Enumerable.TrueForList` and `PatternForList`, which Enumerable's
+  own use for an Array as before), `[BlockNotKept]` with `find_index` and `index`, and the seven
+  names are off `MethodDefinition.NeverParkedIterators`. `IR_PARKED_FIND=0` puts them back on it
+  (the methods stay Array's). Not inlined: ReadyToRun folded the `any?` forwarders into their caller
+  and a backtrace lost the `Array#any?` frame (caught by the R2R mode of the matrices).
+  Per call (`Util/bench/find-shapes.rb`; ns, bytes, CRuby): `find1` 298 / 885 -> 113 / 69 (66),
+  `any1` 172 / 397 -> 107 / 69 (55); with the switch off 163 / 357 and 138 / 357. Instructions
+  (callgrind, new over base / over off): `find1` 0.601 / 0.988, `find4` 0.586 / 1.009, `detect1`
+  0.608 / 0.988, `findidx4` 1.005 / 0.993, `any1` 1.015 / 1.014, `any4` 1.030 / 1.023, `all4` 0.996
+  / 0.992; controls `each1`, `times1`, `map1` 1.000. Time, four and eight alternating rounds, new
+  over off: `find1` 0.82 and 0.84, `detect1` 0.76, `findidx4` 0.73, `any1` 0.82 and 0.84, `any4`
+  0.75, `all4` 0.81; controls overlapping (spreads of 20-40% on a shared host). The parked slot is
+  bytes the counter does not see: each cell is the least of seven sections, and at N=20000 that one
+  runs no collection.
+  Tried and taken out: `[BlockNotKept]` on Integer#upto and #downto, off the list. `upto1` 389 ->
+  101 B and 0.85-0.86 of the time, Permute 124,533,643 -> 53,876,246 B per iteration (alloc.rb
+  geomean 0.937 with it); but `upto1` +3.0% instructions, `upto4` +1.8%, Permute +3.8% over off
+  (+4.4% over base), and Permute's time level (1.00 over six alternating rounds; the least of forty
+  iterations 104 against 107-112 ms). It is perf/deadconst's result again; without it Permute and
+  Queens allocate what the baseline does (alloc.rb: 124,548,094 / 124,525,657, 30,446,800 /
+  30,441,889).
+  Matrices (`Util/perf/gate-matrices.rb`, base b887bc1 with perf/iter): `Util/parked-iterator-matrix.rb`
+  (new: the nine methods called again and again, ifnone, empty, Bignum, no block, patterns with a
+  block, Symbol, lambda arity, stored Proc, break/next/return/raise, binding, proc, lambda, eval and
+  a method made in the block, the outer binding, a subclass's each, a subclass's find, Hash, Range,
+  Struct, an Enumerable whose each keeps the block, Array#each redefined, the array grown and
+  shrunk while searched, recursion, re-entrancy, a Fiber, four threads, a TracePoint, the frames,
+  the owners), enum, enumerable2, block-nest-reuse, block-scope-reuse, -blockpass, -race,
+  block-loop, block-given, light-rest, hot-shapes, jit, parked-scope and block-pass, in the seven
+  modes with IR_PARKED_FIND=0: PASS; the new matrix is CRuby's in every mode, the baseline differs
+  from it in three rows the change fixes (subclass each, frames, owners). ruby/spec core/array,
+  core/enumerable, integer/upto and downto: the baseline's one failure and three errors (Array#fill,
+  Array.new, Array.try_convert). WeakRef probe (find, any?, find_index, upto, downto in parked
+  methods, `IR_PARKED_SCOPES=verbose` confirming the slots): all freed. Census: 0 methods changed.
+  For the gate: Array now answers `find`, `detect`, `any?`, `all?`, `none?` itself (owners,
+  `instance_method`, `super` from a subclass, `Enumerable.instance_method(:find).bind_call(ary)`);
+  a method parked around `h.find { }` on a Hash, which is still Enumerable's and keeps no Proc,
+  until its slot gives up (`ParkedScopeSlot.MaxFailures`).
 
 - **perf/iter (round thirty-seven, 2026-11-26) - a block that holds a block literal reuses its scope
   and the literal's Proc (gaps 13 and 6)** - instructions and bytes, gated 2026-11-27 (round 5's gate entry). A block whose
@@ -7005,6 +7107,47 @@ after master (#228 to #233) had been merged into both trees.
   the block's conversion), which every `...`, `&block` and DelegateClass forward pays; and the rest
   Array of `...` (a calling convention that passes the caller's arguments on without one, as
   CRuby's VM does - larger than a step).
+- **perf/yieldresume (round thirty-seven, 2026-11-27) - a typed loop that resumes after a yield:
+  designed, not built** (gap 18; `Docs/jit-resume-deopt.md`, "Stage 3a"). The brief's narrowest slice -
+  `def each; i = 0; while i < @a.size; yield @a[i]; i += 1; end; end` typed and sound - needs four
+  mechanisms the OSR tier does not have: a way for the copy to make the method return (a `return` in an
+  outlined loop bails today: "the outlined copy has no way to return from the method"), for the block's
+  `break`; a write-back of the typed locals when an exception leaves through the yield, for the
+  iterator's own `rescue`/`ensure`; a typed `i += 1` after the yield that sees an `Integer#+` the block
+  redefined in the same iteration; and the generic `:line` hook for that `i += 1` when the block enabled
+  a TracePoint, with a binding that sees `i`, which needs the light frame's lazily made scope in the
+  copy. The last two are why no smaller slice is sound: a copy that hands back to the generic loop
+  before the tail skips `i += 1` (the generic loop starts at the head), and one that runs the tail
+  without its hooks loses CRuby's `:line`. `Util/yield-loop-matrix.rb` pins each of them (`redefine +`
+  calls the new `+` for the very `i += 1` after the yield; `trace line` fires `:line` for it first;
+  `trace binding` sees `i`). Nothing in the runtime changed; the design is the result.
+- **perf/yieldloop (round thirty-seven, 2026-11-27) - a `yield` in an outlined `while` loop: measured,
+  not built** (gap 18). What a `while ... yield` pays per element is the loop, not the yield (gap 18's
+  numbers): IronRuby's `yield` is about 11 ns, CRuby's about 10, and the loop around it is 28 ns generic
+  against 10 typed and CRuby's 18, generic because the loop compiler bails at the YieldCall. So of the
+  three candidates the brief named, the method's block resolved once per call of the iterator and a
+  cheaper `Yield1` for a scope-free block act on the 11 ns that is already CRuby's (round ten's
+  perf/veach, the yield in a block reading the method's Proc once, found the walk cheap too), and only
+  the third - the loop tier taking a `yield` - acts on the 15 ns that is not. That one needs what the
+  tier does not have:
+  - **A resume point after the yield.** A deopt restores the locals of the top of the iteration and runs
+    it again generically (JitLoopCompiler's header): one after the yield runs the block twice. Every
+    loop of this kind has an `i += 1` after its yield, whose add deopts on an overflow out of Int64, and
+    `@a[i]`, `i < @a.size` whose guards deopt. The emitter declines a deopt after an effect
+    (`_deoptAfterEffect`), so the yield would decline the loop, unless the iteration can be resumed
+    after the yield - JITResume's stage 2, for a body with locals (stage 1 takes none).
+  - **Nothing typed after the yield.** The block is any Ruby code: it may redefine Integer#+ or Array#[],
+    freeze, enable a TracePoint, and in this thread that is ordered before the `i += 1` that follows,
+    which a typed add would not see until the next safe point (JITResume's "self-guarded tail": every
+    node after a fallback re-checks or speculates on nothing).
+  - **The block's own frame and protocol.** Kept, if the yield is a call (`JitRuntime` calling
+    `RubyOps.Yield1` with the method's Proc and its reused BlockParam, then `MethodYield`'s break test):
+    a `break` leaves the loop with the block's value as the method's, `next` is the block's, a raise
+    leaves through the typed loop with the tuple brought up to date first.
+  What it would win: `ueach100` 55 -> about 23 ns per element (CRuby 30), and the prelude's `take_while`,
+  `sum`, `uniq` and `to_h` with a block (48, 100, 225 and 273 ns against CRuby's 28, 28, 57 and 94 per
+  element). The next attempt starts from JITResume's stage 2 (`Docs/jit-resume-deopt.md`), with the
+  yield as its first fallback that is not an attribute operation, not from the yield.
 
 - **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
   above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
