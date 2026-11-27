@@ -1137,6 +1137,22 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     YieldCall`) and the light frame's `while` keeps its four dynamic sites. A typed loop
     with the `yield` as a call in it would be about 23 ns against CRuby's 28. What stands in
     the way is not the yield's cost but the iteration it would sit in (see Rejected).
+    The second step of round thirty-seven (perf/yieldresume, design only) wrote that down:
+    `Docs/jit-resume-deopt.md`, "Stage 3a: a yield in an outlined loop", with its matrix
+    `Util/yield-loop-matrix.rb` (31 rows; CRuby's output on the unchanged build in all six
+    modes). The OSR copy is the place, not the method JIT: it runs inside the generic body,
+    which stays the method's frame, and it already leaves only at iteration boundaries, so
+    everything before the yield is sound as it is. What is new is the iteration's tail after
+    the yield, which must end at the next boundary and never restart: four ways out - a typed
+    tail under one guard taken after the yield (method and constant versions, tracing, no
+    break), with an overflow making the Bignum; a generic tail, the loop body's statements
+    after the yield compiled as the generic body compiles them, when that guard fails (the
+    block redefined `Integer#+`, or enabled a TracePoint whose `:line` for `i += 1` CRuby fires
+    in the same iteration with `i` in its binding); a new site answer, MethodReturned, for the
+    block's break, turned into the method's own return; and the locals written back when an
+    exception leaves through the yield. Two new answers of `OsrLoopSite` (Handback,
+    MethodReturned) and the generic tail lambda are the work; the doc orders it in three steps,
+    none of which may hand back before the tail.
 19. **`Object.new.extend(M)` is 200 to 300 times CRuby's time and grows with the number
     of objects extended**: 20,000 in a `while` loop take 4.5 s, 40,000 11.0 s, 200,000
     72 s, with and without the JIT and OSR; CRuby takes 0.23 s for 200,000 (1.1 us each).
@@ -6499,6 +6515,20 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/yieldresume (round thirty-seven, 2026-11-27) - a typed loop that resumes after a yield:
+  designed, not built** (gap 18; `Docs/jit-resume-deopt.md`, "Stage 3a"). The brief's narrowest slice -
+  `def each; i = 0; while i < @a.size; yield @a[i]; i += 1; end; end` typed and sound - needs four
+  mechanisms the OSR tier does not have: a way for the copy to make the method return (a `return` in an
+  outlined loop bails today: "the outlined copy has no way to return from the method"), for the block's
+  `break`; a write-back of the typed locals when an exception leaves through the yield, for the
+  iterator's own `rescue`/`ensure`; a typed `i += 1` after the yield that sees an `Integer#+` the block
+  redefined in the same iteration; and the generic `:line` hook for that `i += 1` when the block enabled
+  a TracePoint, with a binding that sees `i`, which needs the light frame's lazily made scope in the
+  copy. The last two are why no smaller slice is sound: a copy that hands back to the generic loop
+  before the tail skips `i += 1` (the generic loop starts at the head), and one that runs the tail
+  without its hooks loses CRuby's `:line`. `Util/yield-loop-matrix.rb` pins each of them (`redefine +`
+  calls the new `+` for the very `i += 1` after the yield; `trace line` fires `:line` for it first;
+  `trace binding` sees `i`). Nothing in the runtime changed; the design is the result.
 - **perf/yieldloop (round thirty-seven, 2026-11-27) - a `yield` in an outlined `while` loop: measured,
   not built** (gap 18). What a `while ... yield` pays per element is the loop, not the yield (gap 18's
   numbers): IronRuby's `yield` is about 11 ns, CRuby's about 10, and the loop around it is 28 ns generic
