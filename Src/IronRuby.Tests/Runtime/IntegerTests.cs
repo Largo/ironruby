@@ -1605,5 +1605,23 @@ p((3 & o rescue $!), ((2**70) ^ o rescue $!), (3 | nil rescue $!), ((2**70) & 1.
 #<TypeError: 1.5 can't be coerced into Integer>
 ");
         }
+
+        /// <summary>
+        /// Integer#fdiv of what is coerced takes the result as a Float, as MRI's rb_int_fdiv_double (NUM2DBL): of a Complex
+        /// a RangeError, not the Complex. Util/coerce-matrix.rb.
+        /// </summary>
+        public void Integer_FDivCoerced1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { 1.fdiv(Complex(1, 1)) }, -> { -3.fdiv(Complex(2, 0)) }, -> { (2**64).fdiv(Complex(1, 1)) }, -> { 1.fdiv(Rational(3, 2)) },
+ -> { 1.fdiv(""x"") }].each { |l| p((l.call rescue $!)) }
+", @"
+#<RangeError: can't convert 0.5-0.5i into Float>
+#<RangeError: can't convert -1.5+0.0i into Float>
+#<RangeError: can't convert 9.223372036854776e+18-9.223372036854776e+18i into Float>
+0.6666666666666666
+#<TypeError: String can't be coerced into Integer>
+");
+        }
     }
 }

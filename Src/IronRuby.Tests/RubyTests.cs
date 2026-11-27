@@ -1445,6 +1445,7 @@ namespace IronRuby.Tests {
                 Kernel_IsAModuleRequired1,
                 Struct_InspectMemberNames1,
                 Integer_BitwiseCoerce1,
+                Integer_FDivCoerced1,
                 Comparison_AnonymousClassName1,
             };
         }
