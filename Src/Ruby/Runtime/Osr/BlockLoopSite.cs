@@ -453,6 +453,12 @@ namespace IronRuby.Runtime.Osr {
             _osr.TupleArgIndex = tupleArgIndex;
             _osr.SelfArgIndex = depth + 1;
             _osr.ScopeArgIndex = depth + 2;
+            // Run reads back only the counter and what a select kept (the hidden locals), and clears the tuple
+            var dead = new List<LocalVariable>(info.Locals);
+            if (info.Parameter != null) {
+                dead.Add(info.Parameter);
+            }
+            _osr.DeadAtExit = dead;
         }
 
         private void Retire() {
