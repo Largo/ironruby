@@ -2355,6 +2355,34 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   transcoding error message encodings; convpath element encodings; Marshal bytes of raised
   exceptions; IO#write into UTF-16/32 (the same bytes, a different error); Thread#backtrace
   contents; Lazy.ancestors and Lazy#take & co. owner; String#<< has an object overload.
+  Fourth round (2026-11-27, on claude/happy-gauss-95wm2j 4320d4a + the third): the rows round 5's
+  gate still saw. string-search 115 -> 63 lines, forward-rest -> same.
+  - StringScanner from a scan pointer inside a character matches the rest as a string of its own,
+    as MRI's strscan does (RubyRegex.MatchWindow's allowBroken, for this caller only; a subject
+    broken as a whole still raises). StringScanner_InsideCharacter1.
+  - StringScanner over a subject made shorter than the scan pointer: nil scans, "" rest, nil bol?,
+    charpos past the end. StringScanner_ShorterSubject1.
+  - StringScanner with a String pattern of an incompatible encoding raises (rb_enc_check).
+    StringScanner_LiteralEncoding1.
+  - Kernel#binding through a Method object raises RuntimeError "Cannot create Binding object for
+    non-Ruby caller" ([RequiresRubyCaller], checked when Method#call's rule is built).
+    Method_BindingNonRubyCaller1.
+  Left, with the reason: string-search's last 63 lines are /./ and \A. on a lone split byte (an
+  invalid byte decodes to a lone surrogate, which the translator's '.' excludes: the regexp
+  translator's, not the scanner's); int-matrix's hash values (CRuby seeds them per process), its
+  Integer.instance_methods(false) (#hash, #step, #to_c are C# fast paths defined on Integer, owned by
+  Kernel and Numeric in CRuby) and (2**100).equal? (a Bignum is a boxed BigInteger, compared and
+  identified by value); caller-matrix as in the third round; stdre's URI names (the vendored
+  uri/rfc3986_parser.rb inlines SEG, since .NET has no \g<name>, so CRuby's (?<seg>...){0} is not
+  there); eval-matrix's "character class has duplicated range" (Onigmo's CC_DUP warning is not
+  implemented; a rule that is not exactly Onigmo's would warn where CRuby does not); glob-matrix
+  (the row lists the runtime's own clr-debug-pipe files in /tmp); fiddle's Handle::NEXT (the
+  matrix's own expected difference, and CRuby answers an address); numeric-conversion's "gives
+  NilClass" (pinned wording).
+  For the gate, behaviour that changed outside a message: StringScanner's matches from inside a
+  character, its answers over a shortened subject, and an error for an incompatible String pattern;
+  Kernel#binding through Method#call/bind_call/to_proc raises; RubyRegex.MatchWindow has an
+  allowBroken overload.
 
 - **perf/strsearch4 (2026-11-27) - the ASCII scan's cost of round three found and mostly removed;
   `#byteindex`/`#byterindex` from an offset other than 0 walk from the last search, through a map
