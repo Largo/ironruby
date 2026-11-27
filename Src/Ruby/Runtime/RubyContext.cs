@@ -3013,6 +3013,26 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Neither instance variables nor a singleton class, with one look in the table of instance data (each of
+        /// HasInstanceVariables and GetImmediateClassOf takes one, some 200 instructions for an object of a CLR type):
+        /// MRI's BARE_STRING_P for String#dup (MutableStringOps.Duplicate), less the class, which the caller tests.
+        /// </summary>
+        public bool HasNoInstanceVariablesOrSingleton(object obj) {
+            RubyInstanceData data;
+            if (obj != null && obj.GetType() == typeof(MutableString)) {
+                // a String (not a Ruby subclass, which is an IRubyObject) keeps its data in the table (TryGetClrTypeInstanceData)
+                _referenceTypeInstanceData.TryGetValue(obj, out data);
+            } else {
+                data = TryGetInstanceData(obj);
+            }
+            if (data == null) {
+                return true;
+            }
+            var immediate = data.ImmediateClass;
+            return !data.HasInstanceVariables && (immediate == null || !immediate.IsSingletonClass);
+        }
+
+        /// <summary>
         /// The object's instance variables. The runtime keeps a slot or two of its own in the
         /// same table - the finalizer ObjectSpace.define_finalizer attaches is one - spelled with
         /// angle brackets so that they cannot collide with anything Ruby can name, and Ruby must

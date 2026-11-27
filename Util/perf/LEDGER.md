@@ -1176,6 +1176,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     own (`Util/bench/dup-shapes.rb`).
     perf/strdup (see Landed): String#dup without the hooks, as CRuby's, is no faster on the clock
     (100-113 against 104-109 ns, CRuby 55); the gap is elsewhere in the call or the copy.
+    perf/dupcost (see Landed): it was the instance-data lookups and a wasted content; `S.dup`
+    77 ns against 114 (CRuby 56).
 25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
     sixteen's breakdown; its author's numbers, taken beside two other experiments at load
     2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
@@ -1634,7 +1636,107 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `def kw(a, k: 1) = a + k` costs about 1,300-1,500 with the JIT off (4,017 against
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
+39. **A String is not safe under a concurrent writer either** - a correctness gap, like gap 20 for
+    Array and Hash, found by perf/strrace (2026-11-27). `Util/string-race-matrix.rb` races 36 readers
+    against 7 writers that flip a string between known states (replace, an append and its removal,
+    slice! and prepend, setbyte and back, an insertion and its removal, force_encoding there and
+    back, encode! there and back); a reader must answer what it answers on one of those states.
+    CRuby: every row ok. IronRuby (6956e4e, 20 runs): 101 of 252 rows are not always ok - every
+    kind of reader: `end_with?`, `getbyte`, `each_byte` and `unpack1` raise IndexOutOfRangeException;
+    `split` and `sum` RangeError; `hash`, `rindex`, `to_sym` and `upcase` ArgumentError; index,
+    rindex, `<=>`, hash, chars, count, scan, inspect, upcase, byteslice, size and valid_encoding?
+    answer what no state held; and in 30 rows the *writer* raises (force_encoding or encode!:
+    "character U+0000 can't be encoded in ASCII-8BIT"), because a reader changed how the string is
+    held under it. Three causes, each in every reader, so no reader-by-reader fix is sound:
+    (1) readers read the content's array, start and count unheld while a writer shifts the array in
+    place (Remove, Insert) or replaces it - the slice copy was the one reader that held it (perf/strcow);
+    (2) a reader that switches the representation (SwitchToBinary/SwitchToChars, from getbyte,
+    bytes, unpack, index of a byte string...) converts unheld and publishes with SetContent, so a
+    write made meanwhile is lost or decoded in the wrong encoding - readers corrupt the string;
+    (3) `_encoding` and `_content` are separate fields read separately, so a reader can pair the new
+    bytes with the old encoding. The design that would fix it, not started: every content read
+    held (ContentState.Enter, one compare-exchange, the cost perf/strcow measured for a slice:
+    +1.4% instructions, +5-8% time on a short one), with operations on two strings (==, <=>,
+    include?, index of a String) holding one and copying or snapshotting the other - never both,
+    or two threads comparing a == b and b == a spin forever; a representation switch made holding
+    the old content and published only if it is still the owner's (compare-exchange on
+    `_rawContent`), every writer re-checking after it holds that its content is still current; and
+    the encoding kept with the content (or read under the same hold). A decision about what
+    IronRuby promises, as gap 20 is, before an experiment.
+
 ## Landed
+
+- **perf/strcow (2026-11-27, not gated) - a String slice copied while the content is held; a
+  long tail slice shares the array, as MRI's** (gap 24's dup note). Asked for: copy-on-write content
+  for dup, `+` and slices. Found: it is there already - CharArrayContent and BinaryContent share
+  their array on Clone and on a long slice and copy on the first write (ContentState, the
+  `MutableString_CopyOnWrite*` tests): a dup of 10,000 characters costs what a dup of 10 does (108
+  ns), `+` is CRuby's time (97 against 106), a short slice too (95 against 101). What was left:
+  (1) a slice that is copied read the array unheld, so `s[1..]` racing `s.slice!(0, 1)` tore (the
+  string's last character several times; `Util/strcow-matrix.rb`'s slice! rows differed from CRuby
+  in 20 runs of 20). Copies are now made holding the content (`GetSlice` enters it once and decides
+  there): a short slice +40 instructions (2,877 -> 2,917), 92 -> 97-100 ns. (2) A tail slice,
+  which MRI shares (rb_str_subseq, SHARABLE_SUBSTRING_P) whatever it keeps alive, was copied
+  unless it kept half the array: `Utils.IsSharedSlice(length, count, toEnd)` shares a slice of 256
+  or more that runs to the end, for String#[] and #slice only (`Content.GetSlice(start, count,
+  shareTail)`: #slice! removes the slice next and would then copy the whole array to write it).
+  `IR_SHARE_TAIL=0` turns (2) off. `LONG[5000..]` of 10,001 characters 23,772 -> 3,505
+  instructions, 1,580-1,613 -> 151-157 ns (CRuby 130); a middle slice is copied as in MRI and stays
+  1,550-1,620 (CRuby 487: half the bytes, a char is two) - a per-encoding byte store is the next
+  step there, not sharing. Controls level: dup, `+`, size, plain. Checks: `Util/strcow-matrix.rb`
+  (new; threads included) prints CRuby's output, 20 runs of 20 (master: 0 of 20); strcow, dup,
+  string-search, hot-shapes, jit and jit-calls matrices in every mode and with the switch off:
+  PASS; spec/core/string 3,963 examples, the one known try_convert wording error on both; the 43
+  MutableString and String IronRuby.Tests: PASSED. Left: other readers of a content (index, each
+  char, the byte views) still read it unheld.
+
+- **perf/dupcost (2026-11-26, not gated) - `String#dup` of a bare string: one look for instance
+  data, and the copy constructor** (gap 24's dup note). Where the time went, by callgrind with the
+  CLR's perf map over one `str_dup` section of `dup-shapes.rb` (instructions per call, the
+  shape's driver included; the scratch profiler kept the section's files and named JIT frames
+  from /tmp/perf-PID.map): the bare test 553 - `HasInstanceVariables` and `GetImmediateClassOf`
+  each looked the string up in the ConditionalWeakTable of instance data, through the general
+  `TryGetInstanceData` - and the copy 706: `CreateInstance` 375 (a new string with an empty
+  char-array content, zeroed) and `Replace` 331 (`SetEncoding` 120, the content's clone 106),
+  which threw that content away. Not the library call. Now `RubyContext.HasNoInstanceVariablesOrSingleton`
+  looks once, straight in the table for a String, and the copy is `MutableString.Clone()` (the
+  copy constructor: content clone, encoding, character flags - what CreateInstance().Replace left).
+  Tried first and dropped: a per-runtime flag "no String has instance data yet" - always set, since
+  the Loader puts `@gem_prelude_index` on the load path's strings at start-up.
+  Instructions (`callgrind/count.sh`, N=20000): `str_dup` 3,290 -> 2,418 (over `plain`'s 1,266:
+  2,024 -> 1,152); `str_clone`, `hash_dup`, `clone`, `obj_dup`, `oi_dup`, `arr_dup` level (one
+  `obj_dup` outlier on the base, 6,130, as seen before). Time in a method's loop, three alternating
+  runs: `S.dup` 97-113 -> 76-78 ns (CRuby 56); in reverse order 114-117 -> 77. `S.clone` read
+  139-192 -> 193-220 when run after `S.dup` in one process, but alone (129-132 on both, three runs
+  each) and in reverse order (207-208 against 198-209) it is level: an artefact of the order of
+  shapes in one process - which may also be what sank perf/struct2's Hash#dup (see Rejected).
+  Checks: dup, hash-dup, string-search, hot-shapes, jit and jit-calls matrices in every mode and
+  with `IR_FAST_DUP=0`: PASS. spec/core/string with the Kernel dup/clone specs: 4,010 examples,
+  the one known try_convert wording error on both builds. Not measured, since the call was not
+  the cost: other no-argument library calls (`s.size`, `a.first`, `h.empty?`). Left: the copy
+  allocates two objects (the string and its content) where CRuby shares the buffer; a
+  copy-on-write content would take the next ~350.
+
+- **perf/strdup (2026-11-26, not gated) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
+  24's dup note). Kept as a CRuby-compatibility fix, not as a speed-up. `Util/dup-matrix.rb` (new: String,
+  Object and Array dup and clone - content, encodings, broken bytes, frozen and chilled, ivars,
+  singleton classes, subclasses, a refinement, TracePoint, and the hooks redefined in String, Object
+  and Kernel or by prepend and include, then restored) showed master differing from CRuby in six
+  rows. In CRuby `String#dup` belongs to String: a bare string (class String itself, no singleton
+  class, no instance variables) is copied without calling initialize_dup or initialize_copy, even
+  redefined; any other goes through rb_obj_dup. `MutableStringOps.Duplicate` does that now, so the
+  matrix prints CRuby's output (switch `IR_FAST_DUP=0`: every string through Kernel#dup, as before).
+  Instructions (`callgrind/count.sh`, `dup-shapes.rb`): `str_dup` 3,688 -> 3,291; `str_clone`,
+  `hash_dup`, `clone`, `obj_dup`, `oi_dup` (an object with ivars), `arr_dup` and `plain` level.
+  Time in a method's loop, three alternating runs: `S.dup` 104-109 ns on master, 100-113 here, CRuby
+  55 - no gain; controls within the noise. So the hooks were not what String#dup spends: the 50 ns
+  over CRuby lie in the call of the library method and the copy (CreateInstance, Replace's content
+  clone), still to be found. Checks: dup, hash-dup, struct, hash-struct, jit and hot-shapes matrices
+  in every mode and with the switch off: PASS (dup-matrix `same`, `baseline -2` switched off).
+  spec/core/string and kernel dup/clone: 4,010 examples, the one known try_convert wording error
+  on both builds. Edge for the gate: the bare test is no instance variables now and no singleton
+  class, so a string whose last instance variable was removed counts as bare and skips its hooks;
+  MRI's FL_EXIVAR may stay set after the removal, which would send it through rb_obj_dup.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
@@ -2109,25 +2211,6 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   trace says "stores not held back ... a call of JitRuntime.NewSymbolHash1"), as round
   strlit's literal makers were; not tried here.
   For the gate: no IronRuby.Tests or spec run; the decline above.
-
-- **perf/strdup (2026-11-26, not gated) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
-  24's dup note). Kept as a CRuby-compatibility fix, not as a speed-up. `Util/dup-matrix.rb` (new: String,
-  Object and Array dup and clone - content, encodings, broken bytes, frozen and chilled, ivars,
-  singleton classes, subclasses, a refinement, TracePoint, and the hooks redefined in String, Object
-  and Kernel or by prepend and include, then restored) showed master differing from CRuby in six
-  rows. In CRuby `String#dup` belongs to String: a bare string (class String itself, no singleton
-  class, no instance variables) is copied without calling initialize_dup or initialize_copy, even
-  redefined; any other goes through rb_obj_dup. `MutableStringOps.Duplicate` does that now, so the
-  matrix prints CRuby's output (switch `IR_FAST_DUP=0`: every string through Kernel#dup, as before).
-  Instructions (`callgrind/count.sh`, `dup-shapes.rb`): `str_dup` 3,688 -> 3,291; `str_clone`,
-  `hash_dup`, `clone`, `obj_dup`, `oi_dup` (an object with ivars), `arr_dup` and `plain` level.
-  Time in a method's loop, three alternating runs: `S.dup` 104-109 ns on master, 100-113 here, CRuby
-  55 - no gain; controls within the noise. So the hooks were not what String#dup spends: the 50 ns
-  over CRuby lie in the call of the library method and the copy (CreateInstance, Replace's content
-  clone), still to be found. Checks: dup, hash-dup, struct, hash-struct, jit and hot-shapes matrices
-  in every mode and with the switch off: PASS (dup-matrix `same`, `baseline -2` switched off).
-  spec/core/string and kernel dup/clone: 4,010 examples, the one known try_convert wording error
-  on both builds.
 
 - **perf/strsearch2 (2026-11-26) - `#start_with?` with one String prefix takes no scope; an
   ASCII prefix is compared in place (gap 21, round two)** - not gated. Commit dc1d136 on

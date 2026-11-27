@@ -2046,12 +2046,23 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ GetSlice(int start, int count) {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
-            return GetSlice(_content, start, count);
+            return GetSlice(_content, start, count, false);
+        }
+
+        /// <summary>
+        /// GetSlice for String#[], which leaves this string as it is: a long slice that runs to the end may share the array too
+        /// (Content.GetSlice(int, int, bool)).
+        /// </summary>
+        public MutableString/*!*/ GetSlice(int start, int count, bool shareTail) {
+            ContractUtils.Requires(start >= 0, "start");
+            ContractUtils.Requires(count >= 0, "count");
+            // a slice too short to share takes the plain path
+            return GetSlice(_content, start, count, shareTail && count >= Utils.SharedSliceMinLength);
         }
 
         // The content is read once by the caller: a read on another thread can switch the string
         // between bytes and characters, and the indices are meant for the one the caller looked at.
-        private MutableString/*!*/ GetSlice(Content/*!*/ content, int start, int count) {
+        private MutableString/*!*/ GetSlice(Content/*!*/ content, int start, int count, bool shareTail = false) {
             // One ASCII character of a string held as characters, in an encoding where ASCII is itself: the
             // character is its own byte whatever the rest of the string holds, and its content can be shared.
             if (count == 1 && _encoding.IsAsciiIdentity && (content is StringContent || content is CharArrayContent) &&
@@ -2062,7 +2073,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            var result = CreateDerived(content.GetSlice(start, count), _encoding);
+            var result = CreateDerived(shareTail ? content.GetSlice(start, count, true) : content.GetSlice(start, count), _encoding);
             // a part of an ASCII string is ASCII, and saying so spares the next operation a scan of it
             if ((_flags & (IsAsciiFlag | AsciiUnknownFlag)) == IsAsciiFlag) {
                 result._flags = (result._flags & ~(AsciiUnknownFlag | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;

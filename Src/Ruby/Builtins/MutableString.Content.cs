@@ -325,6 +325,15 @@ namespace IronRuby.Builtins {
             /// The owner of the result is the current owner.
             /// </summary>
             public abstract Content/*!*/ GetSlice(int start, int count);
+
+            /// <summary>
+            /// GetSlice for a caller that leaves this string as it is (String#[]): a long slice that runs to the end of the string
+            /// may share the array too (Utils.IsSharedSlice). Not for #slice!, which removes the slice next and would then copy
+            /// the whole array to write it.
+            /// </summary>
+            public virtual Content/*!*/ GetSlice(int start, int count, bool shareTail) {
+                return GetSlice(start, count);
+            }
             public abstract string/*!*/ GetStringSlice(int start, int count);
             public abstract byte[]/*!*/ GetBinarySlice(int start, int count);
 
