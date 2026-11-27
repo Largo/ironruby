@@ -458,6 +458,13 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 if (mapped >= 0) {
                     return mapped != 0;
                 }
+                if (!_fixedAnchor) {
+                    return MatchRest(pattern, anchored, advance);
+                }
+            } else if (!_fixedAnchor && !_scanString.DetectSingleByteCharacters() && !_scanString.ContainsInvalidCharacters() &&
+                IsInsideCharacter()) {
+                // (a broken subject raises in the match below, as it does in MRI)
+                return MatchRest(pattern, anchored, advance);
             }
 
             if (lazyGroups && !_fixedAnchor) {
@@ -505,6 +512,51 @@ namespace IronRuby.StandardLibrary.StringScanner {
             _match = match;
             _matchBase = matchBase;
             return Matched(start, matchBase + matchEnd, advance);
+        }
+
+        /// <summary>
+        /// Whether the scan pointer is inside a character of a valid subject with multibyte characters
+        /// and no UTF-8 map (EUC-JP, say): the bytes before it, from a point known to start a
+        /// character, end in an incomplete one. In the EUC encodings, as in UTF-8, a byte below 0x80
+        /// is a character of its own, so the bytes after the last such byte are enough; in the others
+        /// (Shift_JIS, Big5, whose second bytes can be ASCII) only the start of the subject is known.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool IsInsideCharacter() {
+            if (_position <= 0 || _position >= ByteLength) {
+                return false;
+            }
+            var encoding = _scanString.Encoding;
+            int from = 0;
+            if (encoding == RubyEncoding.UTF8 || encoding.Name.StartsWith("EUC", StringComparison.OrdinalIgnoreCase)) {
+                from = _position;
+                while (from > 0 && _scanString.GetByte(from - 1) >= 0x80) {
+                    from--;
+                }
+                if (from == _position) {
+                    return false;
+                }
+            }
+            return MutableString.CreateBinary(_scanString.GetBinarySlice(from, _position - from), encoding).ContainsInvalidCharacters();
+        }
+
+        /// <summary>
+        /// A match from a scan pointer inside a character (#pos= set it there, or a byte-wise scan
+        /// left it there). MRI's strscan matches the rest of the subject as a string of its own, so
+        /// the bytes of the split character there are broken characters, one each, which /./, /\S+/
+        /// and \A match; the subject's own characters say nothing about them.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool MatchRest(RubyRegex/*!*/ pattern, bool anchored, bool advance) {
+            MutableString rest = MutableString.CreateBinary(_scanString.GetBinarySlice(_position, ByteLength - _position), _scanString.Encoding);
+            MatchData match = pattern.MatchWindow(rest, 0, anchored, false, true);
+            int matchStart, matchEnd;
+            if (match == null || !match.TryGetGroupByteOffsets(0, out matchStart, out matchEnd) || (anchored && matchStart != 0)) {
+                return false;
+            }
+            _match = match;
+            _matchBase = _position;
+            return Matched(_position + matchStart, _position + matchEnd, advance);
         }
 
         private bool MatchLiteral(MutableString/*!*/ pattern, bool anchored, bool advance) {

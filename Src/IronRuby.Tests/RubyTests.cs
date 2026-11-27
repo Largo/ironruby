@@ -214,6 +214,7 @@ namespace IronRuby.Tests {
                 Regex_PropertyEncoding1,
                 Regex_BinaryCtype1,
                 Regex_Latin1Ctype1,
+                StringScanner_InsideCharacter1,
                 Regex_InspectResultEncoding1,
                 Regex_EscapedByteEncoding1,
                 Regex_EscapedByteEncoding2,

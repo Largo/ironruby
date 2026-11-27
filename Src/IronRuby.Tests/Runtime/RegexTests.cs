@@ -896,6 +896,47 @@ translated: [RegexpError, ""unmatched close parenthesis: /\\xC3\\xA9)/""]
         }
 
         /// <summary>
+        /// From a scan pointer inside a character of a valid subject, MRI's strscan matches the rest as a
+        /// string of its own: the split character's bytes are characters there ("\xA9llo"). A subject that
+        /// is broken as a whole still raises.
+        /// </summary>
+        public void StringScanner_InsideCharacter1() {
+            TestOutput(@"
+require 'strscan'
+s = StringScanner.new(""h\u00e9llo w, x"")
+s.pos = 2
+p s.scan(/\S+/), s.pos, s.matched, s.pre_match.bytes, s[0]
+s.pos = 2
+p s.skip(/\s+/), s.exist?(/ /), s.match?(/\w+/), s.scan_until(/,/), s.pos
+e = StringScanner.new(""\xA4\xA2a b"".dup.force_encoding(""EUC-JP""))
+e.pos = 1
+p e.scan(/\S+/), e.pos, e.rest
+e.pos = 1
+p e.scan_until(/ /), e.charpos
+b = StringScanner.new(""ab\xE9c d"".dup.force_encoding(""UTF-8""))
+b.pos = 2
+p((b.scan(/\S+/) rescue $!))
+", @"
+""\xA9llo""
+6
+""\xA9llo""
+[104, 195]
+""\xA9llo""
+nil
+5
+nil
+""\xA9llo w,""
+9
+""\xA2a""
+3
+"" b""
+""\xA2a ""
+3
+#<ArgumentError: invalid byte sequence in UTF-8>
+");
+        }
+
+        /// <summary>
         /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
         /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
         /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET
