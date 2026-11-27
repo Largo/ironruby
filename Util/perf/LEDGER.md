@@ -1614,8 +1614,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Done for outlined loops in round thirty-eight (see Landed, perf/loopconst): an outlined loop's
     entry looks its folded constants up again rather than comparing a baked version. And the running
     loop's fault (rminor's case) in perf/loopnear (see Landed): a nearer constant that appears on a
-    folded lookup's path moves the code epoch. Still open: an outlined loop's safe point hands the
-    loop back on any reassignment (the code epoch, compared as an immediate), which rebuilds the copy;
+    folded lookup's path moves the code epoch. An outlined copy handed back by a reassignment of
+    something it did not fold is kept (perf/loopreassign, see Landed). Still open: a constant kept
+    as a counter (a new value each time) still rebuilds the copy each time, as spaced by
+    StaleRebuildSpacing (12% of a 400M-iteration loop's time at 1000 reassignments); not folding it
+    after the second change was tried and dropped - receiver hints, `case`/`when` tests and the
+    `if CONST` guard fold constants too, so an unfolded read in EmitConstant alone still left the
+    copy guarding on it;
     a typed body that deopts there finishes its call in the generic body (`near.rb`: 0.45 s typed,
     14.6 s once deopted, CRuby 6.6 s).
 30. **`Binding#local_variable_get`, `_set`, `_defined?` and `local_variables` are an
@@ -1900,6 +1905,33 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
+
+- **perf/loopreassign (round forty, 2026-11-28) - an outlined loop handed back by an epoch move that
+  changed nothing it was built on is kept (gap 29)** - not gated. Every constant reassignment anywhere
+  moves the code epoch; an outlined loop's safe point compared the safe-point word with the epoch it
+  was compiled at, so the copy handed itself back and the site rebuilt it (after StaleRebuildSpacing),
+  whatever was reassigned. Now `OsrLoopSite.Run` asks `JitLoopGuard.TryKeep` first (the method version
+  unchanged, each folded constant resolving as it did); the copy is then kept, its guard's epoch moves
+  up, and the loop goes back to it at the next back edge. The safe point compares with the immediate
+  and, once the word has moved, with the guard's epoch (`EmitLoopSafePoint`; the field on every
+  iteration was 0.55 -> 0.78 s on `s += K; i += 1`). A folded constant that changed still rebuilds.
+  `IR_LOOP_KEEP=0` turns it off. Correctness does not rest on TryKeep's constant check: with it taken
+  out the matrix still prints CRuby's (a wrongly kept copy fails its entry guard, perf/loopconst's,
+  and the generic iteration between reads the new value); it keeps the copy from being re-entered
+  only to fail.
+  Probe (`reassign.rb`: an outlined 400M-iteration loop `s += 1 if K > 0`, another thread reassigning
+  0.4 ms apart; 3 runs, base / new, compiles of the last run): `OTHER` 10x 3.29-3.48 / 2.96-3.54 s,
+  2 / 1 compiles; 100x 2.88-3.31 / 3.09-5.17 (one outlier), 2 / 1; 1000x 3.13-3.54 / 3.03-3.33, 12 / 1
+  (940 kept); `K` set to the same object 1000x 3.21-3.31 / 2.99-3.57, 15 / 2; `K` a counter (a new
+  value each time) 1000x 3.53-3.67 / 3.51-3.70, 15 / 14 - unchanged, see gap 29; no reassignment
+  2.50-2.60 / 2.55-3.11. Instructions (`deadconst-shapes.rb`, count.sh, N=20,000) 1.000 on all nine.
+  `Util/loop-const-matrix.rb` section 6 (running loops kept through 3,500 reassignments of other
+  constants and of their own to the same value must stop when their own changes; a sum beside such
+  reassignments): CRuby 4.0's output on base, new and `IR_LOOP_KEEP=0`, three runs in each of three
+  modes. `gate-matrices.rb` on hot-shapes, jit, osr-array, deadconst, jit-const, loop-const and
+  block-loop in ten modes (the gate's six, `IR_LOOP_KEEP=0`, `IR_LOOP_NEAR=0`, `IR_LOOP_CONSTANTS=0`,
+  `IR_SINGLETON_LOOKUP=0`): PASS, 68 same, 2 baseline (block-loop under R2R; loop-const with
+  `IR_LOOP_NEAR=0`, that switch's own rows). ruby/spec language/constants: no failures on either build.
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
