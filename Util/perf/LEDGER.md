@@ -1623,6 +1623,34 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `def kw(a, k: 1) = a + k` costs about 1,300-1,500 with the JIT off (4,017 against
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
+39. **A String is not safe under a concurrent writer either** - a correctness gap, like gap 20 for
+    Array and Hash, found by perf/strrace (2026-11-27). `Util/string-race-matrix.rb` races 36 readers
+    against 7 writers that flip a string between known states (replace, an append and its removal,
+    slice! and prepend, setbyte and back, an insertion and its removal, force_encoding there and
+    back, encode! there and back); a reader must answer what it answers on one of those states.
+    CRuby: every row ok. IronRuby (6956e4e, 20 runs): 101 of 252 rows are not always ok - every
+    kind of reader: `end_with?`, `getbyte`, `each_byte` and `unpack1` raise IndexOutOfRangeException;
+    `split` and `sum` RangeError; `hash`, `rindex`, `to_sym` and `upcase` ArgumentError; index,
+    rindex, `<=>`, hash, chars, count, scan, inspect, upcase, byteslice, size and valid_encoding?
+    answer what no state held; and in 30 rows the *writer* raises (force_encoding or encode!:
+    "character U+0000 can't be encoded in ASCII-8BIT"), because a reader changed how the string is
+    held under it. Three causes, each in every reader, so no reader-by-reader fix is sound:
+    (1) readers read the content's array, start and count unheld while a writer shifts the array in
+    place (Remove, Insert) or replaces it - the slice copy was the one reader that held it (perf/strcow);
+    (2) a reader that switches the representation (SwitchToBinary/SwitchToChars, from getbyte,
+    bytes, unpack, index of a byte string...) converts unheld and publishes with SetContent, so a
+    write made meanwhile is lost or decoded in the wrong encoding - readers corrupt the string;
+    (3) `_encoding` and `_content` are separate fields read separately, so a reader can pair the new
+    bytes with the old encoding. The design that would fix it, not started: every content read
+    held (ContentState.Enter, one compare-exchange, the cost perf/strcow measured for a slice:
+    +1.4% instructions, +5-8% time on a short one), with operations on two strings (==, <=>,
+    include?, index of a String) holding one and copying or snapshotting the other - never both,
+    or two threads comparing a == b and b == a spin forever; a representation switch made holding
+    the old content and published only if it is still the owner's (compare-exchange on
+    `_rawContent`), every writer re-checking after it holds that its content is still current; and
+    the encoding kept with the content (or read under the same hold). A decision about what
+    IronRuby promises, as gap 20 is, before an experiment.
+
 ## Landed
 
 - **perf/strcow (2026-11-27, not gated) - a String slice copied while the content is held; a
