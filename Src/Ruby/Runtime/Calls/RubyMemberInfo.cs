@@ -272,6 +272,13 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public RubyModule AliasOwner { get; internal set; }
 
+        /// <summary>
+        /// For the copy a `public :m' / `private :m' forwarder resolves to (RubyModule.ResolveForwarderNoLock): the
+        /// inherited body it forwards to. MRI's Method made of such an entry has the forwarder's module as #owner, but
+        /// #unbind resolves the entry (method_entry_resolve_refinement / zsuper) and gives the body's own owner.
+        /// </summary>
+        public RubyMemberInfo ForwardedBody { get; internal set; }
+
         public string OriginalName { get; internal set; }
 
         /// <summary>

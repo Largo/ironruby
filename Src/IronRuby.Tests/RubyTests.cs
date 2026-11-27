@@ -1153,6 +1153,7 @@ namespace IronRuby.Tests {
                 Kernel_ConversionsRoundingStep1,
                 Method_OptionalAndKeywordParameters1,
                 Method_BindingNonRubyCaller1,
+                Method_UnbindForwarder1,
                 Method_OptionalAndKeywordParameters2,
                 Range_MinMaxInclude1,
                 Integer_StepMatchString1,

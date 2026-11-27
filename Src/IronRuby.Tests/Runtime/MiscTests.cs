@@ -6477,6 +6477,32 @@ t(:caught) { begin; method(:binding).call; rescue RuntimeError => e; e.class.anc
         }
 
         /// <summary>
+        /// A Method made of a `public :m' (or `private :m') entry has that module as #owner, but MRI's #unbind resolves
+        /// the entry to the inherited body: the UnboundMethod's owner is the body's. An alias keeps its own owner.
+        /// </summary>
+        public void Method_UnbindForwarder1() {
+            TestOutput(@"
+class OwnerBase; def privm = 1; def pubm = 2; private :privm; end
+class OwnerSub < OwnerBase; public :privm; private :pubm; alias_method :al, :privm; end
+o = OwnerSub.new
+[:privm, :al].each do |n|
+  m = o.method(n); u = m.unbind
+  p [n, m.owner, m.name, m.original_name, u.owner, u.name, u.original_name, u.bind(o).call]
+end
+p OwnerSub.instance_method(:pubm).owner, OwnerSub.instance_method(:pubm).bind_call(o), OwnerSub.new.public_method(:privm).unbind.owner
+p OwnerSub.private_instance_methods(false), OwnerSub.public_instance_methods(false).sort
+", @"
+[:privm, OwnerSub, :privm, :privm, OwnerBase, :privm, :privm, 1]
+[:al, OwnerSub, :al, :privm, OwnerSub, :al, :privm, 1]
+OwnerSub
+2
+OwnerBase
+[:pubm]
+[:al, :privm]
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
