@@ -6570,23 +6570,22 @@ class Enumerator
   # Each lazy chain method records itself for #inspect:
   # #<Enumerator::Lazy: #<Enumerator::Lazy: 1..3>:map>.  grep and grep_v, which
   # need the caller's frame, record themselves in __ir_lazy_grep_impl__.
-  module LazyInspect
-    # map, flat_map and select record themselves: their aliases (collect, filter, ...)
-    # have to stay the very same method.
-    [:reject, :filter_map, :compact, :uniq, :take, :take_while, :drop, :drop_while, :with_index,
-     :each_with_index, :with_object, :zip, :chunk, :chunk_while,
-     :slice_when, :slice_before, :slice_after, :each_slice, :each_cons, :cycle].each do |name|
-      define_method(name) do |*args, &block|
-        result = super(*args, &block)
-        if result.is_a?(::Enumerator::Lazy) && !result.equal?(self)
-          result.__set_inspect__(self, name, name == :with_index && args.empty? ? [0] : args)
-        end
-        result
+  # map, flat_map and select record themselves: their aliases (collect, filter, ...)
+  # have to stay the very same method. The others are wrapped here, in Lazy itself
+  # around the method each replaces, not in a prepended module: MRI's Lazy has nothing
+  # prepended, and Lazy.ancestors would show it.
+  [:reject, :filter_map, :compact, :uniq, :take, :take_while, :drop, :drop_while, :with_index,
+   :each_with_index, :with_object, :zip, :chunk, :chunk_while,
+   :slice_when, :slice_before, :slice_after, :each_slice, :each_cons, :cycle].each do |name|
+    original = Lazy.instance_method(name)
+    Lazy.send(:define_method, name) do |*args, &block|
+      result = original.bind_call(self, *args, &block)
+      if result.is_a?(::Enumerator::Lazy) && !result.equal?(self)
+        result.__set_inspect__(self, name, name == :with_index && args.empty? ? [0] : args)
       end
+      result
     end
   end
-  __hide_constant__ :LazyInspect
-  Lazy.prepend(LazyInspect)
 
   # --- Enumerator::Chain -------------------------------------------------
   class Chain < Enumerator

@@ -171,6 +171,37 @@ nil
 
         // A lazy operation's #each answers nil (lazy_add_method), and so StopIteration#result is nil
         // at the end of its #next; the source's own lazy answers what the source's #each does.
+        /// <summary>
+        /// Enumerator::Lazy has nothing prepended, as in MRI: the chain methods that record themselves for
+        /// #inspect are wrapped in Lazy itself.
+        /// </summary>
+        public void Enumerator_LazyAncestors1() {
+            TestOutput(@"
+require 'ruby4'
+p Enumerator::Lazy.ancestors
+p (1..3).lazy.singleton_class.ancestors[1, 2]
+l = (1..Float::INFINITY).lazy
+p l.reject(&:even?).take(3), l.reject(&:even?).take(3).to_a
+p l.with_index.map { |x, i| x * i }.first(3), l.each_slice(2).first(2), l.zip(l).first(2)
+p l.filter_map { |x| x * 2 if x.odd? }.uniq.take_while { |x| x < 10 }
+p (1..3).lazy.cycle.take(5).to_a, (1..3).lazy.compact.drop(1).to_a, (1..5).lazy.chunk_while { |a, b| b == a + 1 }.first(1)
+p Enumerator::Lazy.instance_method(:take).owner
+", @"
+[Enumerator::Lazy, Enumerator, Enumerable, Object, Kernel, BasicObject]
+[Enumerator::Lazy, Enumerator]
+#<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: 1..Infinity>:reject>:take(3)>
+[1, 3, 5]
+[0, 2, 6]
+[[1, 2], [3, 4]]
+[[1, 1], [2, 2]]
+#<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: 1..Infinity>:filter_map>:uniq>:take_while>
+[1, 2, 3, 1, 2]
+[2, 3]
+[[1, 2, 3, 4, 5]]
+Enumerator::Lazy
+");
+        }
+
         public void Enumerator_LazyEachResult1() {
             TestOutput(@"
 require 'ruby4'
