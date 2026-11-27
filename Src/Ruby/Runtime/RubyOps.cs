@@ -2410,6 +2410,16 @@ namespace IronRuby.Runtime {
             return site.Invoke(scope, item1, item2);
         }
 
+        /// <summary>
+        /// The clause of a `case' over String literals the subject is to take (CaseStringSite): its index,
+        /// CaseStringSite.NoClause, or CaseStringSite.NotHandled when the `===' calls are to be made as
+        /// written. The scope is only asked for its runtime.
+        /// </summary>
+        [Emitted]
+        public static int CaseStringDispatch(RubyScope/*!*/ scope, object value, CaseStringSite/*!*/ site) {
+            return site.Dispatch(scope.RubyContext, value);
+        }
+
         [Emitted]
         public static bool IsArrayExtremeNotHandled(object result) {
             return ReferenceEquals(result, ArrayExtremeSite.NotHandled);

@@ -1736,6 +1736,10 @@ namespace IronRuby.Compiler.Ast {
                 if (LightKeywordsEnabled && (method == Methods.GetOmittedKeywordArguments || method == Methods.MakeOmittedKeywordArguments)) {
                     return 0;
                 }
+                // a `case' over String literals looks its value up (CaseStringSite): the runtime only
+                if (method == Methods.CaseStringDispatch) {
+                    return 0;
+                }
                 return -1;
             }
 

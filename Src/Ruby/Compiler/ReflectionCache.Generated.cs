@@ -60,6 +60,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _BlockYield;
         public static MethodInfo/*!*/ CanRescue { get { return _CanRescue ?? (_CanRescue = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.CanRescue)); } }
         private static MethodInfo _CanRescue;
+        public static MethodInfo/*!*/ CaseStringDispatch { get { return _CaseStringDispatch ?? (_CaseStringDispatch = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.CaseStringSite, System.Int32>(RubyOps.CaseStringDispatch)); } }
+        private static MethodInfo _CaseStringDispatch;
         public static MethodInfo/*!*/ CheckSplatArity { get { return _CheckSplatArity ?? (_CheckSplatArity = CallInstruction.CacheAction<System.Object, System.Int32, System.Int32, System.String>(RubyOps.CheckSplatArity)); } }
         private static MethodInfo _CheckSplatArity;
         public static MethodInfo/*!*/ CheckSuperClass { get { return _CheckSuperClass ?? (_CheckSuperClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyClass>(RubyOps.CheckSuperClass)); } }
