@@ -6503,6 +6503,29 @@ OwnerBase
         }
 
         /// <summary>
+        /// Method#to_proc's lambda is located where Method#source_location says the method is: nowhere for a core
+        /// method that is C in MRI, though the prelude writes it in Ruby.
+        /// </summary>
+        public void Method_ToProcSourceLocation1() {
+            TestOutput(@"
+require 'ruby4'
+def mine = 1
+define_method(:dm) { 2 }
+p method(:puts).to_proc.source_location, method(:then).to_proc.source_location == method(:then).source_location
+p method(:mine).to_proc.source_location == method(:mine).source_location, method(:dm).to_proc.source_location == method(:dm).source_location
+p [1].method(:each_slice).to_proc.source_location, 1.method(:+).to_proc.source_location, :upcase.to_proc.source_location
+", @"
+nil
+true
+true
+true
+nil
+nil
+nil
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
