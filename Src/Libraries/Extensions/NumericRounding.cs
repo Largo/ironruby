@@ -95,13 +95,16 @@ namespace IronRuby.Builtins {
 
             if (ndigits is double) {
                 double d = (double)ndigits;
-                if (Double.IsNaN(d)) {
-                    throw new FloatDomainError("NaN");
-                }
-                if (d >= 2147483648.0 || d <= -2147483649.0) {
+                // rb_num2int of a Float: to a long first ("float NaN out of range of integer"), then to an int
+                // ("integer 3000000000 too big to convert to 'int'")
+                if (Double.IsNaN(d) || d >= 9223372036854775808.0 || d < -9223372036854775808.0) {
                     throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", RubyUtils.FormatFloatG10(d)));
                 }
-                return (int)d;
+                long whole = (long)d;
+                if (whole > Int32.MaxValue || whole < Int32.MinValue) {
+                    throw RubyExceptions.CreateRangeError(String.Format("integer {0} too {1} to convert to 'int'", whole, whole < 0 ? "small" : "big"));
+                }
+                return (int)whole;
             }
 
             IntegerValue value = Protocols.CastToInteger(integerCast, ndigits);

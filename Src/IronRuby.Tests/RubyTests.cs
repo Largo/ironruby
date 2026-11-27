@@ -1169,6 +1169,7 @@ namespace IronRuby.Tests {
                 TracePoint_EndlessDefLine1,
                 TracePoint_AttrAccessorCCall1,
                 Float_OutOfRangeMessage1,
+                Float_RoundDigitsRange1,
                 Defined_ConditionNoFreeze1,
                 Block_OptionalBeforeRest1,
                 LoweredRaise_IgnoresOwnRaise1,

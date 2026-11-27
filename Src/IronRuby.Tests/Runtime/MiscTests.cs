@@ -9310,6 +9310,40 @@ t(:small) { [1].take(-9.5e18) }
         }
 
         /// <summary>
+        /// round, floor, ceil and truncate convert Float digits as MRI's rb_num2int does: to a long first (NaN and huge
+        /// values: "float ... out of range of integer"), then to an int ("integer 3000000000 too big to convert to 'int'").
+        /// </summary>
+        public void Float_RoundDigitsRange1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  p [l, yield]
+rescue => e
+  p [l, e.class, e.message]
+end
+t(:f_big) { 1.5.round(1e30) }
+t(:f_neg) { 1.5.round(-3e9) }
+t(:f_nan) { 1.5.round(0.0 / 0) }
+t(:i_big) { 1.round(3e9) }
+t(:floor) { 1.5.floor(3e9) }
+t(:ceil) { 1.5.ceil(-2147483649.5) }
+t(:ok) { 1.25.round(1.9) }
+t(:trunc) { 12.5.truncate(-1.5) }
+t(:rational) { Rational(3, 2).round(3e9) }
+", @"
+[:f_big, RangeError, ""float 1e+30 out of range of integer""]
+[:f_neg, RangeError, ""integer -3000000000 too small to convert to 'int'""]
+[:f_nan, RangeError, ""float NaN out of range of integer""]
+[:i_big, RangeError, ""integer 3000000000 too big to convert to 'int'""]
+[:floor, RangeError, ""integer 3000000000 too big to convert to 'int'""]
+[:ceil, RangeError, ""integer -2147483649 too small to convert to 'int'""]
+[:ok, 1.3]
+[:trunc, 10]
+[:rational, TypeError, ""not an integer""]
+");
+        }
+
+        /// <summary>
         /// The expression of an endless def is not a line to TracePoint :line (prism gives it no newline flag): CRuby reports
         /// no event for it, with or without a rescue modifier, but does for statements in parentheses in it and in a block.
         /// (The lines are one more than ruby's for the same text: the snippet starts on its second line.)
