@@ -2409,13 +2409,16 @@ namespace IronRuby.Prism {
 
         /// <summary>
         /// Whether every positional parameter has a name <see cref="ZSuperPositionalArguments"/> can
-        /// read it back by: no destructuring, no anonymous `*`.
+        /// read it back by: no destructuring. An anonymous `*` of a method is read back from the hidden local the prologue
+        /// binds it to (Symbols.RestArgsLocal, which `f(*)` reads too and nothing can assign): `def m(*, **)' did not, and
+        /// kept a copy of its whole argument list on every call for a `super' it had not got (LowerGeneralParameters's
+        /// ?superargs?), which also kept it out of light frames. Only methods ask (blocks have no parameterless `super').
         /// </summary>
         private static bool CanReadBackPositionals(Pm.ParametersNode/*!*/ node) {
             foreach (var required in node.Requireds) {
                 if (!(required is Pm.RequiredParameterNode)) return false;
             }
-            if (node.Rest != null && !(node.Rest is Pm.RestParameterNode rest && rest.Name != null)) return false;
+            if (node.Rest != null && !(node.Rest is Pm.RestParameterNode)) return false;
             foreach (var post in node.Posts) {
                 if (!(post is Pm.RequiredParameterNode)) return false;
             }
@@ -2442,8 +2445,8 @@ namespace IronRuby.Prism {
             }
 
             if (node.Rest != null) {
-                if (!(node.Rest is Pm.RestParameterNode rest) || rest.Name == null) return null;
-                result.Add(new SplattedArgument(CurrentScope.ResolveOrAddVariable(rest.Name, Span(node.Rest))));
+                if (!(node.Rest is Pm.RestParameterNode rest)) return null;
+                result.Add(new SplattedArgument(CurrentScope.ResolveOrAddVariable(rest.Name ?? Symbols.RestArgsLocal, Span(node.Rest))));
             }
 
             foreach (var post in node.Posts) {
