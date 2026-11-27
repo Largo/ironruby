@@ -1066,6 +1066,24 @@ h = Date._strptime(S.new(""2026 \xC3\xA9""), ""%Y""); p [h[:leftover].bytes, h[:
         }
 
         /// <summary>
+        /// date__parse takes the day name out before the time, so the time's zone cannot read a day name
+        /// after the time as a zone, and :wday leads the hash.
+        /// </summary>
+        public void Date_ParseDayFirst1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+[""Sat Aug 28 02:55:50 2021"", ""10:00 sat"", ""Sat, 28 Aug 2021 02:55:50 GMT"", ""monday 3pm"", ""2021-08-28 sun""].each { |s| p Date._parse(s) }
+", @"
+{wday: 6, hour: 2, min: 55, sec: 50, year: 2021, mon: 8, mday: 28}
+{wday: 6, hour: 10, min: 0}
+{wday: 6, zone: ""GMT"", hour: 2, min: 55, sec: 50, year: 2021, mon: 8, mday: 28, offset: 0}
+{wday: 1, hour: 15}
+{wday: 0, year: 2021, mon: 8, mday: 28}
+");
+        }
+
+        /// <summary>
         /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
         /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
         /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's

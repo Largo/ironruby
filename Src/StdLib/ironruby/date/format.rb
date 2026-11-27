@@ -870,8 +870,10 @@ class Date
 
     str.gsub!(/[^-+',.\/:@[:alnum:]\[\]]+/, ' ')
 
-    _parse_time(str, e) # || _parse_beat(str, e)
+    # date__parse takes the day name out first, so that the time's zone cannot read
+    # "10:00 sat" as a zone named "sat" (and :wday leads the hash)
     _parse_day(str, e)
+    _parse_time(str, e) # || _parse_beat(str, e)
 
     _parse_eu(str, e)     ||
     _parse_us(str, e)     ||

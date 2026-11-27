@@ -989,6 +989,7 @@ namespace IronRuby.Tests {
                 Date_ZoneToDiffUt1,
                 Date_StrptimeEncoding1,
                 Date_StrptimeSubclass1,
+                Date_ParseDayFirst1,
                 Time_OlsonZone1,
                 Zlib_Streams1,
                 Process_SpawnKill1,
