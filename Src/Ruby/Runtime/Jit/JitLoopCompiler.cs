@@ -57,6 +57,9 @@ namespace IronRuby.Runtime.Jit {
     }
 
     internal static class JitLoopCompiler {
+        // IR_LOOP_CONSTANTS=0: an outlined loop that folded constants is handed back after any constant change, as before.
+        private static readonly bool _RevalidateConstants = Environment.GetEnvironmentVariable("IR_LOOP_CONSTANTS") != "0";
+
         /// <summary>The boxed form a slot's value goes home as.</summary>
         private static MSA.Expression/*!*/ Box(MSA.Expression/*!*/ value, bool isLong) {
             return isLong ? Ast.Call(JitRuntime.M("NarrowLong"), value) : (MSA.Expression)Ast.Convert(value, typeof(object));
@@ -267,10 +270,16 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Not(Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version))),
                 Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
             ));
-            // and no constant may have changed since the ones the body folded were read
+            // and no constant may have changed since the ones the body folded were read - or each of those is still what
+            // it was (JitRuntime.LoopConstantsCurrent): a new constant elsewhere, an extend, a singleton class or a
+            // require moves the one constant version, and each handed the loop back for a rebuild at its next entry
             if (facts.UsesConstants) {
+                bool revalidate = facts.FoldedConstants != null && _RevalidateConstants;
+                if (revalidate) { facts.Guard.Folded = facts.FoldedConstants; }
                 prologue.Add(Ast.IfThen(
-                    Ast.Not(Ast.Call(JitRuntime.M("ConstantsOk"), Ast.Constant(context), Ast.Constant(constantVersion))),
+                    Ast.Not(revalidate
+                        ? Ast.Call(JitRuntime.M("LoopConstantsCurrent"), Ast.Constant(facts.Guard))
+                        : Ast.Call(JitRuntime.M("ConstantsOk"), Ast.Constant(context), Ast.Constant(constantVersion))),
                     Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
                 ));
             }
