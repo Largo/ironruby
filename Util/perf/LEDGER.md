@@ -1560,6 +1560,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     lookup on each of ~67 types. Taken: Random's interop call made lazy, field and event names read
     from metadata, and the failure cache keyed by a class. -0.75 to -1.97% main-thread instructions on
     the R2R host, -0.10 to -1.13% on the release image.
+    2026-11-27, perf/bootparse (Landed, not gated): the string evals start-up runs are compiled
+    into the startup library: specification.rb's and kernel_require.rb's (2.3 ms each on the R2R
+    host before their first call), every gemspec RubyGems loads (93 in `gem list`), Forwardable's
+    delegators. Main-thread instructions -2.1 to -6.8% on the R2R host and -2.7 to -8.6% on the release
+    image; best-of-10 wall -2 to -11% and -0 to -14%. Not taken: the JIT's re-parses of start-up methods
+    (2-3 ms of `-e 1`), and Kernel#require's first-call body compile (~10 ms, 4 ms of it the first
+    def-body transform's cold path), the next leads.
 27. **Closed (perf/crubydiff, third round): `send` frames are hidden.** Was: **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -2415,6 +2422,43 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - For the gate: the shared rule's set now decides `!=` for every plain-object class a program has; the
     cases above are the ones that must leave a class out.
 
+- **perf/bootparse (2026-11-27) - the string evals of start-up precompiled in the startup library (gap 26)**
+  - not gated. Base 4703cb5 (f67ac44 with perf/clrlookup).
+  What start-up parses at run time (R2R host, IR_PHASE_TIMES, IR_STARTUP_DLL_TRACE): the string evals,
+  each a prism parse, a transform and a lambda compile on the main thread. They are
+  specification.rb's `set_nil_attributes_to_nil` and kernel_require.rb's Kernel#require (~2.3 ms each,
+  both in `-e 1`), every gemspec RubyGems loads (62 default and 29 installed, 93 evals in `gem list`),
+  Forwardable's `def_delegator` texts (56, irb and reline) and irb's workspace binding. The JIT's 11
+  re-parses of methods it compiles cost 2-3 ms and were left; Kernel#require's body compile at its first
+  call (~10 ms) is the larger single cost and the next lead.
+  Taken (bf64364):
+  - startup-files.rb runs its commands again with IR_EVAL_RECORD and writes startup-evals.txt (150 evals):
+    each text with everything EvalCodeCache keys an eval on (encoding, file, line, verbosity, method and
+    parameters, block levels, locals, the names of the modules of the lexical scope).
+  - `IronRuby.Aot startup --evals` compiles each as CompileEval would into a class of the library;
+    PrecompiledEvalsAttribute carries the keys and a SHA-256 of each text, so the texts stay out of
+    every boot.
+  - RubyUtils.Evaluate asks PrecompiledCode.TryClaimEval before compiling. A hit is the first runtime of
+    the process, the first eval of that key with that exact text, claimed once (Interlocked); anything
+    else compiles from text as before, and EvalCodeCache's rules are untouched.
+  Numbers (base / new, one batch each):
+  - Main-thread instructions (callgrind, TieredCompilation=0): R2R host `-e 1` -2.09%, `gem --version`
+    -2.64%, `gem list` -6.79%, `require "irb"` -5.44%, irb -4.83%; release image -2.74%, -3.28%, -8.58%,
+    -6.47%, -6.00%.
+  - Wall, best of 10 alternating (ms): R2R host 414/406, 498/476, 830/742, 834/776, 941/869; release image
+    276/275, 344/305, 621/537, 628/557, 712/621.
+  Checked: the five commands print what the base prints (irb's start-up tip is random on either);
+  `__FILE__`/`__LINE__` and binding locals in a gemspec eval; a second load, a one-byte change, another file
+  or line compile from text; 8 threads loading all 29 installed gemspecs at once claim each once and agree;
+  Forwardable's backtraces. Matrices eval-locals, eval-defined, eval-literals, erb-escape, eval in the
+  gate's modes plus r2r, r2r with IR_STARTUP_DLL=none and r2r recording: PASS (32 same, 8 baseline).
+  Specs core/kernel/eval, library/rubygems (R2R and Release), core/binding, instance_eval, module_eval,
+  class_eval, language/file and line: as the base (the five known `into`/`to` errors).
+  IronRuby.Tests (Debug, net10.0): PASSED.
+  For the gate: a gemspec or forwardable.rb that changes only misses (the hash differs), but
+  startup-evals.txt then wants `startup-files.rb` rerun, which `--check` now says. Keys hold module names,
+  not modules: two modules of one name in one file at one line with the same text and locals share code,
+  which compiles the same either way.
 - **perf/clrlookup (2026-11-27) - what makes the CLR member lookups of start-up; Random's class found on
   first use; field and event names from metadata; a class key for the lookup failure cache (gap 26)**
   - not gated. Base 4320d4a.
