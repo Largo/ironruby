@@ -688,6 +688,21 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    generic read of a raw object is a call (about 3 ns) because putting it into the
    inlined read cost every program 2-4% (see "Caught by the measurement (round
    sixteen)").
+   Round thirty-eight looked at the 152 MB (see Landed, perf/nbody): 608 bytes per
+   `advance`, of which a method scope (160), two Procs (2 x 80) and two BlockParams
+   (2 x 48) were made on every call because a block literal with a literal nested in
+   it never reused its Proc, so `advance` never parked its scope. That is gone: 152 ->
+   48 MB. The 192 bytes per `advance` left (with the harness's `times` block) are
+   Integer boxes (about 96), Float boxes (about 72) and the locals tuple of `advance`
+   (about 24; a parked scope gets a new one each call), by type only - which sites make
+   the boxes was not traced. Likely: the `times` index past the small-integer cache;
+   the copy's exits, which box Integer locals with a plain convert
+   (`JitLoopCompiler.Box`), not through the cache; and the `0.01` literal, boxed on
+   every call of the generic `times` block (the probe's driver showed one Double per
+   call). What the parking saves in bytes it pays in bookkeeping:
+   callgrind counts `advance` level and a light nested shape 0.8% dearer, so the
+   change is worth what the collector does not have to do, which the time on this
+   machine could not show.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -2200,6 +2215,47 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     IronRuby.Tests: the 11 of AliasTests, `Backtrace_ArityCalleeFrame1` and the ten
     `Method_LightFrame*`: PASSED. The census cannot see this (no method changes verdict).
     Not run: `IR_CONFIG=R2R` start-up, the suite, a sweep, AWFY (owed to the gate).
+
+- **perf/nbody b3c20a5 55be4d2 (round thirty-eight, 2026-11-27) - a block literal with a literal
+  nested in it reuses its Proc when it can be outlined (gap 2)** - not gated. NBody allocated 152 MB
+  per iteration, 608 bytes per `advance`; an in-process GC allocation-tick listener (EventListener on
+  GCAllocationTick) gave RubyMethodScope 26%, Proc 26%, BlockParam 16%, Int32 16%, Double 12% of them.
+  `advance` is a light frame whose literal blocks could park its scope with their Procs
+  (RubyOps.CreateMethodScopeParked), but a literal with another literal nested in it never reused its
+  Proc (BlockDefinition: `!HasNestedBlock`), since the nested Proc holds its scope - although, once the
+  `each_index` block is outlined, the nested `Range#each` runs in place (perf/nest) and no nested Proc is
+  ever made. Now a block the block-loop screen accepts (BlockLoopInfo, read from the AST before the body
+  is compiled, `BlockScope.ReusesProcWithNested`) reuses its Proc all the same, and a literal nested in
+  it, on the generic calls that do make its Proc, clears the reuse of every Proc of the block scopes it
+  is made in (`RubyOps.KeepEnclosingProcs`, [Emitted]): a Proc a nested Proc may reach is never made
+  again, so never staged for parking (StageParkedProc), so the method's scope is not parked on that call.
+  Nothing else changes for such a block: its scope is still not reused, its BlockParams are handed on as
+  before (a first version marked the scope captured, which set KeptFlag and cost Richards' worker
+  Proc#call its BlockParam reuse: +9% bytes). Nested literals no longer count against their method's
+  parking. The calls before the loop is outlined make the nested Proc, and a slot gives up after 64
+  failures; the first run of the copy gives the block's method's slot one more try
+  (`BlockLoopInfo.ParkSlot`). A first version let every block with a nested literal reuse its Proc: 2.1%
+  and 2.4% more instructions on a nested lambda and an `Array#each` in `Hash#each`, which make the nested
+  Proc on every call and gained nothing; hence the screen. Switch: IR_NESTED_PROCS=0.
+  Bytes (Util/perf/alloc.rb): NBody 152,025,847 -> 48,032,633 per iteration (0.316); the other thirteen
+  level (geomean of the fourteen 0.912). `Util/bench/nested-proc-shapes.rb` (new), bytes per call:
+  `advance` 593 -> 177, the five others unchanged. Instructions (Util/perf/callgrind/count.sh, switch off
+  -> on in one tree; a process lands in one of two modes some 400 instructions or 4% apart, so pairs are
+  compared mode with mode): `advance` 53,326 -> 53,354 or 51,427, `nest` (the same nesting over
+  Integers, light body) 41,977 -> 42,321 and 41,578 -> 41,920 (+0.8%: parking's bookkeeping costs a
+  little more than the allocations it saves), `always`, `lambda`, `worker`, `flat` level. Time could not
+  be resolved on this machine (thirteen experiments at once; ab.rb spreads 20-30%, a control at 0.75):
+  NBody 0.924, 0.990, 0.982, 1.007 of the base in four AWFY runs at 10 s, the fourteen 1.022 and 0.991
+  in both column orders, no FAIL; NBody prints the same with -X:NoJIT -X:NoOSR. The census does not see
+  this (0 methods changed).
+  Matrices (Util/perf/gate-matrices.rb, base 2f8c31c): nested-proc (new: kept nested Procs of hot
+  parked methods, lambda, proc, Proc.new, binding, define_method and Thread nested, the outer literal made
+  twice in one call, break/next/return, recursion, an Enumerator, threads, and an outlined block whose
+  nested `Range#each` or `times` is redefined mid-run to keep its block), parked-scope, ivar, int,
+  block-loop, osr-array, jit, jit-calls, hot-shapes, block-scope-reuse, block-given, block-pass,
+  binding-lvar, eval, in the gate's six modes and IR_NESTED_PROCS=0: 22 baseline, 76 same, no DIFF.
+  `Util/ivar-stress.rb` OK three times. With KeepEnclosingProcs made a no-op the new matrix's rows go
+  wrong (NullReferenceException, a kept Proc reading another call's locals), so it does probe the rule.
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,

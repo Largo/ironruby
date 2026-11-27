@@ -432,6 +432,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsTopLevelReturn;
         public static MethodInfo/*!*/ IsTrue { get { return _IsTrue ?? (_IsTrue = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsTrue)); } }
         private static MethodInfo _IsTrue;
+        public static MethodInfo/*!*/ KeepEnclosingProcs { get { return _KeepEnclosingProcs ?? (_KeepEnclosingProcs = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.RubyScope, IronRuby.Builtins.Proc>(RubyOps.KeepEnclosingProcs)); } }
+        private static MethodInfo _KeepEnclosingProcs;
         public static MethodInfo/*!*/ KeywordArgumentsMatch { get { return _KeywordArgumentsMatch ?? (_KeywordArgumentsMatch = CallInstruction.CacheFunc<System.Object, IronRuby.Builtins.RubySymbol[], System.Int32, System.Boolean, System.Boolean>(RubyOps.KeywordArgumentsMatch)); } }
         private static MethodInfo _KeywordArgumentsMatch;
         public static MethodInfo/*!*/ KeywordSplatArgument { get { return _KeywordSplatArgument ?? (_KeywordSplatArgument = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Hash>(RubyOps.KeywordSplatArgument)); } }
