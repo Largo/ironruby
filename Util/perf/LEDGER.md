@@ -704,6 +704,15 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    callgrind counts `advance` level and a light nested shape 0.8% dearer, so the
    change is worth what the collector does not have to do, which the time on this
    machine could not show.
+   Round thirty-nine traced them (see Landed, perf/nbody2): the boxes were made at the
+   exits of the loops' typed copies - the `each_index` and `each` counters and the
+   `each_index` parameter boxed without the small-integer cache, and `dt`, which the
+   copies only read, boxed again at every exit. Gone: 48 -> 18 MB per iteration. Per
+   `advance` there is left the 24-byte locals tuple of the parked scope (made new on
+   each call); the rest of NBody's 18 MB is the harness's `times` block (its index
+   past the cache, the `0.01` literal) and `energy`. TruffleRuby allocates nothing
+   there; the next step for the tuple is a parked scope that keeps its tuple when no
+   Proc of the call outlived it.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -3802,6 +3811,101 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   and its Procs move between threads through `CallBlockParam` (the thread check in
   `InstantiateNestedParkedBlockSlow`, and the Proc[] cleared when another thread keeps); and any
   way a literal's Proc reaches Ruby without clearing its reusable flag.
+- **perf/lframe (/perf-frame, 2026-11-26) - a cheaper method entry: the alias name and the
+  traced test** (switch `IR_LIGHT_ENTRY`, on unless `=0`) - instructions only, not gated.
+  Built on 2f8c31c. What gap 16's profiles left on every light frame, looked at on its own
+  with `Util/bench/frame-cost.rb` (new: a method that does nothing, one, three calls, a yield,
+  `block_given?`, and `String#bytesplice`), `-X:NoJIT` so that the generic bodies run.
+  - **Not the prologue.** perf/lsite2 put the light lambda's +158 down to zeroing its locals;
+    `DOTNET_JitDisasm` of the light `H#gsub` says otherwise: two 64-byte stores. What the
+    lambda pays up front is its closure constants (each load a bounds check and a
+    `CHKCASTCLASS` helper call), the frame record (`PrecompiledFrames.Enter`) and the
+    entry's helpers. So no `SkipLocalsInit` (the runtime compiles with the BCL's
+    `LambdaExpression.Compile`, which has no such switch, and the DLR patch set has nothing
+    to patch) and no DLR patch.
+  - **The alias name.** A call through an alias leaves the name it was called by in a
+    thread-static for the method's entry to take (`MarkAliasCall`, `TakePendingCallee`,
+    `CreateMethodScope`). Every entry tested a flag first, `_aliasCallSeen`, which start-up
+    sets for good (RubyGems and the prelude call aliases), so every entry of every method,
+    light or scoped, read the thread-static - a call into the runtime from a DynamicMethod:
+    `TakePendingCallee` 26 + `TakePendingCalleeSlow` 34 instructions a call in the `fc`
+    profile. The flag is now a count of the threads that have a name pending: raised by the
+    alias call when its thread had none, lowered by the entry that takes one, so an entry
+    reads the thread-static only while some thread has a name pending. A thread that dies
+    with one pending leaves the count up, which only costs the reads it costs today.
+  - **The traced test.** A light frame without register locals called
+    `CreateMethodScopeIfTraced` (nine arguments) on every entry to learn that no TracePoint
+    listens; the test is now inline, as `EnterWithRegisterLocals` has it.
+  - Left as they were: `EnterLightMethod` and `LeaveLightMethodFrame` already inline their
+    fast paths (the slow exit only for a block or a scope), and the frame record is every
+    compiled frame's, tuned before (#168).
+  - **Numbers** (instructions a call, `Util/perf/callgrind/count.sh`, N=20,000; switch off ->
+    on). frame-cost, light frames: `f0` 1,572 -> 1,435 (0.913), `f1` 1,656 -> 1,591 (0.961),
+    `fc` 2,553 -> 2,314 (0.906), `fc3` 4,280 -> 3,693 (0.863), `fy` 2,412 -> 2,347 (0.973),
+    `fbg` 1,932 -> 1,795 (0.929), `bytesplice` 27,120 -> 26,907 (0.992); the same with
+    `IR_LIGHT_FRAMES=0` (the alias count only): 0.945-0.974, `bytesplice` 0.991. Default mode,
+    regex-shapes: 0.977-0.993, `size` 1.000; core-small: `tap` 0.931, `then` 0.945, `minmax`
+    0.969, `inject_sym` 0.973, `inject` 0.975, `sum_blk` 0.980, `zip` 0.985, `max_by` 0.984,
+    `each`/`each_with_index` 0.991. No shape counts more. No timing run (the counter is the
+    measure here; the gate owes the clock).
+  - Checked: `Util/light-entry-matrix.rb` (new: `__callee__` and `__method__` through `alias`
+    and `alias_method` into light and scoped methods, `define_method`, `send`, `public_send`,
+    `Method#call`, `bind_call`, method_missing; an alias call that raises ArgumentError before
+    its method is entered and then ordinary calls; alias calls as arguments of alias calls;
+    recursion through an alias; four threads calling aliases and names; TracePoint `:call`'s
+    `method_id`/`callee_id`; a million-deep recursion through a light frame, and through an
+    alias: SystemStackError, and the process goes on) and light-rest, block-given,
+    global-light, lexical-light, keyword-light, regex-light, rescue-light, super-light,
+    parked-scope, caller, light-remember and hot-shapes: the candidate prints what the
+    baseline prints in all 78 runs (each as built, `IR_LIGHT_ENTRY=0`, `IR_LIGHT_FRAMES=0`,
+    `IR_LIGHT_REGEX=all`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`), and CRuby's but where the
+    baseline differs too: caller's library frames, hot-shapes' FrozenError, and
+    light-entry's `define_method` body called through an alias, whose `__callee__` is the
+    definition's name on both builds (CRuby: the alias's) - a fault of master, not of this.
+    IronRuby.Tests: the 11 of AliasTests, `Backtrace_ArityCalleeFrame1` and the ten
+    `Method_LightFrame*`: PASSED. The census cannot see this (no method changes verdict).
+    Not run: `IR_CONFIG=R2R` start-up, the suite, a sweep, AWFY (owed to the gate).
+
+- **perf/nbody2 7621c60 (round thirty-nine, 2026-11-27) - an OSR loop's exits box Integers through
+  the cache and store back only what the copy changed and someone reads (gap 2)** - not gated.
+  What perf/nbody left of NBody (48 MB, 192 bytes per `advance`) was traced by variants of `advance`
+  under the allocation-tick probe (the outer `each_index` alone; with the nested loop; with the inner
+  body; the `each` loop; a block local), each subtracted from the next: the boxes were made at the
+  exits of the loops' typed copies, which stored every slot back into its tuple and boxed it. An Int32
+  went home with a plain convert (`JitLoopCompiler.Box`), not through the small-integer cache: the
+  `each_index` counter (5) and parameter (4) and the `each` counter, three 24-byte boxes per call. A
+  local the copy only reads - `dt` - was boxed again at every exit, two Float boxes per call. And a
+  block loop's own parameter and block locals went into the BlockLoopSite's private tuple, which Run
+  clears afterwards. Now an Int32 goes home through `ScriptingRuntimeHelpers.Int32ToObject`; a slot
+  the copy's body never assigns (`AssignsVariable`: no assignment, compound assignment, increment or
+  by-ref argument; an irreducible extension node counts as one) is stored back at neither exit, which
+  also leaves a value another thread or a callee wrote meanwhile (the old exit wrote the copy's stale
+  value over it); and a block loop's copy stores none of its block's own locals
+  (`OsrLoopSite.DeadAtExit`: a generic iteration after a hand-back yields to the block, whose call
+  has a scope of its own). Switch: IR_LOOP_EXITS=0.
+  Bytes (Util/perf/alloc.rb, against the merge of perf/nbody into b887bc1): NBody 48,028,049 ->
+  18,033,212 per iteration (0.375; 152 MB before perf/nbody), Richards 12,831,820 -> 11,171,978,
+  Sieve 98,655,217 -> 89,044,457, the other eleven level; geomean of the fourteen 0.924. Per `advance`
+  (the probe): 166 -> 46 bytes, the probe's driver (22) and the locals tuple (24) left.
+  Instructions (callgrind, IR_LOOP_EXITS=0 -> 1, one tree): Util/bench/ivar-float-shapes.rb (which
+  counts instructions now, INSTR=1) level on all fifteen shapes in three pairs of processes, to 0.1;
+  two earlier runs, made while the AWFY timing ran beside them, gave `wloop_o` 13,947 against 1,421
+  with the switch on, which three later runs (one traced) did not repeat and which no tier explains
+  (the loop is not specialized in either mode): noted, not believed. nested-proc-shapes: in the
+  noise of its two modes (some 400 instructions apart from process to process). Time, on a quiet
+  machine (load 0.1, the container restarted): NBody 598.3 -> 484.4 and 696.0 -> 574.6 ms (0.81, 0.83)
+  in the two column orders at 10 s; the fourteen 0.993 and 0.966; nothing else outside the table's
+  noise in both orders. No FAIL; NBody prints the same with -X:NoJIT -X:NoOSR.
+  Matrices (Util/perf/gate-matrices.rb, base the merge above): loop-exit (new: Integers ending at the
+  cache's bounds, past Int32 and Int64, an Integer's identity after it went home, a Float and an
+  Integer parameter only read, a local the loop reads that a proc or another thread changes during
+  it, block locals after the block, deopts in block loops, the outer parameter after a nested loop,
+  and an Integer instance variable updated in a hot loop that passes Int32 and Int64, is set to a
+  Float or a String in the middle, is set from outside, has a subclass with more variables, and is
+  read by another thread), nested-proc, ivar, int, block-loop, osr-array, jit, jit-calls, hot-shapes,
+  parked-scope, in the gate's six modes and IR_LOOP_EXITS=0: 15 baseline, 55 same, no DIFF.
+  `Util/ivar-stress.rb` OK three times. Not done: the Integer instance variables of gap 2 (NBody has
+  none in its hot loops; the allocations were not there).
 
 - **perf/nbody b3c20a5 55be4d2 (round thirty-eight, 2026-11-27) - a block literal with a literal
   nested in it reuses its Proc when it can be outlined (gap 2)** - gated 2026-11-27 (round 5's gate entry). NBody allocated 152 MB
