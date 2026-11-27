@@ -86,6 +86,21 @@ end
 
 CASES = %i[value_case value_case_declined multi_case dup_case mixed_case no_value_case]
 
+# A `when' of Symbol literals is no String literal (a SymbolLiteral is a StringLiteral in the AST): `:all === "all"' is
+# false, and the case is not looked up as one over Strings (round 6's gate: Matrix#each("all") ran the :all arm). Before any refinement exists: the
+# dispatch stands aside while the runtime has one.
+def symbol_case(c) = (case c when :all then 1 when :diagonal then 2 else :none end)
+def symbol_string_case(c) = (case c when :all then 1 when "all" then 2 else :none end)
+puts "== Symbol whens"
+# each subject on a method of its own, called once (the generic code's dispatch; a warm method is the JIT's), then warm
+SUBJECTS.merge(sym_all: :all, str_all: "all", str_diagonal: "diagonal").each_with_index do |(name, s), i|
+  eval "def sc_#{i}(c) = (case c when :all then 1 when :diagonal then 2 else :none end)"
+  eval "def ssc_#{i}(c) = (case c when :all then 1 when 'all' then 2 else :none end)"
+  cold = [(send(:"sc_#{i}", s) rescue $!.class), (send(:"ssc_#{i}", s) rescue $!.class)]
+  warm = [(30.times.map { symbol_case(s) }.uniq.inspect rescue $!.class), (30.times.map { symbol_string_case(s) }.uniq.inspect rescue $!.class)]
+  puts "#{name}\tcold #{cold.inspect}\twarm #{warm.inspect}"
+end
+
 def run(label)
   puts "== #{label}"
   SUBJECTS.each do |name, s|
