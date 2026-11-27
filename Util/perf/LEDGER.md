@@ -809,6 +809,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    `@current != '"'` and `case @current when` in `read`, `read_value` and
    `read_string_internal`, which the JIT declines for their `raise` and their calls, so
    the compiled comparison of round seven does not reach them.
+   Round perf/json (2026-11-27, see Landed): profiled again (perf, 12 s at steady state), the
+   one-character comparisons are some 11% of self time (EqualsAsciiLiteral 4.8, Equals 3.0,
+   CaseString 2.3, StringEqualsString 1.2), the Range of `@input[a..b]` under 1%, and the String
+   per character escapes into `@current` and the capture buffer, so it cannot be skipped. Per call,
+   `x == '"'`, `x != '"'`, `'"' == x` and the four-way `is_white_space` chain were already at or
+   under CRuby's time with or without the method JIT; `case x when 'a', ...` was not (146.5 ns
+   without the JIT against 56): `case` over String literals now looks its subject up once. Still
+   open: the method JIT's own `case` over String literals (94-99 ns, a CaseString call per
+   literal), and what the calls between Json's small methods cost (CallSite.Target 9.4%, the
+   method JIT's entry stubs about 10%), which is gap 16's and /perf-frame's, not String work.
 8. **`TakeBfcForBlockYield` 2.3% of DeltaBlue** is not the atomic exchange of 94dc9169:
    with a plain read and write in its place (an upper bound, not a correct change),
    SOM's `Vector#each` over 4 elements ran at 0.98-1.05 of before and over 100 at
@@ -1625,6 +1635,44 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/json (2026-11-27) - `case` over String literals looks its subject up once while String#===
+  is the library's (gap 7)** - not gated. Commit 0a78877 on `claude/perf-strsearch`, based on
+  claude/happy-gauss-95wm2j 15285eb with 0518f08 merged in. Measured first: a perf profile of AWFY
+  Json at steady state put the one-character String comparisons at about 11% of self time and the
+  Range of `@input[a..b]` under 1%; `@current = @input[@index]` escapes, so its String has to be
+  made. Per call (`Util/bench/strcmp-shapes.rb`, ns, CRuby / base / base -X:NoJIT): `x == '"'`
+  71.6 / 46.8 / 81.1, `'"' == x` 67.3 / 43.3 / 73.8, the `is_white_space` chain 190.2 / 63.8 /
+  170.6, `case x when` five clauses 56.0 / 98.9 / 146.5 (a method around it alone 30.1 / 42.8 /
+  49.9). So the `case` was the piece: each `when 'x'` made a String and a `===` call through a site.
+  Json's read_value is such a `case` (eleven literals) in a method the JIT declines (it calls
+  methods the screen refuses for a String literal argument or a Range), so the generic code ran it.
+  Now a `case value` whose `when`s are all ASCII String literals gets a CaseStringSite: each
+  literal's clause in a 128-entry table (one character) or a dictionary; RubyOps.CaseStringDispatch
+  answers the clause for a String subject MutableString.FindAsciiLiteral can read in place (as
+  EqualsAsciiLiteral reads it) while String#=== resolves to MutableStringOps' own method under the
+  current global method version and the runtime has no refinements (as ArrayExtremeSite checks);
+  otherwise NotHandled, and each `when` makes its calls as written (`clause == NotHandled ? <calls>
+  : clause == i`; no body emitted twice). A light frame passes its declaring scope
+  (ScopeOperandIndex); the AOT compiler re-creates the site; ReflectionCache.Generated.cs
+  regenerated; `IR_CASE_DISPATCH=0` turns it off. `kase` without the JIT 146.5 -> 64.0 ns (CRuby
+  56.0); with the JIT unchanged (94-99: the JIT's own CaseString chain, not touched). AWFY Json, ten
+  processes of `awfy.rb 10` per arm, alternating, ms per iteration (median, min-max): base 58.6
+  (55.0-60.7), new 55.1 (53.7-58.8), off 57.9 (52.9-61.1): 0.942 of base, 0.952 of off, new below base
+  in 9 of 10 paired runs, but the ranges overlap; CD (no such `case`) 424.0 / 435.8 / 454.5 with
+  spreads of 10-12% on every arm, the noise of this machine. Census: 0 of 28,376 methods moved.
+  Checked: `Util/case-string-matrix.rb` (new, 786 rows: thirty subjects - one-character reads,
+  words, empty, UTF-8, BINARY, broken, US-ASCII, UTF-16LE, EUC-JP, frozen, a subclass, nil, a Symbol,
+  numbers, a #to_str object - through six `case`s in methods the JIT compiles and one it declines,
+  with frozen_string_literal, a refined, a prepended and a redefined String#===, with the calls each
+  makes counted): CRuby's output on base, new, IR_CASE_DISPATCH=0 and -X:NoJIT. string-search,
+  hot-shapes, jit, jit-calls and light-entry matrices: new, off and -X:NoJIT print what the base
+  prints (the base's own differences from CRuby, 115 / 3 / 0 / 0 / 1 rows, unchanged).
+  spec/core/string (3,963 examples; element_reference, slice, equal_value and eql run alone too)
+  and spec/language/case_spec.rb: the same on base, new and off, 0 failures (the one
+  `String.try_convert` error on all three). There is no spec/library/json at SPEC_REF and no json
+  matrix; JSON.parse/generate of escapes, non-ASCII, nesting and five malformed documents prints
+  CRuby's output on base and new.
 
 - **perf/strsearch4 (2026-11-27) - the ASCII scan's cost of round three found and mostly removed;
   `#byteindex`/`#byterindex` from an offset other than 0 walk from the last search, through a map
