@@ -1942,6 +1942,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("eval", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("eval", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object Evaluate(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]MutableString/*!*/ code,
             [Optional]Binding binding, [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
 
