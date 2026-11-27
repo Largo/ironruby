@@ -596,6 +596,7 @@ namespace IronRuby.Tests {
                 ClrScopedExtensions8,
                 ClrOverloadInheritance1,
                 LibraryInitializerOverloadAttributes1,
+                LibraryCopiedModuleAttributes1,
                 ClrOverloadInheritance2,
                 ClrOverloadInheritance3,
                 ClrOverloadInheritance4,

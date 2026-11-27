@@ -116,6 +116,9 @@ namespace IronRuby.InitializerGenerator {
             foreach (LibraryDef library in libraries) {
                 output.WriteLine("[assembly: {2}(typeof({0}.{1}))]", library.Namespace, library.InitializerName, "IronRuby.Runtime.RubyLibraryAttribute");
             }
+            foreach (LibraryDef library in libraries) {
+                library.GenerateCopiedModuleAttributes(output);
+            }
 
             output.WriteLine();
 
