@@ -1595,6 +1595,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     What is left of this gap's running-loop faults: a nearer constant appearing (rminor's case above),
     and a method body with an effect that only a method redefinition makes stale, which goes on with
     the old method until it returns (`MethodLoopSafePointSlow`'s impure branch).
+    Done for outlined loops in round thirty-eight (see Landed, perf/loopconst): an outlined loop's
+    entry looks its folded constants up again rather than comparing a baked version. And the running
+    loop's fault (rminor's case) in perf/loopnear (see Landed): a nearer constant that appears on a
+    folded lookup's path moves the code epoch. Still open: an outlined loop's safe point hands the
+    loop back on any reassignment (the code epoch, compared as an immediate), which rebuilds the copy;
+    a typed body that deopts there finishes its call in the generic body (`near.rb`: 0.45 s typed,
+    14.6 s once deopted, CRuby 6.6 s).
 30. **`Binding#local_variable_get`, `_set`, `_defined?` and `local_variables` are an
     `eval` of source text each** (the prelude, `class Binding`): 436 us for a set against
     0.1 on CRuby. `ERB#result_with_hash` sets one per key (237 times CRuby), irb sets `_`
@@ -2209,6 +2216,80 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Not run: the whole suite, a sweep, the census (no verdict moves).
   - Left: the typed body (`Body` refused: a handler in the typed body, gap 22's last line);
     the read of `$!` at a rescue's entry.
+
+- **perf/loopnear (round thirty-nine, 2026-11-27) - a running loop sees a nearer constant appear; a
+  module's own constants before its prepends (gap 29)** - not gated. A compiled loop that folded a
+  constant (an outlined loop, or a typed method body's) went on answering it after another thread made
+  a constant of that name nearer to the lookup (lexically, in a superclass, through an include or a
+  prepend): a new constant moves `ConstantAccessVersion` only, which a running loop's safe point does
+  not read. rminor's epoch move, keyed on the name, fired for every constant of that name anywhere and
+  was taken back. Now `JitFoldedConstant.Resolve`, when it folds, notes the name on each module the
+  lookup searched (`RubyModule.NoteFoldedConstantNoLock`: the lexical scopes' modules, the innermost
+  one's ancestors, Object's from a module, a qualifier's ancestors - all of them, not only those ahead
+  of the owner, which costs a needless hand-back at most), in the lookup's own hold of the class
+  hierarchy lock. A constant new to such a module, or a mixin bringing one into it
+  (`MixinsChangedConstantsNoLock`), is a reassignment (`ConstantReassigned`): the code epoch moves, a
+  typed body's safe point revalidates and deopts, an outlined copy hands itself back. `IR_LOOP_NEAR=0`
+  turns it off. Nothing on a loop's own path changed.
+  The probe (`near.rb`: `X` folded in `module L`, 300M iterations, a thread starting 0.2 s in):
+  defining `X` on fresh classes and modules every millisecond - no deopt, base / new 0.45 / 0.45 s
+  (body), 0.39 / 0.44 (outlined); `L.const_set(:X, 100)` - base answers the old value to the end, new
+  sees the new one (one deopt or hand-back; the deopted body finishes in the generic body, 14.6 s
+  against CRuby's 6.6). A loop with no such event: instructions (`deadconst-shapes.rb`, count.sh,
+  N=20,000) identical to the instruction on all nine shapes; time over 10 alternating processes,
+  base / new mean (min): body 0.447 (0.39) / 0.426 (0.38), outlined 0.399 (0.38) / 0.414 (0.38).
+  Also fixed, the difference perf/loopconst recorded: a constant lookup from a module with prepended
+  modules searched them ahead of the module's own table (`Q::X` after `Q.prepend(m)` with `m::X`
+  answered m's in every mode; CRuby 4.0 answers Q's own, the constant table staying with the class,
+  not its origin). `RubyModule.ForEachConstantAncestor` searches the module the lookup starts from
+  first, then its ancestors: only that one (CRuby: `C::X` for `C < S` finds S's prepended module's X
+  ahead of S's own, and an included module's prepend wins too). Used by resolution, the owner lookup
+  and `autoload?`. `IR_CONST_OWN_FIRST=0` restores the old order.
+  `Util/loop-const-matrix.rb` gains running loops that must stop when a nearer constant appears
+  (lexical, superclass, include, prepend, a qualifier's include; bodies and outlined), the prepend
+  order rows, and the prepend row it had left out; CRuby 4.0's output on the new build in every mode,
+  and with `IR_LOOP_NEAR=0` or `IR_CONST_OWN_FIRST=0` exactly its own rows go wrong (base: those and
+  the prepend rows). `gate-matrices.rb` on hot-shapes, jit, osr-array, deadconst, jit-const,
+  loop-const, sdef, prepend and prepend2 in eight modes (the gate's six, `IR_LOOP_CONSTANTS=0`,
+  `IR_SINGLETON_LOOKUP=0`): PASS, 72 same. ruby/spec language/constants, core/module const_set,
+  const_get, const_defined, const_source_location, remove_const, prepend, autoload: no failures on
+  either build. The census cannot see this.
+
+- **perf/loopconst (round thirty-eight, 2026-11-27) - an outlined loop looks its folded constants up
+  again at its entry (gap 29)** - not gated. A loop outlined by OSR (`JitLoopCompiler`) that folded a
+  constant guarded its entry on the runtime's constant version as it was when the copy was compiled,
+  which every new constant, `extend`, singleton class and `require` moves: the copy handed itself back
+  (`OsrVersionStale`), the site rebuilt it after `StaleRebuildSpacing` of the generic loop, and so on
+  for each event. perf/constrev did this for method bodies; now the loop's guard holds what the copy
+  folded (`JitLoopFacts.FoldedConstants` -> `JitLoopGuard.Folded`, null when a directly called body
+  folded some it did not record) and the entry calls `JitRuntime.LoopConstantsCurrent`: the version
+  unchanged since the guard's snapshot, or each folded constant still the same object found in the
+  same module (`JitLoopGuard.ConstantsStillHold`, the method version unchanged, no autoload in flight;
+  the version read before the lookups stored after). `IR_LOOP_CONSTANTS=0` turns it off. The safe point
+  is unchanged: a reassignment moves the code epoch and hands a running copy back.
+  The probe (`top_loop`/`qual_loop` reading `TOP` and `G::P::RUBY`, and a control without constants,
+  400 iterations, 300 calls in each of 20 rounds, one event per round; `-X:NoJIT`, where the loops are
+  outlined - with the method JIT on they are typed method bodies, which constrev covers, and both
+  builds specialize 3 loops with 0 stale): base, per event `extend` / `const_set` / `require`:
+  specialized 17 / 14 / 20, stale rebuilds 14 / 13 / 19, 365 / 352 / 347 ms against 217 with no event;
+  new: specialized 3, stale 0, 211 / 207 / 225 ms (none 232). A loop entered after an
+  `Object.new.extend(M)` every time (20,000 entries, two folded constants, best of 7): 40 iterations
+  base 5,250 ns an entry, switch off 4,713, new 4,873 (the extend is about 4.3 us; one revalidation,
+  two lookups under the hierarchy lock, about 150 ns at most); 400 iterations base 30,183 (244 rebuilds),
+  off 26,602 (224), new 4,936 (none 921-1,011). Revalidating costs less than handing back.
+  `Util/loop-const-matrix.rb` (new, 18 rows, loops written in blocks so they are outlined with the JIT
+  on as well): events that must not change the answer (a new constant elsewhere, extend, a singleton
+  class, require, the same value set again, an include into an unrelated class), reassignment, removal
+  and setting again, removal for good, a nearer constant lexically, in a superclass, by include, a
+  qualified path replaced, an autoload registered nearer, a loop entered while the autoload of its
+  constant is in flight, another thread defining elsewhere while loops run, and a nearer constant
+  defined on another thread between entries. CRuby 4.0's output on both builds with the JIT on,
+  `-X:NoJIT`, `-X:NoJITCalls`, `IR_LIGHT_FRAMES=0` and `IR_LOOP_CONSTANTS=0`; with the check answering
+  true always, six rows go wrong. `gate-matrices.rb` on hot-shapes, jit, jit-calls, osr-array, deadconst, jit-const,
+  loop-const, block-loop and sdef in eight modes (the gate's six, `IR_LOOP_CONSTANTS=0`, `IR_SINGLETON_LOOKUP=0`):
+  PASS, 63 same, 9 baseline (hot-shapes in every mode, block-loop under R2R, as the baseline). ruby/spec language/constants, core/module const_set,
+  remove_const, autoload, core/kernel autoload: no failures on either build. The census cannot see
+  this (no method changes verdict).
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
