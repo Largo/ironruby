@@ -54,6 +54,14 @@ namespace IronRuby.Runtime.Jit {
         internal static readonly bool InlineUnsampled = Environment.GetEnvironmentVariable("IR_JIT_UNSAMPLED") != "0";
 
         /// <summary>
+        /// IR_JIT_NESTED (on unless =0): the candidates of an unsampled call (JitStub.ClassesDefining, JitCompiler.UnsampledCallees)
+        /// are every subclass of Object that defines the method, not only those that are constants of Object: most classes of
+        /// real code are nested in a module, and a nested receiver whose method's name a top-level class also defines was
+        /// inlined for the top-level class alone and deopted on every call.
+        /// </summary>
+        internal static readonly bool NestedClasses = Environment.GetEnvironmentVariable("IR_JIT_NESTED") != "0";
+
+        /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
         internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;

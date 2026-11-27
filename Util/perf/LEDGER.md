@@ -1266,6 +1266,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     on a receiver nothing samples - the same kind of local, `current` walking a chain; the
     write would need what the read now has, a name from a class the call was inlined for or
     from the classes that define the writer).
+    perf/havlak2 (see Landed) gave the write its name; `split_bucket` now declines at the
+    effect rule ("a deopt after an effect (call next)": the next iteration's read can deopt
+    after this one's write), and it is called 459 times an iteration against `at`'s 799,304,
+    so it is not worth a body that could take that.
 26. **Start-up: `gem` and `irb` answer in 0.7 to 2.2 s, CRuby in 0.1 to 0.2** (the one
     thing that has to stay fast while the tiers stay on by default, and it is not fast).
     2026-11-18, a7060a27, the ReadyToRun host (`IR_CONFIG=R2R`, what `ir.sh` runs when
@@ -1773,6 +1777,58 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     remain: 89 rows of readers that answer wrongly or raise.
 
 ## Landed
+
+- **perf/havlak2 (/perf-step, 2026-11-27, on e68ac13) - an attribute read or write on a local nothing
+  samples, and the candidates of an unsampled call found in classes nested in modules (gaps 25, 1)** -
+  not gated. Two parts. (1) `UnsampledAttrVariable`: `x.a` and `x.a = v`, x a local of the method the
+  profile has no sample of, read and write the variable through the sampled path's sites
+  (`ReadSelfAttr`, `WriteAttr`: each checks the class it meets and deopts where the accessor is not that
+  variable's, a write before storing anything); the name is the one the classes a call on x was inlined
+  for agree on, or else the one every class names whose own method of the name is written in Ruby - all
+  of them must be public accessors of the same variable (`AgreedAccessorVariable`, strict); core library
+  methods (`Integer#next`) are left out. A looser first version (any class that has such an accessor)
+  moved 30 census methods to `compiles` at `x.to_s` and `x.name`, which a String receiver would deopt on
+  every call; strict, one moves (`Rake::Scope#trim`, `tail` of a linked list). The effect rule is the
+  compiler's as for a sampled receiver: a write is an effect, and a read or guard after it that can
+  deopt declines the body. (2) `JitStub.ClassesDefining` walks Object's subclasses (the subclass lists,
+  `RubyModule.DependentClassesOrNull`) instead of Object's constants, for the candidates of an unsampled
+  call (`IR_JIT_NESTED=0` turns it off). Counted with Prism over the census corpus: of the instance
+  methods of leaf shape, 4,269 of 5,206 in Src/StdLib are in classes nested in a module, 0 of 117 in
+  AWFY. And e68ac13 has a fault this fixes: a nested receiver whose method's name a top-level class
+  also defines was inlined for the top-level class alone and deopted on every call, the stub retiring
+  and retrying it (`Ns::Dict#at` in unsampled-matrix, `ns_at_chain` below). The screen's leaf hint
+  (`IsLeafMethodOfSomeClass`) keeps Object's constants: with every class it said yes to `push` for
+  receivers that are Arrays, and on app-shapes `CSV::Parser::Scanner#keep_start` was wrapped and
+  declined with nothing more specialized.
+  Census (Src/StdLib + AWFY): maybe 2,981 -> 2,980, compiles 3,370 -> 3,371 (`Rake::Scope#trim`), none
+  down. AWFY traced (3 x 1, CD 3 x 100): Towers `pop_disk_from` specialized (was declined at
+  `call: next/0`), CD `RedBlackTree#get` specialized (direct calls), Havlak `split_bucket` and Richards
+  `release` declined at the effect rule instead of the unsampled access; every other decision the same,
+  all fourteen verify. CD's `Node#successor` now passes `x.right` and stops at "== on a receiver of
+  unknown type" (`x == y.right`, an identity comparison of an unsampled local) and then at
+  `call: tree_minimum/1`; `find_node` was already specialized and deopts on most calls on both builds,
+  which is not the read. app-shapes (N=20000) and `gem list` traced: the same counts on both builds
+  (115/30/566 and 11/5/265 specialized/declined/screened), the same checksums; start-up (`-e 1`, `gem
+  list`) the same within noise.
+  `Util/bench/havlak-shapes.rb` gains `ns_at_chain`, `towers_pop` (instructions a call, callgrind,
+  new/base, two rounds): `ns_at_chain` 0.617, `towers_pop` 0.814, `chain_len` (a bare read of the local
+  in a loop) 0.532, controls `at_first`, `at_chain`, `at_miss` 1.000 (one earlier process counted
+  `at_chain` at 4.3 times and did not again in two rounds and two runs of it alone: a state of that
+  process). Time, three pairs in separate processes, the order turned in the second: Havlak 6 1 base
+  21.94/20.93/20.80 s, new 21.64/22.46/20.77; Towers 40 100 7.61/7.03/7.40, 7.28/7.02/7.36; CD 15 100
+  7.63/7.39/8.10, 7.91/7.24/8.19 - all within the runs' spread.
+  Checked: `Util/unsampled-matrix.rb` 16 -> 32 cases (nested classes, nested redefinition and singleton,
+  a second nested class; writes in a loop: plain, a frozen receiver, `private :mark=`, private in a
+  subclass, method_missing for the writer, another thread reading the field; Towers' pop/push: the same
+  five and a thread) prints CRuby's output on the unchanged build and on the new one with the JIT on,
+  `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`, `IR_JIT_NESTED=0` and `IR_JIT_UNSAMPLED=0`; the pop cases
+  specialize `Piles#pop` (a frozen disk deopts once and the element write is taken back). jit, jit-calls,
+  jit-const, ivar, deadconst matrices print CRuby's in all modes, hot-shapes and inline the baseline's.
+  IronRuby.Tests Jit*, Loop*, Inline* (21) pass.
+  For the gate: the subclass walk runs under the hierarchy lock at each compile of an unsampled call;
+  a receiver of a core class whose method shares an accessor's name (an Integer's `next`) deopts where
+  met, and the stub retires a body that does so too often; the strict rule rests on Ruby-written
+  definitions only.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
