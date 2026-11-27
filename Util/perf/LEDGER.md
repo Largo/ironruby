@@ -1127,6 +1127,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     iterator compiled with its block, and at twice CRuby's time for the same source: the
     loop compiler gives up on `yield` (see the Rejected entry "A block whose body is
     `yield <expr>`"). This is what keeps per-element loops in C#.
+    Round thirty-seven (perf/yieldloop, measured, not built; see Rejected) took it apart with
+    `Util/bench/yield-shapes.rb`, per element over 100: the loop alone (`loop100`) 10 ns with
+    the tiers on, 28 with them off, CRuby 18; the same loop yielding to an empty block
+    (`ueach100e`) 39-40 either way, CRuby 28; to `{ |x| s += x }` (`ueach100`) 55-57, CRuby
+    30. So the `yield` itself is about 11 ns - CRuby's is about 10, C#'s `Array#each` yielding
+    the same empty block without its compiled copy 12 - and the rest is the loop around it
+    running generic: the loop compiler bails at the YieldCall (`[osr] emitter: node:
+    YieldCall`) and the light frame's `while` keeps its four dynamic sites. A typed loop
+    with the `yield` as a call in it would be about 23 ns against CRuby's 28. What stands in
+    the way is not the yield's cost but the iteration it would sit in (see Rejected).
 19. **`Object.new.extend(M)` is 200 to 300 times CRuby's time and grows with the number
     of objects extended**: 20,000 in a `while` loop take 4.5 s, 40,000 11.0 s, 200,000
     72 s, with and without the JIT and OSR; CRuby takes 0.23 s for 200,000 (1.1 us each).
@@ -6488,6 +6498,34 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/yieldloop (round thirty-seven, 2026-11-27) - a `yield` in an outlined `while` loop: measured,
+  not built** (gap 18). What a `while ... yield` pays per element is the loop, not the yield (gap 18's
+  numbers): IronRuby's `yield` is about 11 ns, CRuby's about 10, and the loop around it is 28 ns generic
+  against 10 typed and CRuby's 18, generic because the loop compiler bails at the YieldCall. So of the
+  three candidates the brief named, the method's block resolved once per call of the iterator and a
+  cheaper `Yield1` for a scope-free block act on the 11 ns that is already CRuby's (round ten's
+  perf/veach, the yield in a block reading the method's Proc once, found the walk cheap too), and only
+  the third - the loop tier taking a `yield` - acts on the 15 ns that is not. That one needs what the
+  tier does not have:
+  - **A resume point after the yield.** A deopt restores the locals of the top of the iteration and runs
+    it again generically (JitLoopCompiler's header): one after the yield runs the block twice. Every
+    loop of this kind has an `i += 1` after its yield, whose add deopts on an overflow out of Int64, and
+    `@a[i]`, `i < @a.size` whose guards deopt. The emitter declines a deopt after an effect
+    (`_deoptAfterEffect`), so the yield would decline the loop, unless the iteration can be resumed
+    after the yield - JITResume's stage 2, for a body with locals (stage 1 takes none).
+  - **Nothing typed after the yield.** The block is any Ruby code: it may redefine Integer#+ or Array#[],
+    freeze, enable a TracePoint, and in this thread that is ordered before the `i += 1` that follows,
+    which a typed add would not see until the next safe point (JITResume's "self-guarded tail": every
+    node after a fallback re-checks or speculates on nothing).
+  - **The block's own frame and protocol.** Kept, if the yield is a call (`JitRuntime` calling
+    `RubyOps.Yield1` with the method's Proc and its reused BlockParam, then `MethodYield`'s break test):
+    a `break` leaves the loop with the block's value as the method's, `next` is the block's, a raise
+    leaves through the typed loop with the tuple brought up to date first.
+  What it would win: `ueach100` 55 -> about 23 ns per element (CRuby 30), and the prelude's `take_while`,
+  `sum`, `uniq` and `to_h` with a block (48, 100, 225 and 273 ns against CRuby's 28, 28, 57 and 94 per
+  element). The next attempt starts from JITResume's stage 2 (`Docs/jit-resume-deopt.md`), with the
+  yield as its first fallback that is not an attribute operation, not from the yield.
 
 - **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
   above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
