@@ -703,6 +703,15 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    callgrind counts `advance` level and a light nested shape 0.8% dearer, so the
    change is worth what the collector does not have to do, which the time on this
    machine could not show.
+   Round thirty-nine traced them (see Landed, perf/nbody2): the boxes were made at the
+   exits of the loops' typed copies - the `each_index` and `each` counters and the
+   `each_index` parameter boxed without the small-integer cache, and `dt`, which the
+   copies only read, boxed again at every exit. Gone: 48 -> 18 MB per iteration. Per
+   `advance` there is left the 24-byte locals tuple of the parked scope (made new on
+   each call); the rest of NBody's 18 MB is the harness's `times` block (its index
+   past the cache, the `0.01` literal) and `energy`. TruffleRuby allocates nothing
+   there; the next step for the tuple is a parked scope that keeps its tuple when no
+   Proc of the call outlived it.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -2215,6 +2224,47 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     IronRuby.Tests: the 11 of AliasTests, `Backtrace_ArityCalleeFrame1` and the ten
     `Method_LightFrame*`: PASSED. The census cannot see this (no method changes verdict).
     Not run: `IR_CONFIG=R2R` start-up, the suite, a sweep, AWFY (owed to the gate).
+
+- **perf/nbody2 7621c60 (round thirty-nine, 2026-11-27) - an OSR loop's exits box Integers through
+  the cache and store back only what the copy changed and someone reads (gap 2)** - not gated.
+  What perf/nbody left of NBody (48 MB, 192 bytes per `advance`) was traced by variants of `advance`
+  under the allocation-tick probe (the outer `each_index` alone; with the nested loop; with the inner
+  body; the `each` loop; a block local), each subtracted from the next: the boxes were made at the
+  exits of the loops' typed copies, which stored every slot back into its tuple and boxed it. An Int32
+  went home with a plain convert (`JitLoopCompiler.Box`), not through the small-integer cache: the
+  `each_index` counter (5) and parameter (4) and the `each` counter, three 24-byte boxes per call. A
+  local the copy only reads - `dt` - was boxed again at every exit, two Float boxes per call. And a
+  block loop's own parameter and block locals went into the BlockLoopSite's private tuple, which Run
+  clears afterwards. Now an Int32 goes home through `ScriptingRuntimeHelpers.Int32ToObject`; a slot
+  the copy's body never assigns (`AssignsVariable`: no assignment, compound assignment, increment or
+  by-ref argument; an irreducible extension node counts as one) is stored back at neither exit, which
+  also leaves a value another thread or a callee wrote meanwhile (the old exit wrote the copy's stale
+  value over it); and a block loop's copy stores none of its block's own locals
+  (`OsrLoopSite.DeadAtExit`: a generic iteration after a hand-back yields to the block, whose call
+  has a scope of its own). Switch: IR_LOOP_EXITS=0.
+  Bytes (Util/perf/alloc.rb, against the merge of perf/nbody into b887bc1): NBody 48,028,049 ->
+  18,033,212 per iteration (0.375; 152 MB before perf/nbody), Richards 12,831,820 -> 11,171,978,
+  Sieve 98,655,217 -> 89,044,457, the other eleven level; geomean of the fourteen 0.924. Per `advance`
+  (the probe): 166 -> 46 bytes, the probe's driver (22) and the locals tuple (24) left.
+  Instructions (callgrind, IR_LOOP_EXITS=0 -> 1, one tree): Util/bench/ivar-float-shapes.rb (which
+  counts instructions now, INSTR=1) level on all fifteen shapes in three pairs of processes, to 0.1;
+  two earlier runs, made while the AWFY timing ran beside them, gave `wloop_o` 13,947 against 1,421
+  with the switch on, which three later runs (one traced) did not repeat and which no tier explains
+  (the loop is not specialized in either mode): noted, not believed. nested-proc-shapes: in the
+  noise of its two modes (some 400 instructions apart from process to process). Time, on a quiet
+  machine (load 0.1, the container restarted): NBody 598.3 -> 484.4 and 696.0 -> 574.6 ms (0.81, 0.83)
+  in the two column orders at 10 s; the fourteen 0.993 and 0.966; nothing else outside the table's
+  noise in both orders. No FAIL; NBody prints the same with -X:NoJIT -X:NoOSR.
+  Matrices (Util/perf/gate-matrices.rb, base the merge above): loop-exit (new: Integers ending at the
+  cache's bounds, past Int32 and Int64, an Integer's identity after it went home, a Float and an
+  Integer parameter only read, a local the loop reads that a proc or another thread changes during
+  it, block locals after the block, deopts in block loops, the outer parameter after a nested loop,
+  and an Integer instance variable updated in a hot loop that passes Int32 and Int64, is set to a
+  Float or a String in the middle, is set from outside, has a subclass with more variables, and is
+  read by another thread), nested-proc, ivar, int, block-loop, osr-array, jit, jit-calls, hot-shapes,
+  parked-scope, in the gate's six modes and IR_LOOP_EXITS=0: 15 baseline, 55 same, no DIFF.
+  `Util/ivar-stress.rb` OK three times. Not done: the Integer instance variables of gap 2 (NBody has
+  none in its hot loops; the allocations were not there).
 
 - **perf/nbody b3c20a5 55be4d2 (round thirty-eight, 2026-11-27) - a block literal with a literal
   nested in it reuses its Proc when it can be outlined (gap 2)** - not gated. NBody allocated 152 MB
