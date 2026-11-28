@@ -1226,6 +1226,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Rejected): the descriptor's per-call fill costs what the parked cycle costs, `e1`'s steps 44 ns
     parked against 46-61 as a descriptor. The literal's 45-50 ns end to end is not in one runtime step.
 
+    **perf/lightmatch** took the methods that cannot observe their `$~` (no reference, block, binding or eval): the
+    call stores it in a sink scope of the thread's and the frame keeps it in a CLR variable, making neither (+559 light
+    frames); but that hand-over costs about what it saves (0.97-1.03 of the instructions), so it is off by default
+    (`IR_LIGHT_MATCH_SINK=1`). **perf/sinkcarrier** made the frame's own sink the site's scope argument (0.955-0.982
+    of the instructions, 0.89-0.90 of the time) and turned it on. The methods that read their `$~` or have blocks are
+    what is left.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -2315,6 +2321,94 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   answer recompiles once or puts the body back as before); `Respecialize` counts against
   `MaxRespecializations`, so a body whose callees keep being recompiled settles on its generic body.
   Not done: `tree_insert`'s four changes (see gap 3).
+
+- **perf/sinkcarrier (2026-11-28) - the frame's own sink carries a match sink's `$~`: `IR_LIGHT_MATCH_SINK` on by
+  default (gap 16, the `$~` family)** - not gated. perf/lightmatch (below) was sound but off: its hand-over (a stack
+  of sink scopes per thread, entered, left and taken on every call, with a fault block in the rule) cost about what
+  the late scope did.
+  - The carrier: the frame's sink - a RubyTopLevelScope that holds nothing but `$~` - is the light site's scope
+    argument. The frame takes it from the thread's free sinks at its first such call (`RubyOps.TakeMatchSink`, one
+    read of a thread static), passes it to every sink site, and gives it back, cleared, in the finally it already has
+    (`ReturnMatchSink`). The library method stores `$~` in it; the rule is the plain light rule, whose `MetaScope` is
+    the argument (`CallArguments.MatchSink`): no helper, no thread static, no fault block per call. The sink is the
+    frame's `$~` for as long as it runs; a scope made late starts with it (`SeedLightScopeMatch`), and once the frame
+    has its scope the site makes the ordinary call. A free list, not a stack, so a frame suspended in a Fiber only
+    takes one out. A rule that reads the scope for anything else (a refinement of the name, a method that is not
+    one of MutableStringOps', SymbolOps' or RegexpOps' sink methods) answers LightScopeRequired as any light site's;
+    `BindPrecompiled` leaves sink sites to the rule (a dispatcher would resolve refinements from the sink), and
+    they share no rules.
+  - Found by the matrix on the way: a TracePoint's :return hook runs after the frame's finally
+    (TraceReturnExpression), where the sink had been given back; the finally now makes the scope first, from the
+    sink, when a :return hook is enabled.
+  - Instructions (`Util/perf/callgrind/count.sh`, regex-shapes, N=20000; switch off / on): gsub 12,642 / 12,410
+    (0.982), split 10,826 / 10,574 (0.977), kase 8,522 / 8,333 (0.978), eqt 5,718 / 5,460 (0.955); size and tilde
+    1.000, matchp 0.989. (perf/lightmatch's EmptyScope form, unsound: 0.93-0.97; its thread-stack form 0.97-1.03.)
+    Time (`ab.rb -r 10`, load about 1, off / on, ns): gsub 426 / 380 (0.89), split 359 / 320 (0.89), eqt 208 / 186
+    (0.90), kase 253 / 227 (0.90, spreads overlap); size, tilde and matchp overlap.
+  - Census (Src/StdLib + AWFY, 28,377 methods; against 540bdb0 + e29424d, where the switch is off): light frames
+    26,732 -> 27,291 (+559, 94.2% -> 96.2%), none down; the JIT's counts unchanged.
+  - Checks: `Util/light-match-sink-matrix.rb` with a new row 13 (a method that raises after its match, seen by a
+    TracePoint :raise; two Fibers suspended inside match sinks), rows 10 and 11 as before; regex-light, light-entry,
+    hot-shapes, block-pass and jit: CRuby's output as built, -X:NoJIT, -X:NoJITCalls, IR_LIGHT_FRAMES=0,
+    IR_PARKED_SCOPES=0, the R2R host and the switch off with and without the JIT, on both trees (47 same; regex-light
+    under R2R as on base). ruby/spec language/predefined, core/regexp, core/string gsub/sub/scan/split/match/index/
+    slice/partition/start_with?: 776 examples, the same three conversion-message errors as the base.
+    IronRuby.Tests (Debug): Method_LightFrameMatchSink1, Method_LightFrameMatchSinkRetention1 (0 of 8 subjects alive
+    after GC) and 74 other light-frame, regex, String, Symbol, TracePoint and Fiber tests pass with the switch on and
+    off; the whole suite was not run.
+  - Not fixed, found on the way: IronRuby reports no TracePoint :return for a method left by an exception (CRuby
+    does), with or without the switch.
+
+- **perf/lightmatch (2026-11-27) - a light frame keeps its `$~` in a CLR variable for its String and Regexp calls (gap
+  16, the `$~` family): off by default, `IR_LIGHT_MATCH_SINK=1`** - not gated. Chosen by the census of c1045a0: the
+  regex lines were its largest refusal (gsub 273, `=~` 230, sub 104, `when` 86, scan 71, split 63, match 54).
+  - CRuby's rules, the matrix's rows: `$~` is the frame's own - a method's match never sets its caller's, which keeps
+    what it had (nil or a match); a block and a lambda see and set their method's; per thread too; `$1`..`$9`, `$&`,
+    `` $` ``, `$'`, `$+`, Regexp.last_match read it, `$~ = nil` and `$~ = md` set it (anything else is a TypeError);
+    binding, eval and a TracePoint's binding read the frame's; `alias $m $~` makes `$m` read it.
+  - `MethodDefinition.IsMatchSink`: a method with no `$~`/`$1`... reference, no block or lambda, none of binding, eval,
+    instance_eval, class_eval, module_eval, send, `__send__`, public_send, method, public_method, singleton_method,
+    last_match, enable, set_trace_func, trace, and no global but the runtime's own. Its regex literals given to `=~ ===
+    match gsub(!) sub(!) scan split index rindex byteindex byterindex [] []= slice(!) start_with? partition rpartition`
+    or in a `when` no longer keep it out of light frames, and those light sites (without a block) get
+    `RubyCallFlags.HasMatchSink`. Their rule, once it has resolved a library method implemented in MutableStringOps,
+    SymbolOps or RegexpOps (not Regexp#~, which reads `$_`, Regexp.last_match or Symbol#to_proc; checked by the CLR
+    method, so an alias cannot bring one in), gives it a sink scope of the thread's instead of answering
+    LightScopeRequired (`RubyOps.EnterMatchSink`, a stack: `sub(re, hash)` runs the hash's default proc after storing
+    `$~`, and that code's own calls must not take it), hands what it stored over when it returns (`LeaveMatchSink`,
+    `AbortMatchSink` in a fault block), and the frame takes it into a CLR variable `#match` (`TakeMatchSink`; what it
+    had if the call stored nothing). A scope the frame makes later gets it (`SeedLightScopeMatch` in the lazy scope),
+    and once the frame has its scope the site makes the ordinary call. Not with c_call traced.
+  - Round one (49699fa) gave the library method the runtime's EmptyScope. The gate found two faults in it: a
+    TracePoint enabled by a callee after the match read nil for the method's `$~` (CRuby: the match; now matrix row
+    10, which runs always), and the last match and its subject String stayed reachable from the shared EmptyScope,
+    written by every thread (now `Method_LightFrameMatchSinkRetention1`: 1 of 8 subjects alive after GC on 49699fa, 0
+    now). The per-frame variable fixes both: nothing shared holds a match, and EmptyScope is never written.
+  - **Why off by default:** the hand-over costs about what it saves. Instructions (`Util/perf/callgrind/count.sh`,
+    regex-shapes, N=20000; switch off / round one / this): gsub 12,641 / 12,237 / 12,541 (0.992), split 10,826 /
+    10,298 / 10,611 (0.980), kase 8,483 / 8,173 / 8,714 (1.027), eqt 5,768 / 5,338 / 5,588 (0.969); size and
+    tilde 1.00. A first form with three thread statics per helper was 0.99-1.05 (kase 1.049); one thread-static object
+    took a third of that back. Time (`ab.rb`, off / on): a first run of five rounds gsub 0.89, split 0.92, kase 0.95,
+    eqt 0.78, the controls level; a second of seven, with the machine busier, every shape overlapping (spreads 9-47%).
+    Under callgrind tiered compilation is off, where a thread static costs more than in tier 1; the clock's first
+    run says the gain may be real, the second cannot tell. Turn it on after a quiet `ab.rb -r 10`, or after a cheaper
+    hand-over (the frame's `#rfc` as the carrier, or the sink scope taken once per frame instead of once per call).
+  - Census (Src/StdLib + AWFY, 28,377 methods): as built, 0 methods changed. With `IR_LIGHT_MATCH_SINK=1` light frames
+    26,732 -> 27,291 (+559, 94.2% -> 96.2%), none down, the JIT's counts unchanged.
+  - Checks: the new `Util/light-match-sink-matrix.rb` (every method above, the caller's `$~` nil and set, no match, a
+    Regexp in a variable, grep; 21 methods that read their `$~`; `alias $mm $~`; threads; a refined gsub; String#=~
+    with an object of the program's, and with a private and a protected `=~`; a String subclass; a Symbol receiver;
+    gsub redefined and restored after binding; TracePoint :return enabled before, enabled by a callee mid-frame,
+    :c_return; `sub(re, hash)` whose default proc matches too, also under a TracePoint; a scope made late by
+    respond_to?, block_given?, keywords, defaults, rescue), regex-light, light-entry, hot-shapes, block-pass and jit:
+    CRuby's output in the six gate modes and with the switch on, with and without the JIT (47 same; regex-light under
+    R2R as on base). ruby/spec language/predefined, core/regexp, core/string gsub/sub/scan/split/match with the switch
+    on: 673 examples, the same three conversion-message errors as the base. IronRuby.Tests: the two new tests and 37
+    light-frame and regex tests pass with the switch off and on.
+  - `ScopeRead` and the sink: of the scope-taking methods of MutableStringOps, SymbolOps and RegexpOps every one uses
+    it for `$~` and the runtime only, except the three named above; split's default separator is `$;`, read from the
+    runtime (`Context.StringSeparator`), not the frame.
+  - Found on the way, not fixed: `instance_eval("$~")` does not see its caller's `$~` (CRuby does), on base too.
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
