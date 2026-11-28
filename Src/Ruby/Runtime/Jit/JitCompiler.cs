@@ -2590,6 +2590,46 @@ namespace IronRuby.Runtime.Jit {
         internal static readonly bool SinkBoxedBooleans = Environment.GetEnvironmentVariable("IR_JIT_SINK_BOXED") != "0";
         internal static readonly bool ScreenRefusesCall = Environment.GetEnvironmentVariable("IR_JIT_SCREEN_CALL") != "0";
 
+        // IR_JIT_CASE_EQ=0 turns EmitModuleCaseEquality off
+        internal static readonly bool ModuleCaseEquality = Environment.GetEnvironmentVariable("IR_JIT_CASE_EQ") != "0";
+
+        /// <summary>
+        /// `C === x', C a constant named as a class or a module is (`Integer', `Foo::Bar'; not `PATTERN', which holds a value
+        /// whose === is its own - a Regexp's sets $~ - and would only be declined), with no block.
+        /// </summary>
+        internal static bool IsModuleCaseEquality(MethodCall/*!*/ node) {
+            if (!ModuleCaseEquality || node.MethodName != "===" || node.Block != null) { return false; }
+            var constant = node.Target as ConstantVariable;
+            var args = node.Arguments;
+            if (constant == null || args == null || args.Expressions.Length != 1 || args.Expressions[0] is SplattedArgument) { return false; }
+            foreach (char c in constant.Name) {
+                if (Char.IsLower(c)) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// `C === x' where C is a class or a module: Module#===, which is Kernel#is_a? turned around - whether x's class (its
+        /// singleton class included) has C among its ancestors - asked without x's is_a? (JitRuntime.ModuleCaseEquals). C is
+        /// the folded constant, which the entry's constant version guards, and a C that is no module bails here. The site
+        /// checks that C's own class (its singleton class, for a class or a module that has one) resolves === to Module's
+        /// library method under the current global method version, and deopts otherwise: a `def self.===' or a refinement of
+        /// it is the generic call's. Not where a refinement is active.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitModuleCaseEquality(MethodCall/*!*/ node, out JT type) {
+            if (!_refinements.IsEmpty) { throw Bail("=== with refinements active"); }
+            JT ct;
+            var module = Coerce(Emit(node.Target, out ct), ct, JT.Obj);
+            var folded = module as MSA.ConstantExpression;
+            if (folded == null || !(folded.Value is RubyModule)) { throw Bail("=== of a constant that is no module"); }
+            var site = new JitRuntime.KernelMethodSite("===", LibraryMethods("===", _context.ModuleClass));
+            JT vt;
+            var value = Coerce(Emit(node.Arguments.Expressions[0], out vt), vt, JT.Obj);
+            _canDeopt = true;
+            type = JT.Bool;
+            return Ast.Call(JitRuntime.M("ModuleCaseEquals"), Ast.Constant(_context), module, value, Ast.Constant(site));
+        }
+
         // IR_JIT_TYPE_TEST=0 turns EmitTypeTest off
         internal static readonly bool TypeTests = Environment.GetEnvironmentVariable("IR_JIT_TYPE_TEST") != "0";
 
@@ -2654,6 +2694,9 @@ namespace IronRuby.Runtime.Jit {
 
             // `x.is_a?(C)', `kind_of?', `instance_of?' (EmitTypeTest)
             if (IsTypeTest(node)) { return EmitTypeTest(node, out type); }
+
+            // `C === x' (EmitModuleCaseEquality)
+            if (IsModuleCaseEquality(node)) { return EmitModuleCaseEquality(node, out type); }
 
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
@@ -4389,6 +4432,11 @@ namespace IronRuby.Runtime.Jit {
             if (node.Target != null && argc == 0 && node.MethodName == "!") {
                 // `!x' (JitCompiler.EmitNot)
                 return WalkCondition(node.Target);
+            }
+
+            if (JitCompiler.IsModuleCaseEquality(node)) {
+                // `C === x' (JitCompiler.EmitModuleCaseEquality): C a constant, x any object
+                return (WalkConstant((ConstantVariable)node.Target) || No(node)) && Walk(args.Expressions[0]);
             }
 
             if (JitCompiler.IsTypeTest(node)) {

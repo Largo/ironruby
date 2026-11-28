@@ -308,7 +308,7 @@ namespace IronRuby.Runtime.Jit {
             // deopt), a type or identity test (a class that resolves the method to anything but the library's deopts) and
             // `x.to_i' of an Integer, nil or a plain decimal String: no Ruby code, no instance variable, nothing but a deopt
             "IndexInt", "IndexLong", "IndexObj", "IndexIntChecked", "IndexLongChecked", "IndexObjChecked", "HashKeyInt",
-            "IsKindOf", "IsIdentical", "IsNil", "CollectionEqualsNil", "ToIntegerObject", "StringEmpty", "NotObject", "IsEmpty", "IsEmptyOrString",
+            "IsKindOf", "ModuleCaseEquals", "IsIdentical", "IsNil", "CollectionEqualsNil", "ToIntegerObject", "StringEmpty", "NotObject", "IsEmpty", "IsEmptyOrString",
         };
 
         // Integer#abs of an Int32 (widened, so it cannot overflow) and Float#abs (JitCompiler.EmitCall)

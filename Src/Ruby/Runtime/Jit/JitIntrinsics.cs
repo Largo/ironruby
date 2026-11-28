@@ -471,6 +471,16 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// `C === x' with C a module (JitCompiler.EmitModuleCaseEquality): Module#===, x's immediate class has C among its
+        /// ancestors, once the site found C's own class to resolve === to Module's library method; otherwise a deopt.
+        /// </summary>
+        public static bool ModuleCaseEquals(RubyContext/*!*/ context, object m, object value, KernelMethodSite/*!*/ site) {
+            var module = m as RubyModule;
+            if (module == null || !site.Resolves(ClassOf(context, module))) { throw Deopt(); }
+            return module.Context.IsKindOf(value, module);
+        }
+
+        /// <summary>
         /// Which receiver classes resolve a name to one of the library methods given (KernelMethodSite.Resolves), each under the
         /// global method version it was found at, for a few classes at once: a type test (`x.is_a?(C)') sees receivers of
         /// several classes far more often than an identity test does. The entries are immutable and replaced whole, so a

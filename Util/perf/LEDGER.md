@@ -2025,6 +2025,34 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitcaseeq (2026-11-28, census and timed, not gated; paused before its checks were complete) - `C === x` with
+  C a class or module constant in the method JIT's typed body** (the census's `MethodCall ===`: 304 methods refused,
+  170 by it alone; switch `IR_JIT_CASE_EQ`). Built on happy-gauss fcbc67b.
+  - **What.** `C === x`, with C a constant whose name has a lower-case letter (`Integer`, `Foo::Bar`; not `PATTERN`,
+    which holds a value whose === is its own, a Regexp's sets $~), compiles to `JitRuntime.ModuleCaseEquals`. That
+    is Module#=== (`module.Context.IsKindOf(x, module)`): x's immediate class has C among its ancestors, without
+    asking x anything (x's own is_a?, a BasicObject, method_missing). C is the folded constant under the entry's
+    constant version guard, and a C that is no module bails at compile time. A `KernelMethodSite` checks that C's
+    own class (its singleton class) resolves === to Module's library method under the global method version; a
+    `def C.===`, a reopened singleton class or Module#=== redefined deopts. Not compiled where a refinement is
+    active. Added to the sinking allow-list.
+  - **Census** (Src/StdLib, Util/bench, AWFY, against fcbc67b): 39 methods up (never -> maybe), none down.
+    Compiles 3,631 -> 3,631, maybe 3,495 -> 3,534, never 22,406 -> 22,367.
+  - **app-shapes, traced:** specialized 123 -> 123, declined 29 -> 29 (nothing hot there writes `C === x`). AWFY
+    writes none.
+  - **Clock** (ab.rb -r 5, `Util/bench/isa-shapes.rb`, ns, off -> new, CRuby): `IBase === x` over four receiver
+    kinds 104.0 -> 73.8 (51.9), an Integer/Float/else chain of `===` 119.9 -> 81.2 (62.6). The is_a? row (num)
+    overlaps, as it should.
+  - **Checks done.** `Util/jit-caseeq-matrix.rb` (new, 24 rows): Integer, String, Numeric, Comparable, Module,
+    Class, BasicObject and user classes; a liar is_a? and a BasicObject x; include and extend after hot; `def
+    Odd.===` added and removed; Module#=== redefined and restored; refined; the constant swapped to another class
+    and to a Regexp; a SCREAMING_CASE Regexp constant setting $~. It prints CRuby's output with the JIT on,
+    -X:NoJIT -X:NoOSR, -X:NoJITCalls, IR_LIGHT_FRAMES=0 and the switch off. ruby/spec core/module/case_compare and
+    language/case: the same as the base, no failures.
+  - **Owed** (the round was paused, at the parent's request, while they ran): jit-isa (one mode done, the same),
+    jit-objops, jit, jit-calls, jit-const, unsampled, hot-shapes and case-string matrices in every mode, and
+    IronRuby.Tests on Debug.
+
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
   design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple
