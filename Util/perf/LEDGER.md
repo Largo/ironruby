@@ -2041,6 +2041,40 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   Start-up on the R2R host, best of ten alternating, two runs, base -> new ms: `-e 1` 509 -> 497 and
   514 -> 475, `gem --version` 601 -> 591 and 584 -> 562, `gem list` 1043 -> 952 and 1040 -> 929,
   `require "irb"` 1100 -> 995 and 1080 -> 977, irb 1+1 1186 -> 1086 and 1167 -> 1075: 2-11% faster.
+
+- **perf/lightlambda (2026-11-28) - a lambda literal in a branch no longer keeps its method out of light frames** - not
+  gated. Chosen by the census of 50b07b5 + 8092170: LambdaDefinition, 73 methods, the next light-frame refusal after
+  the `$~` family.
+  - Why it had the scope: no reason but the filter's - `IsScopeFree` had no case for a LambdaDefinition (`->(x) { }`;
+    `lambda { }` is a call with a literal block, light already). A lambda literal is a literal block made into a lambda
+    (BlockDefinition.Transform: InstantiateLambda / DefineLambda over the scope variable, which the rewriter makes the
+    scope made on demand when the body has literal blocks), so it is made as a block literal's Proc is. Its `return`,
+    `next` and `break` leave the lambda (its own frame's LambdaUnwinder filter), not the method's frame; its arity is
+    the lambda's; kept past the return, it holds the scope it was made over, made by then.
+  - Measured first, with every lambda literal let in (`Util/bench/lambda-shapes.rb`, callgrind, off / on): a method
+    whose lambda is made on no call (`rare`) 2,572 / 2,161 (0.840), on one call in eight (`branch`) 2,902 / 2,615
+    (0.901), but on every call (`always`, called there) 3,594 / 3,746 (1.042) and returned (`kept`) 3,697 / 3,820
+    (1.033): the scope is made either way, later and dearer - the literal-block story. So only a lambda the method
+    does not make on every call lets it in (`HasUnconditionalLambda`): not one in a statement of the body or its ensure
+    clause, a condition, the left of `&&`, `||`, `||=`, a `case` value or a loop body; one in the body of an `if`,
+    `unless`, `when` or `else`, either side of `?:`, the right of `&&`, `||`, `||=`, or a rescue clause does. Switch:
+    `IR_LIGHT_LAMBDA=0`.
+  - Census (Src/StdLib + AWFY, 28,377 methods): light frames 27,291 -> 27,310 (+19), none down, the JIT's counts
+    unchanged. 47 methods stay out as "LambdaDefinition made on every call" (+61 if they were let in, at 1.03-1.04).
+  - Instructions as built (callgrind, off / on): rare 0.846, branch 0.901, always and kept 1.000 (refused), size
+    1.001. Time (`ab.rb -r 10`, load about 1): rare 0.66, branch 0.64, always 0.98, kept 1.10, size 0.75 - all
+    overlapping (spreads 16-85% on shapes of a few ns), so the clock says nothing here.
+  - Checks: the new `Util/light-lambda-matrix.rb` (return, next and break in a lambda, return from a block in a lambda
+    and from a lambda in a loop, a lambda kept past its method and called after, arity errors, optional/rest/keyword/
+    block parameters, binding, eval and local_variables in a lambda, self, `__method__`, block_given?, yield and
+    `defined?(yield)` in one, super in one, curry, arity, parameters, lambda?, `lambda(&proc)`, a lambda made only on a
+    rare path, lambdas made in a loop, nested, `&->(){}`, raise, threads, recursion; each method on every path and in a
+    branch, the branch taken and not), light-entry, hot-shapes, block-pass and jit: CRuby's output in the six gate
+    modes and with the switch off, on both trees (35 same). ruby/spec language/lambda, core/proc, core/kernel/lambda:
+    334 examples, no failures on either. IronRuby.Tests (Debug): the new Method_LightFrameLambda1 and 164 tests named
+    for blocks, lambdas, procs, closures, yield, return, break and next pass with the switch on and off; the whole
+    suite was refused by the session's permission check and not run.
+
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,
   perf/arymin, perf/rescuelight and perf/splatpos with castcheck's, nilblock's and dotsfwd's findings,
@@ -8125,6 +8159,67 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/jitcalls, second round (2026-11-28) - stage 3's first step or stage 4's slice: measured, designed, not
+  built** (gap 1). Chosen by what the JIT declines in eight AWFY benchmarks: every hot method turned away after the
+  screen is turned away by the effect rule (`append`, `release`, `hold_self`, `remove_first`, `split_bucket`,
+  `read_required_char`, `skip_white_space`); none is a loop waiting for a call into a pure typed callee, so stage 4's
+  slice reaches nothing hot. The step, resuming at a top-level statement with the state written into the scope,
+  is designed in `Docs/jit-resume-deopt.md` ("Stage 3, first step"): its generic suffix is the same compiler as stage
+  3a's generic tail. Alone it would unlock methods worth about 2% of Richards and under 1.4% of DeltaBlue (the
+  profiles of gap 11), stage 1's kind of gain, which measured nothing on a benchmark. So it is to be built as the
+  suffix compiler's second user, after 3a's yield loop, which has a measured target.
+
+- **perf/jitcalls (2026-11-28) - general calls in typed bodies, the narrowest slice: designed and counted, not
+  built** (gap 1). The design and the counts are in `Docs/jit-resume-deopt.md`, "Stage 2 again". The slice sound in
+  one step is a typed body whose one general call is its last operation (nothing after it to deopt, re-check or
+  write back). Of the methods whose only screen refusal is one call, 3,574 are wrappers whose whole body is that call
+  (what a light frame already is: perf/jcall and perf/resume2 measured nothing there), 343 have a typed prefix before
+  it, 96 more follow it only with literals or reads. AWFY's among them are `run_task`, `add_constraint`,
+  `set_parent`, `Dictionary#resize`, `Queens#queens`; Richards' `queue_packet` is declined before its call by an
+  attribute write after an ivar write. The ceiling, `Util/bench/jit-resume2-shapes.rb` against CRuby 4.0:
+  `queue_packet` 1.00, `add_input` 0.99, `schedule` 1.12 (a call in a loop), `find_task` 1.60 (a raise guard, no call).
+  Next on gap 1: a call into a typed body from a loop the typed body owns (`-X:JITCalls` on other receivers, with
+  stage 3's resume), not another slice of stage 2.
+
+- **perf/jiteqq (2026-11-28) - `C === x` (Module#===, a constant receiver) in a typed body; `respond_to?(:lit)`
+  counted: built, census-measured, nothing hot moved, not kept.** From the census of 33818f7 + 5b98b17, where
+  `MethodCall ===` refuses 304 methods first (426 at all, 170 alone). By receiver (prism over each refused method's
+  def): 141 methods call `===` on a constant, 152 on a call - almost all prism's generated `Node#===`, comparing
+  fields (`(name === other.name)`) - 16 on a local, 4 on a Range, 2 on a Regexp literal; `case ... when` adds
+  9 methods. The constant ones are the prelude's Complex and Rational helpers (`::Integer === x`, `::Float`,
+  `::Rational`), Socket's `Addrinfo === addr`, and `==` methods of the form `C === other && ...`. Built as
+  perf/jitbody's is_a? is (IR_JIT_MODULE_EQQ): JitScreen took `C === x` with C a constant, JitCompiler emitted
+  `JitRuntime.ModuleCaseCompare` - Module#=== is `IsKindOf(x, C)` (rb_obj_is_kind_of; x's is_a? is not asked)
+  under a KernelMethodSite on C's class resolving `===` to Module's, deopting otherwise, and declining with
+  refinements active. Census: 39 methods never -> maybe, none to compiles (most stop at "constant without a
+  scope", which only a run can fold). Nothing hot among them: AWFY 0 methods changed; app-shapes' run (`census
+  -u`) 0 of the 922 methods it called; a Complex arithmetic loop (`s + a * b - b`, 300,000 times) the same 52
+  screen rejections in both builds - Complex's operators do not reach the helpers that moved on their hot path.
+  `respond_to?(:lit)` was only counted: the first refusal of 361 methods and the only one of 72, none in AWFY,
+  7 among app-shapes' called methods - the same order, not built. Both are what the census can win and the
+  clock cannot see; worth doing only together with whatever lets the methods around them compile.
+
+- **perf/jiteach (2026-11-28) - a typed body that takes `recv.each { }`, `recv.map { }` and `n.times { }` as a
+  loop: screened, not built.** Chosen from the census of 33818f7 + a22b068, where `MethodCall each` refuses 716
+  methods first and `map` 402, with "alone" counts of 567 and 301. Those counts are the screen's first refusal:
+  it stops at the call and never walks the block, so they say nothing about the block bodies. The step measured
+  them before writing an emitter. A screen-only change (IR_JIT_EACH; JitScreen.WalkCall walked a literal block of
+  at most one plain parameter as a `while` body, `break` and bare `next` the loop's) moved 2 methods off `never`
+  (`HTTPPool#setup_queue`, AWFY's `inner_benchmark_loop`, both `times`). With the block's own locals let in too
+  (the screen's `DefinitionLexicalDepth == _scopeDepth` tests widened to the blocks' depths), 87 of 28,377: never
+  21,724 -> 21,637, every one to `maybe`, none to `compiles`; 3 AWFY methods went the other way (DeltaBlue's
+  `Variable#remove_constraint`, Havlak's `SimpleLoop#add_node` and `#add_child_loop`, maybe -> never, not
+  chased). In AWFY the iterators that matter are not these: the benchmarks iterate over SOM's own `Vector#each`
+  (`each (self)`) and `each_index`, and only `Queens#place_queen` (`times`) and the harness's loop would pass. In
+  app-shapes' run 2 of the 922 methods it called changed, both to `maybe`. What keeps the rest out is inside the
+  blocks: ordinary calls the typed body cannot make (it takes operators, attribute reads, type tests and leaf
+  methods it can inline). An emitter (guarded Array/Integer receiver and unredefined iterator, a loop by index
+  re-reading the length, `break` with its value, `next`, the map result, block-local variables fresh per
+  iteration, the backtrace's `block in` and iterator frames, deopt only before the first effect) would serve
+  about 90 methods at best, so it was not written. Not worth trying again until the typed body can make
+  general calls; the block loop the generic code already runs in place (BlockLoopSite) is what these
+  methods have.
 
 - **perf/stagea (round thirty-seven, 2026-11-28) - stage A of `Docs/block-calling-convention.md`, a narrow
   literal given to a `[BlockNotKept]` iterator as a block descriptor: simulated, not built** (gap 13).
