@@ -2025,6 +2025,29 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/kwcall (/perf-step, 2026-11-28) - the caller's keyword hash: nothing to win; a JIT'd
+  `**rest` whose body can deopt is declined** (fixes a slowdown perf/kwjit brought in).
+  - **The caller's hash** (clock, ns; CRuby in brackets), bodies with a global variable assignment:
+    a declared-keywords call `kd(k: 1)` 39 [42], `kd2(k: 1, j: 2)` 64 [45], `kr(k: 1)` 32 [40] -
+    the method JIT binds them from the call's pairs (JitKeywordCall) without the hash, at CRuby's
+    level already. A `**o` callee needs a hash for o; with the take-over the caller's hash *is* o,
+    which CRuby allocates too. What is left of a hash literal: `{k: 1}` 59 [50]. So the round's
+    40 ns is not the caller's to save.
+  - **What the profile found instead.** `kro(k: 1, z: 2)` into `def kro(k: 0, **o) = ($g = k)`
+    took 131 ns with perf/kwjit against 104 with `IR_JIT_KWREST=0`: the typed body can deopt, so
+    its rest was a copy, which costs more than the typed body saves (perf/kwjit's `krest_u`,
+    1.00 there, had hidden it). JitStub.TrySpecialize now declines a **rest whose compiled body
+    can deopt - it runs the generic body, which takes the call's hash over - and JitCensus.Probe
+    counts it so. JitKeywords.Rest's copy is then only the profiler's.
+  - **Clock** (`ab.rb -r 8`, ns; CRuby / `IR_JIT_KWREST=0` / on): `kro` 89.9 / 100.4 / 103.3
+    (overlap), `krest_u` 75.8 / 116.0 / 123.2 (overlap); still won: `krest` 69.7 / 104.0 / 87.2,
+    `krest_extra` 86.4 / 121.6 / 98.2, `onlyrest` 83.6 / 96.0 / 77.3.
+  - **Census** (`-d` against `IR_JIT_KWREST=0`, now counting the decline): JIT compiles +1, maybe +9,
+    never -10, nothing down (perf/kwjit's count said compiles +7, maybe +3: the Prism initializers
+    are `maybe (declined once typed)`).
+  - **Checks.** The 10 matrices in 6 modes (60 of 60), Method_KeywordRestJit1 under -X:JITResume,
+    IronRuby.Tests in full (Debug): PASSED, 1,424.
+
 - **perf/kwjit (/perf-step, 2026-11-28) - the method JIT takes a keyword method with `**rest`**
   (gap 38; switch `IR_JIT_KWREST`, on unless `=0`). Built on fcbc67b (claude/happy-gauss-95wm2j)
   with de51cf89 merged.

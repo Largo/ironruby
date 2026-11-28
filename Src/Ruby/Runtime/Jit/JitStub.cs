@@ -962,6 +962,14 @@ namespace IronRuby.Runtime.Jit {
                 return false;
             }
 
+            // A **rest the typed body would bind as a copy, since it can deopt into the generic body, which binds from the call's
+            // hash again (JitKeywords.Rest): the copy costs more than the typed body saves - `def m(k: 0, **o) = ($g = k)' took
+            // 131 ns specialized against 104 in the generic body, which takes the call's hash over. That body stays.
+            if (_keywords != null && _keywords.HasRest && code.CanDeopt) {
+                _declineReason = "a **rest whose body can deopt (it would be a copy)";
+                return false;
+            }
+
             // (a body with direct calls was only compiled for a receiver class the profile pinned: Callees)
             bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null || code.DirectCalls;
             if (needsClassGuard) {
