@@ -2115,42 +2115,6 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
       basicobject/!, proc/call: no failures on either build.
     - IronRuby.Tests (Debug), all 1,403: PASSED.
 
-- **perf/jitisa (2026-11-28, census and timed, not gated) - `is_a?`, `kind_of?` and `instance_of?` in the method JIT's
-  typed body** (the census's "MethodCall (screen)": is_a? 693; switch `IR_JIT_TYPE_TEST`). Built on happy-gauss
-  f67ac44 merged with perf/jitbody e19f454.
-  - **What.** `x.is_a?(C)`, `x.kind_of?(C)` and `x.instance_of?(C)` (or on self), with C a constant and no block,
-    compile to `JitRuntime.IsKindOf`. It does Kernel's test with no frame or call: the ancestors of x's immediate
-    class, its singleton class included (`RubyContext.IsKindOf`), or `GetClassOf(x) == C` for instance_of?.
-  - **Guards.** C is the folded constant, guarded by the entry's constant version. A constant folded to something
-    that is no module bails at compile time. The new `JitRuntime.KernelMethodSite` checks that x's class resolves
-    the name to Kernel's method (public) under the current global method version. It keeps four entries
-    (class, version), each immutable, so a racing write only loses an entry. A class that resolves to anything
-    else deopts, and the generic call handles it: a BasicObject's NoMethodError, method_missing, a redefinition in
-    the class, a singleton or Kernel, a non-module C's TypeError, a CLR type group's conversion. Not compiled where
-    a refinement is active. The ancestors are walked on every test, so an include, prepend or extend after compile
-    is seen whether or not it moved a method version.
-  - **The polymorphic site.** IdentityCallSite holds one class and resolves again on every change: an `is_a?` fed
-    two classes in turn was no faster than the generic call (poly2 89.4 vs 89.3 ns). Four entries fix that.
-  - **Census** (Src/StdLib, Util/bench, AWFY): 180 methods up, none down, all never -> maybe. 154 are maybe only
-    because the census resolves no constant without a scope; 26 are behind a call.
-  - **Hot methods.** AWFY calls none of the three. app-shapes: 118 -> 121 specialized (`Set#__core_set__?`,
-    `check_refused` twice); declines 29 -> 32. The three new declines are existing screen optimism that the
-    `is_a?` refusal used to hide: `v.to_i` and `n.call` taken as possible attribute reads (URI::Generic#set_port,
-    Enumerator::Lazy#size) and a deopt after an effect at `[]` (CSV::Parser#prepare_variable). By clock
-    (ab.rb -r 7), app-shapes' rules and set overlap the switch off (1.01 each).
-  - **Clock** (ab.rb -r 3, `Util/bench/isa-shapes.rb`, ns, off -> new, CRuby): mono 72.9 -> 57.2 (46.9), poly2
-    89.8 -> 71.8 (63.5), poly4 143.6 -> 91.5 (62.9), a module argument 76.0 -> 65.7 (51.8), instance_of 67.3 ->
-    54.3 (46.1), an Integer/Float/else chain 150.6 -> 126.2 (75.3), on self 71.4 -> 52.3 (42.6); no overlap.
-  - **Checks.** `Util/jit-isa-matrix.rb` (new, 37 rows): receivers of every kind; Comparable, Enumerable, Module
-    and Class arguments; instance_of? with a singleton class; include, prepend and extend (an Object, a String,
-    Integer) after the body is hot; a constant swapped to another class and to a non-module; is_a?(5); a
-    BasicObject; method_missing; is_a? redefined in a class, a singleton, a class reopened and Kernel, then
-    restored; refined. It prints CRuby's output with the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
-    IR_LIGHT_FRAMES=0 and the switch off. jit, jit-calls, jit-const, hot-shapes, sdef and extend in the same
-    five modes: CRuby's output on both builds. One sdef run with the JIT on exited 1 with the right output; 19
-    more runs (11 on this build, 8 on the base) exited 0. ruby/spec core/kernel is_a, kind_of, instance_of and
-    core/module/case_compare: no failures on either build. IronRuby.Tests (Debug), all 1,402: PASSED.
-
 - **perf/lightlambda (2026-11-28) - a lambda literal in a branch no longer keeps its method out of light frames** - not
   gated. Chosen by the census of 50b07b5 + 8092170: LambdaDefinition, 73 methods, the next light-frame refusal after
   the `$~` family.
@@ -2183,41 +2147,6 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     334 examples, no failures on either. IronRuby.Tests (Debug): the new Method_LightFrameLambda1 and 164 tests named
     for blocks, lambdas, procs, closures, yield, return, break and next pass with the switch on and off; the whole
     suite was refused by the session's permission check and not run.
-
-- **perf/jitblockparam (2026-11-27, census and timed, not gated) - a typed body for a call without a block**
-  (switch `IR_JIT_BLOCK_PARAM`). A method whose block parameter is only passed on, `def w(a, b, &k) =
-  @t.two(a, b, &k)`, was never wrapped (`JitStub.ParameterShape`: "block parameter"), and one passing `&nil`
-  was refused at the screen (a call with a block). Now `JitStub.BlockParameterOnlyPassed` takes a method whose
-  block parameter is never read except as `&k`, never assigned, with no yield and no super, and only
-  mandatory parameters. Its typed body is compiled for a call without a block: there k is nil and `&k`
-  passes none, as `&nil` always does (`JitScreen.PassesNoBlock`; the screen, `EmitCall` and `TryInlineCall`
-  take such a call as one without a block). `block_given?` in a method body (not in an outlined loop, not
-  with optional or keyword parameters, Kernel's and unrefined) compiles to false on the same terms
-  (`EmitBlockGiven`). Such a body sets `JitCode.AssumesNoBlock`, and the entry adds `block == null` to its
-  test, so a call with a block runs the generic body, which passes it on. A method the profile saw called
-  with a block is declined ("called with a block"), at that call if it has a block parameter, before
-  anything is compiled. Inlined and directly called bodies are only ever called without a block.
-  Census (Src/StdLib, Util/bench, AWFY): 62 methods up, none down. 61 left "never (block parameter)"
-  (2 now compile, the rest are maybe), and `FW#pass_nil` left "never (MethodCall two)". Compiles 3,579 ->
-  3,583, maybe 3,180 -> 3,238. Traced runs: forward-shapes specialized 4 -> 7, declines 1 -> 1;
-  delegate-shapes 3 -> 3, 1 -> 1; app-shapes 120 -> 120 specialized, declines 28 -> 29. The new decline,
-  `CSV::FieldsConverter#each` (`@converters.each(&block)`), is always called with a block; it declines at
-  its first call. Most of the methods let through pass `&k` to an iterator, so they win nothing: the gain
-  is a forwarder to a leaf called without a block. Instructions per call (`callgrind/count.sh`,
-  `Util/bench/forward-shapes.rb`): fixed_blk 2,254 -> 1,703, param_only 2,094 -> 1,699, pass_nil
-  2,232 -> 1,697, the same as fixed (1,701). rest, rest_blk, dots and anon are unchanged (rest and dots
-  read +69 once and 0 on a rerun). Delegate-shapes is unchanged, row for row (its forwarders take a rest
-  or a block). Clock (ab.rb -r 3, noisy): param_only 54 -> 38 ns against the switch off; the other rows
-  overlap. `Util/jit-blockparam-matrix.rb` (new: `&k`, `&nil`, block_given? in the caller and callee,
-  break and next through the passed block, a lambda's return, `&obj` with to_proc once, `&:sym`, send and
-  Method#call with a block, two layers, anonymous `&`, an inlined callee's block_given?, k read, assigned,
-  through a binding, super with the implicit block, a deopt with a block in flight, a method always
-  called with a block, a block every third call, block_given? redefined, refined and in a loop, a
-  singleton, the callee redefined): CRuby's output with the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
-  IR_LIGHT_FRAMES=0 and the switch off. jit, jit-calls, dmeth-jit, block-pass, block-given, forward-rest
-  and hot-shapes in the same five modes: the same as the base (forward-rest's six bind_call-of-binding rows
-  differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
-  base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
 
 - **perf/kwbind (/perf-step, 2026-11-28) - a `**rest` parameter is the call's own keyword hash, the
   declared keywords taken out in place** (gap 38; switch `IR_KWREST_TAKE`, on unless `=0`). Built on
