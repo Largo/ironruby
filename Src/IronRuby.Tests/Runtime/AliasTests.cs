@@ -137,6 +137,27 @@ false
         }
 
         /// <summary>
+        /// An alias statement marks its own line: the method redefinition warning it gives is reported there,
+        /// not at the line of the statement before it.
+        /// </summary>
+        public void AliasRedefinitionWarningLine1() {
+            TestOutput(@"
+$w = []
+def Warning.warn(m, **) = $w << m.lines.first[/:(\d+: warning: .*)/, 1]
+B = Class.new
+B.class_eval do
+  def m; end
+  def n; end
+  alias m n
+  def o; end
+end
+p $w
+", @"
+[""8: warning: method redefined; discarding old m""]
+", 0, 1);
+        }
+
+        /// <summary>
         /// Alias (unlike undef) looks up the method in Object.
         /// </summary>
         public void AliasMethodLookup1() {

@@ -866,6 +866,7 @@ namespace IronRuby.Tests {
                 UnqualifiedConstants2,
 
                 AliasMethodLookup1,
+                AliasRedefinitionWarningLine1,
                 AliasMethodLookup3,
                 
                 UndefMethodLookup1,

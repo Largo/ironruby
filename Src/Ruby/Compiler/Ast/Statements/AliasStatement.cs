@@ -35,13 +35,21 @@ namespace IronRuby.Compiler.Ast {
             _isMethodAlias = isMethodAlias;
         }
 
-        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+        private MSA.Expression/*!*/ TransformAlias(AstGenerator/*!*/ gen) {
             return (_isMethodAlias ? Methods.AliasMethod : Methods.AliasGlobalVariable).
                 OpCall(gen.CurrentScopeVariable, _newName.Transform(gen), _oldName.Transform(gen));
         }
 
+        // A statement of its own, `alias' marks its line as every other statement does: the "method
+        // redefined; discarding old foo" warning it gives under -w is reported at that line, which was
+        // the line of whatever statement ran before it.
+        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+            EnterLine(gen);
+            return LeaveLine(gen, gen.AddDebugInfo(TransformAlias(gen), Location));
+        }
+
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
-            return Ast.Block(Transform(gen), AstUtils.Constant(null));
+            return Ast.Block(TransformAlias(gen), AstUtils.Constant(null));
         }
     }
 }
