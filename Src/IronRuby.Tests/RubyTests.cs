@@ -606,6 +606,7 @@ namespace IronRuby.Tests {
                 ClrOverloadInheritance1,
                 LibraryInitializerOverloadAttributes1,
                 LibraryCopiedModuleAttributes1,
+                ClrFieldAndEventNamesFromMetadata1,
                 ClrOverloadInheritance2,
                 ClrOverloadInheritance3,
                 ClrOverloadInheritance4,

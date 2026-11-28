@@ -9790,8 +9790,12 @@ unless defined?(Random)
   class Random
     # MRI's generator is MT19937 (see MersenneTwister.cs), seeded and consumed exactly as
     # random.c does, so a given seed produces the same numbers, bytes and marshal data here.
-    @__mt_class__ = System::Type.get_type("IronRuby.Builtins.MersenneTwister, IronRuby.Libraries").to_class
-    def self.__mt_class__ = @__mt_class__
+    # Found at the first Random made, not at every boot: through CLR interop it cost every
+    # process the reflection of System::Type and its Ruby class (~3 ms of `ir -e 1'). Two threads
+    # that race here find the same class.
+    def self.__mt_class__
+      @__mt_class__ ||= System::Type.get_type("IronRuby.Builtins.MersenneTwister, IronRuby.Libraries").to_class
+    end
     private_class_method :__mt_class__
 
     def initialize(seed = Random.new_seed)

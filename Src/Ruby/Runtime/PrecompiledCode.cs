@@ -74,6 +74,27 @@ namespace IronRuby.Runtime.Precompiled {
     }
 
     /// <summary>
+    /// Marks the index class of a startup library that also holds code of strings evaluated while the startup commands ran
+    /// (Util/aot/startup-evals.txt): RubyGems' kernel_require.rb, which it evaluates as "&lt;internal:...&gt;", and the like.
+    /// Eval i is RubyStartupIndex.EvalEntry(i); <see cref="Keys"/> says what it was compiled for (<see cref="PrecompiledCode.EvalKey"/>,
+    /// with the tree's root as <see cref="PrecompiledCode.RootMarker"/>) and <see cref="Hashes"/> its text
+    /// (<see cref="PrecompiledCode.HashEvalCode"/>): the texts themselves would be read with the attribute at every start.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class), CLSCompliant(false)]
+    public sealed class PrecompiledEvalsAttribute : Attribute {
+        public PrecompiledEvalsAttribute(string[] keys, string[] hashes, int firstClass) {
+            Keys = keys;
+            Hashes = hashes;
+            FirstClass = firstClass;
+        }
+
+        public string[] Keys { get; }
+        public string[] Hashes { get; }
+        /// <summary>Eval i's code is the class RubyStartup&lt;FirstClass + i&gt; (after the files').</summary>
+        public int FirstClass { get; }
+    }
+
+    /// <summary>
     /// The closure object nested lambdas of saved code are bound to: .NET Core does not expose
     /// System.Runtime.CompilerServices.Closure, and a saved assembly must reference a public type.
     /// </summary>
@@ -536,6 +557,157 @@ namespace IronRuby.Runtime.Precompiled {
         /// that runtime's objects), only if the runtime compiles code the way the library was compiled, and only
         /// for files whose source is still what was compiled. IR_STARTUP_DLL=none turns it off.
         /// </summary>
+        #region Evals
+
+        /// <summary>
+        /// What the code of a string eval depends on besides its text: the text's encoding, the file and line, $VERBOSE (0 nil, 1
+        /// false, 2 true), the frame (inside a method or not, its label, block depth, method name and parameter names, a rest
+        /// parameter), the locals it can see, and the names of the modules its constants are looked up in, innermost first
+        /// (EvalCodeCache.ConstantModules; "" for none). Null if a module has no name: such an eval is not precompiled.
+        /// </summary>
+        public static string EvalKey(string/*!*/ encoding, string/*!*/ path, int line, int verbosity, bool inMethod, string baseLabel,
+            int blockLevels, string methodName, string[] parameterNames, bool hasUnsplat, System.Collections.Generic.IList<string> localNames, string[] moduleNames) {
+            if (moduleNames == null) {
+                return null;
+            }
+            var sb = new System.Text.StringBuilder();
+            sb.Append(encoding).Append('\u0001').Append(path).Append('\u0001').Append(line).Append('\u0001').Append(verbosity).Append('\u0001')
+                .Append(inMethod ? '1' : '0').Append('\u0001').Append(baseLabel).Append('\u0001').Append(blockLevels).Append('\u0001')
+                .Append(methodName).Append('\u0001').Append(parameterNames != null ? String.Join("\u0002", parameterNames) : "\u0003").Append('\u0001')
+                .Append(hasUnsplat ? '1' : '0').Append('\u0001').Append(localNames != null ? String.Join("\u0002", localNames) : "\u0003").Append('\u0001')
+                .Append(String.Join("\u0002", moduleNames));
+            return sb.ToString();
+        }
+
+        /// <summary>The names of <see cref="EvalCodeCache.ConstantModules"/>, or null if one of them has none.</summary>
+        internal static string[] ModuleNames(RubyContext/*!*/ context, object[]/*!*/ modules) {
+            var names = new string[modules.Length];
+            for (int i = 0; i < modules.Length; i++) {
+                var module = modules[i] as RubyModule;
+                if (module == null) {
+                    names[i] = "";
+                } else if ((names[i] = module.GetName(context)) == null) {
+                    return null;
+                }
+            }
+            return names;
+        }
+
+        private sealed class PrecompiledEval {
+            internal readonly string/*!*/ Hash;
+            internal readonly int Index;
+            // 1 once an eval has run it: the code of a text with a def or a class body is one eval's (see TryClaimEval)
+            internal int Claimed;
+
+            internal PrecompiledEval(string/*!*/ hash, int index) {
+                Hash = hash;
+                Index = index;
+            }
+        }
+
+        /// <summary>The SHA-256 of an eval's text, hex: what tells the text the library was compiled from.</summary>
+        public static string/*!*/ HashEvalCode(byte[]/*!*/ code) {
+            return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(code));
+        }
+
+        // by key: an eval site makes texts of one key that differ (Forwardable's delegators, one per method), told apart by hash
+        private static System.Collections.Generic.Dictionary<string, PrecompiledEval[]> _evals;
+
+        /// <summary>Whether the startup library has evals no eval has run yet: the only cost to an eval otherwise is reading this.</summary>
+        internal static bool HasEvals {
+            get { return Volatile.Read(ref _evalsLeft) != 0; }
+        }
+        private static Func<int, Func<RubyScope, object, RubyModule, Proc, object>> _evalEntry;
+        private static int _evalsLeft;
+
+        /// <summary>
+        /// The precompiled code of an eval of exactly this text in exactly this context, the first time such an eval runs in
+        /// the library's runtime; null otherwise, and the eval compiles its text as it would without the library. Once, as a
+        /// compile is once: the code of a text with a `def', a class body or a regexp literal keeps objects of the eval that
+        /// ran it (see EvalCodeCache), and a second eval of the text has to get fresh ones.
+        /// </summary>
+        internal static Func<RubyScope, object, RubyModule, Proc, object> TryClaimEval(RubyContext/*!*/ context, byte[]/*!*/ code, string key) {
+            if (key == null || Volatile.Read(ref _evalsLeft) == 0 || context != _context) {
+                return null;
+            }
+            PrecompiledEval[] candidates;
+            if (!_evals.TryGetValue(key, out candidates)) {
+                return null;
+            }
+            string hash = HashEvalCode(code);
+            PrecompiledEval eval = null;
+            foreach (var candidate in candidates) {
+                if (candidate.Hash == hash) {
+                    eval = candidate;
+                    break;
+                }
+            }
+            if (eval == null || Interlocked.Exchange(ref eval.Claimed, 1) != 0) {
+                return null;
+            }
+            Interlocked.Decrement(ref _evalsLeft);
+            if (Trace) {
+                Console.Error.WriteLine("IronRuby.Startup: precompiled eval of " + code.Length + " bytes, " + key.Substring(0, Math.Max(0, key.IndexOf('\u0001', key.IndexOf('\u0001') + 1))).Replace('\u0001', ' '));
+            }
+            return _evalEntry(eval.Index);
+        }
+
+        private static void RegisterEvals(Type/*!*/ index, PrecompiledEvalsAttribute/*!*/ info) {
+            var entry = index.GetMethod("EvalEntry");
+            if (entry == null || info.Keys == null || info.Hashes == null || info.Keys.Length != info.Hashes.Length) {
+                return;
+            }
+            var evals = new System.Collections.Generic.Dictionary<string, PrecompiledEval[]>(StringComparer.Ordinal);
+            for (int i = 0; i < info.Keys.Length; i++) {
+                string key = Rooted(info.Keys[i]);
+                evals.TryGetValue(key, out var candidates);
+                var more = new PrecompiledEval[(candidates?.Length ?? 0) + 1];
+                candidates?.CopyTo(more, 0);
+                more[more.Length - 1] = new PrecompiledEval(info.Hashes[i], i);
+                evals[key] = more;
+            }
+            _evals = evals;
+            _evalEntry = (Func<int, Func<RubyScope, object, RubyModule, Proc, object>>)entry.CreateDelegate(typeof(Func<int, Func<RubyScope, object, RubyModule, Proc, object>>));
+            Volatile.Write(ref _evalsLeft, info.Keys.Length);
+        }
+
+        /// <summary>
+        /// IR_EVAL_RECORD=file: every plain string eval compiled without a warning is appended to the file, one JSON object a
+        /// line, with what the startup library needs to compile it ahead of time (Util/aot/startup-files.rb writes
+        /// startup-evals.txt from it).
+        /// </summary>
+        internal static readonly string EvalRecordPath = Environment.GetEnvironmentVariable("IR_EVAL_RECORD");
+
+        internal static void RecordEval(byte[]/*!*/ code, string/*!*/ encoding, string/*!*/ path, int line, int verbosity, bool inMethod,
+            string baseLabel, int blockLevels, string methodName, string[] parameterNames, bool hasUnsplat, System.Collections.Generic.IList<string> localNames,
+            string[] moduleNames) {
+            if (moduleNames == null) {
+                return;
+            }
+            var o = new System.Text.Json.Nodes.JsonObject {
+                ["code"] = Convert.ToBase64String(code),
+                ["encoding"] = encoding,
+                ["path"] = path,
+                ["line"] = line,
+                ["verbosity"] = verbosity,
+                ["inMethod"] = inMethod,
+                ["baseLabel"] = baseLabel,
+                ["blockLevels"] = blockLevels,
+                ["methodName"] = methodName,
+                ["parameterNames"] = parameterNames != null ? new System.Text.Json.Nodes.JsonArray(Array.ConvertAll(parameterNames, n => (System.Text.Json.Nodes.JsonNode)n)) : null,
+                ["hasUnsplat"] = hasUnsplat,
+                ["localNames"] = localNames != null ? new System.Text.Json.Nodes.JsonArray(localNames.Select(n => (System.Text.Json.Nodes.JsonNode)n).ToArray()) : null,
+                ["moduleNames"] = new System.Text.Json.Nodes.JsonArray(Array.ConvertAll(moduleNames, n => (System.Text.Json.Nodes.JsonNode)n)),
+            };
+            lock (_recordLock) {
+                File.AppendAllText(EvalRecordPath, o.ToJsonString() + "\n");
+            }
+        }
+
+        private static readonly object/*!*/ _recordLock = new object();
+
+        #endregion
+
         internal static void TryRegisterStartupLibrary(RubyContext/*!*/ context) {
             string path = Environment.GetEnvironmentVariable("IR_STARTUP_DLL");
             if (path == "none" || path == "") {
@@ -591,7 +763,10 @@ namespace IronRuby.Runtime.Precompiled {
                 // each file's code is a class of its own (RubyStartup<i>), loaded when the file first runs
                 var entry = (Func<int, Func<RubyScope, object, object>>)index.GetMethod("Entry").CreateDelegate(
                     typeof(Func<int, Func<RubyScope, object, object>>));
-                _lineTables = new System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo>[info.Files.Length];
+                // the files' classes, then the evals' (PrecompiledEvalsAttribute.FirstClass)
+                var evalsAttribute = index.GetCustomAttribute<PrecompiledEvalsAttribute>();
+                _lineTables = new System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo>[
+                    evalsAttribute != null && evalsAttribute.Keys != null ? Math.Max(info.Files.Length, evalsAttribute.FirstClass + evalsAttribute.Keys.Length) : info.Files.Length];
                 _startupAssembly = assembly;
                 _context = context;
                 if (Trace) {
@@ -625,6 +800,12 @@ namespace IronRuby.Runtime.Precompiled {
                     context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(lazyTarget, context.CreateFileUnit(file), TopScopeFactoryKind.File), isCurrent);
                 }
                 _fileHashes = fileHashes;
+                if (evalsAttribute != null) {
+                    RegisterEvals(index, evalsAttribute);
+                    if (Trace) {
+                        Console.Error.WriteLine("IronRuby.Startup: " + _evalsLeft + " precompiled evals");
+                    }
+                }
                 if (Trace) {
                     // every file, not only the ones this run loads: a library that no longer matches its sources is slower
                     // for each stale file (it is compiled from source) and otherwise says nothing (Util/aot/check-startup.sh)

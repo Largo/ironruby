@@ -1614,6 +1614,20 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     and the R2R host's JIT. rbconfig.rb no longer uses CLR interop: -0.3 to -0.9% main-thread
     instructions on all five commands. Next leads: the 4,989 CLR member lookups of ruby4.rb in `-e 1`
     (5.9 ms), and eval'd strings in the startup library.
+    2026-11-27, perf/clrlookup (Landed, not gated): the 7,230 CLR member lookups of `-e 1` are
+    method resolution falling back to the CLR types of Object, Class, Module and their singleton
+    classes; the hooks of the prelude's definitions (`const_added`, `method_added`...) are most of them.
+    They cost little: failures are cached and names checked against metadata. The time is the first
+    lookup on each of ~67 types. Taken: Random's interop call made lazy, field and event names read
+    from metadata, and the failure cache keyed by a class. -0.75 to -1.97% main-thread instructions on
+    the R2R host, -0.10 to -1.13% on the release image.
+    2026-11-27, perf/bootparse (Landed, not gated): the string evals start-up runs are compiled
+    into the startup library: specification.rb's and kernel_require.rb's (2.3 ms each on the R2R
+    host before their first call), every gemspec RubyGems loads (93 in `gem list`), Forwardable's
+    delegators. Main-thread instructions -2.1 to -6.8% on the R2R host and -2.7 to -8.6% on the release
+    image; best-of-10 wall -2 to -11% and -0 to -14%. Not taken: the JIT's re-parses of start-up methods
+    (2-3 ms of `-e 1`), and Kernel#require's first-call body compile (~10 ms, 4 ms of it the first
+    def-body transform's cold path), the next leads.
 27. **Closed (perf/crubydiff, third round): `send` frames are hidden.** Was: **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -2598,6 +2612,106 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   enumerator, thread and kernel/loop_spec: 1,026 examples, 0 failures on base, new and without
   the bound; the Enumerator*, Lazy*, Loop*, Fiber*, Thread*, Exception* and Raise* IronRuby.Tests
   (60) pass in five plain runs on base and five on new.
+
+- **perf/bootparse (2026-11-27) - the string evals of start-up precompiled in the startup library (gap 26)**
+  - not gated. Base 4703cb5 (f67ac44 with perf/clrlookup).
+  What start-up parses at run time (R2R host, IR_PHASE_TIMES, IR_STARTUP_DLL_TRACE): the string evals,
+  each a prism parse, a transform and a lambda compile on the main thread. They are
+  specification.rb's `set_nil_attributes_to_nil` and kernel_require.rb's Kernel#require (~2.3 ms each,
+  both in `-e 1`), every gemspec RubyGems loads (62 default and 29 installed, 93 evals in `gem list`),
+  Forwardable's `def_delegator` texts (56, irb and reline) and irb's workspace binding. The JIT's 11
+  re-parses of methods it compiles cost 2-3 ms and were left; Kernel#require's body compile at its first
+  call (~10 ms) is the larger single cost and the next lead.
+  Taken (bf64364):
+  - startup-files.rb runs its commands again with IR_EVAL_RECORD and writes startup-evals.txt (150 evals):
+    each text with everything EvalCodeCache keys an eval on (encoding, file, line, verbosity, method and
+    parameters, block levels, locals, the names of the modules of the lexical scope).
+  - `IronRuby.Aot startup --evals` compiles each as CompileEval would into a class of the library;
+    PrecompiledEvalsAttribute carries the keys and a SHA-256 of each text, so the texts stay out of
+    every boot.
+  - RubyUtils.Evaluate asks PrecompiledCode.TryClaimEval before compiling. A hit is the first runtime of
+    the process, the first eval of that key with that exact text, claimed once (Interlocked); anything
+    else compiles from text as before, and EvalCodeCache's rules are untouched.
+  Numbers (base / new, one batch each):
+  - Main-thread instructions (callgrind, TieredCompilation=0): R2R host `-e 1` -2.09%, `gem --version`
+    -2.64%, `gem list` -6.79%, `require "irb"` -5.44%, irb -4.83%; release image -2.74%, -3.28%, -8.58%,
+    -6.47%, -6.00%.
+  - Wall, best of 10 alternating (ms): R2R host 414/406, 498/476, 830/742, 834/776, 941/869; release image
+    276/275, 344/305, 621/537, 628/557, 712/621.
+  Checked: the five commands print what the base prints (irb's start-up tip is random on either);
+  `__FILE__`/`__LINE__` and binding locals in a gemspec eval; a second load, a one-byte change, another file
+  or line compile from text; 8 threads loading all 29 installed gemspecs at once claim each once and agree;
+  Forwardable's backtraces. Matrices eval-locals, eval-defined, eval-literals, erb-escape, eval in the
+  gate's modes plus r2r, r2r with IR_STARTUP_DLL=none and r2r recording: PASS (32 same, 8 baseline).
+  Specs core/kernel/eval, library/rubygems (R2R and Release), core/binding, instance_eval, module_eval,
+  class_eval, language/file and line: as the base (the five known `into`/`to` errors).
+  IronRuby.Tests (Debug, net10.0): PASSED.
+  For the gate: a gemspec or forwardable.rb that changes only misses (the hash differs), but
+  startup-evals.txt then wants `startup-files.rb` rerun, which `--check` now says. Keys hold module names,
+  not modules: two modules of one name in one file at one line with the same text and locals share code,
+  which compiles the same either way.
+- **perf/clrlookup (2026-11-27) - what makes the CLR member lookups of start-up; Random's class found on
+  first use; field and event names from metadata; a class key for the lookup failure cache (gap 26)**
+  - not gated. Base 4320d4a.
+  The finding (a throwaway build that logged each lookup with its module, name, result, caller and
+  time; `ir -e 1`, R2R host): a Ruby method name a module lacks is looked up as a CLR member of each
+  CLR-backed module up the hierarchy (`RubyModule.TryGetClrMember`). That covers Object
+  (System.Object), Kernel, Class, Module, Comparable and the singleton classes of CLR-backed classes,
+  under the mangled name too (`method_added` -> `MethodAdded`).
+  - 7,230 lookups, 4,989 of them while ruby4.rb loads; one hit (`System::Type.get_type`).
+  - Who asks: binding call sites (`BindPrecompiled`) 2,461; the hooks of the prelude's definitions:
+    `const_added` 1,090 (SetConstant), `method_added` / `singleton_method_added` 1,388 (DefineMethod),
+    `inherited` 148; `private` and friends 718; `respond_to?` 501.
+  - `RubyClass` already caches failures (keyed by type, name, static, private binding, extension
+    version), and `DeclaredMemberNames.MayDeclareMethod` answers method names from metadata. So
+    6,799 lookups cost under 5 us (3.5 ms in all). 684 reach reflection, 15 ms with tracing: 11.7 ms of
+    it the first lookup on each of 67 types, and the process's first lookup alone ~4.9 ms (the failure
+    cache's JIT, then the first metadata reader and reflection, over RubyStruct's statics while
+    Process::Tms is defined).
+  - Per-type name sets, built once: methods from metadata 2.7 ms (15 types; 2 ms of it opening the
+    first metadata reader), fields and events by reflection 1.9 ms (42 types), irregularly mangled
+    names 1.0 ms (3 types: Double, Int32, IronRuby).
+  - A set of member names built by reflection would pay the same first-time cost per type, so it saves
+    only repeat misses, which the failure cache already answers. What could go was the reflection
+    those sets still made, the cache's JIT, and the one interop call.
+  Taken:
+  - 904f073: `Random.__mt_class__` resolves `IronRuby.Builtins.MersenneTwister` on first use. It
+    used to be at Random's class body in ruby4.rb, through `System::Type.get_type(...).to_class`
+    (reflection over System::Type, RuntimeType and TypeInfo, ~3.3 ms). Random's results match CRuby,
+    `Random.instance_variables` is still `[]`, and racing threads find the same class.
+  - 3abbbee: `MayDeclareFieldOrEvent` reads field and event names from the assembly's metadata (as
+    MayDeclareMethod does), with reflection only for arrays, generic parameters and dynamic
+    assemblies. The failure cache is keyed by a class (`FailedLookup`), so CoreLib's shared
+    Dictionary code serves it. ClrFieldAndEventNamesFromMetadata1 compares metadata with reflection
+    for over 5,000 types. `-e 1` JITs 663 methods instead of 687.
+  Main-thread instructions (callgrind, TieredCompilation=0, base and new side by side), M:
+  | command | release image | R2R host |
+  |---|---|---|
+  | `-e 1` | 1,155.7 -> 1,142.7 (-1.13%) | 2,008.5 -> 1,968.9 (-1.97%) |
+  | `gem --version` | 1,332.1 -> 1,318.1 (-1.05%) | 2,271.5 -> 2,232.4 (-1.72%) |
+  | `gem list` | 2,239.7 -> 2,225.9 (-0.62%) | 3,376.1 -> 3,340.1 (-1.07%) |
+  | `require "irb"` | 2,353.9 -> 2,340.1 (-0.59%) | 3,421.1 -> 3,381.9 (-1.15%) |
+  | irb 1+1 | 2,522.5 -> 2,520.0 (-0.10%) | 3,680.2 -> 3,652.5 (-0.75%) |
+  The R2R host gains more, because it also pays the JIT the change removes.
+  Wall, best of N alternating, base / new, ms:
+  - R2R host (10): `-e 1` 531 / 481, `gem --version` 576 / 554, `gem list` 979 / 907, `require
+    "irb"` 969 / 955, irb 1112 / 1107.
+  - Release image (20): 360 / 351, 407 / 403, 814 / 784, 810 / 819, 897 / 924. With new run first
+    (base / new): 360 / 357, 455 / 432, 804 / 768, 845 / 822, 952 / 912.
+  - Release image (10) went either way: `-e 1` 341 / 377 in one order, 360 / 344 in the other.
+  The machine is shared and noisy: compare the instruction counts.
+  Checked: an interop probe prints the same on both trees, on the R2R host and the Release build:
+  fields and constants (Int32::MaxValue, Math::PI, String::Empty, DBNull.value), an event
+  (AppDomain#assembly_load), a nested enum, TimeSpan, generic List and Dictionary (indexers),
+  KeyValuePair, Version#major, mangled names, respond_to? on CLR objects, extension methods, and the
+  `inherited` and `method_added` hooks. IronRuby.Tests: 211 Clr*, hosting and extension tests pass,
+  including the test assembly's own C# types and extension methods, and the new metadata test.
+  AWFY verifying: at 3 s, base's Richards was killed at the deadline and new's CD and Json ran 2-3x
+  slow, right after a container restart. At 8 s in both orders DeltaBlue, Richards, Json, CD and Towers
+  verify, and none is slower in both (geomean 0.960 and 0.988 new/base).
+  Left: the cold start of reflection and metadata (~4-5 ms at the process's first lookup, which only
+  moves); the irregularly mangled names map (GetMembers with FlattenHierarchy, 1 ms for Double and
+  Int32); and the per-type sets of the ~60 types `-e 1` touches.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
