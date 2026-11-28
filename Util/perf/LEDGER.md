@@ -1901,6 +1901,51 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitoptimism (2026-11-28, census and timed, not gated) - what the screen let through and the compiler declined**
+  (switches `IR_JIT_OBJECT_OPS`, `IR_JIT_SCREEN_CALL`, `IR_JIT_SINK_BOXED`). Built on happy-gauss 348fde1 merged with
+  perf/jitbody f1dc798. perf/jitisa left three new declines in app-shapes, methods `is_a?` used to keep out of the
+  screen. Each was either taken by the compiler or refused up front:
+  - **`n.call` (Enumerator::Lazy#size): refused.** The screen took `x.call` for a possible attribute read. A Proc's
+    or Method's call runs Ruby code, which no typed body does, so the screen now refuses a no-argument `x.call`.
+    Census: 4 methods maybe -> never, all ones that could only be wrapped to be declined.
+  - **`v.to_i`, `v.empty?` and `!v` on an untyped value (URI::Generic#set_port): taken.**
+    - `x.to_i` of an object: `JitRuntime.ToIntegerObject`. An Integer is itself, nil is 0, and a String of class
+      String in an ASCII-compatible encoding made of 1 to 18 ASCII digits is its value. Anything else deopts, as
+      does an exception while the String is read. A `KernelMethodSite` checks that the receiver's class (singleton
+      included) resolves to_i to Integer's, String's or NilClass's library method.
+    - `x.empty?` of a String (`StringEmpty`), and of a receiver the profile saw hold several types
+      (`IsEmptyOrString`).
+    - `!x` of any object: `NotObject`, false once the site finds the class resolves `!` to BasicObject's. It used to
+      deopt for anything but true, false and nil (Gem::Dependency#runtime?: 304 deopts and 9 retirements in
+      app-shapes, now none).
+  - **A deopt after an effect (CSV::Parser#prepare_variable): taken.** The body writes instance variables from
+    `@options[...]` reads. The writes were not held back: the index reads, type tests and identity tests were
+    missing from the sinking allow-list, though they throw nothing but a deopt and run no Ruby code. They are added
+    there, with the new helpers. `@backslash_quote`, written as an object and as `false`, is held as an object on
+    a second round (`_sinkBoxed`, as `_sinkWide` holds an Integer as a long).
+  - **app-shapes, traced:** specialized 121 -> 123 (set_port, prepare_variable), declined 32 -> 29, deopts 304 ->
+    0, retirements 9 -> 0.
+  - **Census:** 13 methods changed. 9 maybe -> compiles (marshal_load and initialize methods that read a Hash
+    into instance variables, Psych::Coder#[], ErrorHighlight's fetch_line, CSV::Writer#rewind); 4 maybe -> never
+    (the `x.call` refusal).
+  - **Clock** (ab.rb -r 5, app-shapes, new/off): uri 1.14, csv_parse 0.95, gem_version 1.01, gem_requirement
+    0.91, gem_spec 0.99, every one overlapping. uri alone, 9 rounds: 1.07, spreads 59% and 76% on a busy machine.
+    No measurable change. A callgrind count of app-shapes failed on one build and was not retried.
+  - **Checks:**
+    - `Util/jit-objops-matrix.rb` (new, 40 rows): to_i of Strings it must leave to the generic call (signs,
+      blanks, underscores, 19 or more digits, fullwidth digits, UTF-16LE), of nil, Integers, Floats, Rationals,
+      Symbols and Objects, a String subclass, a singleton to_i; empty? of Strings, Arrays, Hashes, nil, Integers;
+      ! of everything, of a class or singleton with its own !; set_port's mixed values; held-back object and
+      boolean writes with a default proc, a frozen self, a Hash subclass; `x.call`; String#to_i, String#empty?,
+      NilClass#to_i and BasicObject#! redefined, then restored; a refined to_i. It prints CRuby's output with the
+      JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls, IR_LIGHT_FRAMES=0 and the three switches off.
+    - jit, jit-calls, jit-const, jit-isa, unsampled, hot-shapes, hash-literal, jit-scan and inline in the same five
+      modes: the same as the base. inline's tree_int_key row says `Object must be of type Int32.` where CRuby
+      raises NoMethodError, on both builds.
+    - ruby/spec core/string/to_i, nil/to_i, integer/to_i, string/empty?, array/empty?, hash/empty?,
+      basicobject/!, proc/call: no failures on either build.
+    - IronRuby.Tests (Debug), all 1,403: PASSED.
+
 - **perf/jitisa (2026-11-28, census and timed, not gated) - `is_a?`, `kind_of?` and `instance_of?` in the method JIT's
   typed body** (the census's "MethodCall (screen)": is_a? 693; switch `IR_JIT_TYPE_TEST`). Built on happy-gauss
   f67ac44 merged with perf/jitbody e19f454.
