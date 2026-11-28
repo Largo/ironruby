@@ -1649,6 +1649,21 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// For the descriptions the prelude builds (Enumerator, Set, Data, Fiber...#inspect), which MRI builds with rb_sprintf or
+        /// rb_str_buf_new: BINARY while all of the text is ASCII. A copy then, since the text may be one the caller keeps;
+        /// a text that is not ASCII is returned as it is, in its own encoding, as MRI's is.
+        /// </summary>
+        [RubyMethod("__ir_binary_if_ascii__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString/*!*/ BinaryIfAscii(object self, [NotNull]MutableString/*!*/ text) {
+            if (text.Encoding == RubyEncoding.Binary || !text.IsAscii()) {
+                return text;
+            }
+            var copy = text.Clone();
+            copy.ForceEncoding(RubyEncoding.Binary);
+            return copy;
+        }
+
+        /// <summary>
         /// MRI's rb_inspect for the prelude: #inspect, escaped when its result is in an
         /// encoding the output cannot take (see RubyContext.Inspect).
         /// </summary>

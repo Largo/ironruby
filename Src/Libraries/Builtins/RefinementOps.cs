@@ -55,6 +55,10 @@ namespace IronRuby.Builtins {
                 ? context.Inspect(self.RefinementHolder)
                 : MutableString.CreateAscii("nil"));
             result.Append('>');
+            // US-ASCII while it is ASCII, as the module names MRI's rb_mod_to_s builds it from are
+            if (result.IsAscii()) {
+                result.ForceEncoding(RubyEncoding.Ascii);
+            }
             return result;
         }
 

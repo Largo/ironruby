@@ -39,7 +39,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s", RubyMethodAttributes.PublicInstance)]
         [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
         public static MutableString/*!*/ ToS(object/*!*/ self) {
-            return MutableString.CreateAscii("main");
+            // BINARY, as MRI's main_to_s makes it (rb_str_new2)
+            return MutableString.Create("main", RubyEncoding.Binary);
         }
 
         // main's #public, #private and #include are private, as MRI's are: `self.include M` works,

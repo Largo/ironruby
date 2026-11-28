@@ -409,7 +409,7 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Inspect(TracePoint/*!*/ self) {
             TraceEventInfo info = TracePoint.CurrentEvent;
             if (info == null) {
-                return MutableString.CreateAscii(self.IsEnabled ? "#<TracePoint:enabled>" : "#<TracePoint:disabled>");
+                return MutableString.Create(self.IsEnabled ? "#<TracePoint:enabled>" : "#<TracePoint:disabled>", RubyEncoding.Binary);
             }
 
             var context = self.Context;
@@ -420,7 +420,7 @@ namespace IronRuby.Builtins {
                 case TraceEvents.ThreadBegin:
                 case TraceEvents.ThreadEnd:
                     result.Append(' ').Append(context.Inspect(info.Self));
-                    return result.Append('>');
+                    return RubyUtils.BinaryIfAscii(result.Append('>'));
 
                 case TraceEvents.Call:
                 case TraceEvents.CCall:
@@ -439,7 +439,7 @@ namespace IronRuby.Builtins {
                     result.Append(" in '").Append(info.MethodName).Append('\'');
                 }
             }
-            return result.Append('>');
+            return RubyUtils.BinaryIfAscii(result.Append('>'));
         }
 
         #endregion

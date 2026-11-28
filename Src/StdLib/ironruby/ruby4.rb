@@ -3038,7 +3038,7 @@ unless defined?(Fiber)
           loc = @block && (@block.source_location rescue nil)
           location = @location = loc ? "#{loc[0]}:#{loc[1]}" : false
         end
-        location ? "#<Fiber:0x#{id} #{location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
+        __ir_binary_if_ascii__(location ? "#<Fiber:0x#{id} #{location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>")
       end
 
       alias :to_s :inspect
@@ -5826,10 +5826,11 @@ class Enumerator
   # MRI's inspect_enumerator (rb_exec_recursive) has it: [e] inside e.
   def inspect
     seen = (::Thread.current[:__ir_enumerator_inspect__] ||= {}.compare_by_identity)
-    return "#<#{self.class}: ...>" if seen.key?(self)
+    # BINARY while it is ASCII, as enumerator.c's inspect_enumerator builds it
+    return __ir_binary_if_ascii__("#<#{self.class}: ...>") if seen.key?(self)
     seen[self] = true
     begin
-      __inspect_unguarded__
+      __ir_binary_if_ascii__(__inspect_unguarded__)
     ensure
       seen.delete(self)
     end
@@ -6144,10 +6145,10 @@ class Enumerator
 
     def inspect
       if (info = @__inspect__)
-        return "#<#{self.class}: #{__inspect_detail__(*info)}>"
+        return __ir_binary_if_ascii__("#<#{self.class}: #{__inspect_detail__(*info)}>")
       end
-      return "#<#{self.class}: uninitialized>" if @__generator__.nil?
-      "#<#{self.class}: ...>"
+      return __ir_binary_if_ascii__("#<#{self.class}: uninitialized>") if @__generator__.nil?
+      __ir_binary_if_ascii__("#<#{self.class}: ...>")
     end
     alias :to_s :inspect
 
@@ -6693,8 +6694,8 @@ class Enumerator
     end
 
     def inspect
-      return "#<Enumerator::Chain: uninitialized>" if @__enums__.nil?
-      "#<Enumerator::Chain: #{@__enums__.inspect}>"
+      return __ir_binary_if_ascii__("#<Enumerator::Chain: uninitialized>") if @__enums__.nil?
+      __ir_binary_if_ascii__("#<Enumerator::Chain: #{@__enums__.inspect}>")
     end
     alias :to_s :inspect
 
@@ -6789,14 +6790,14 @@ class Enumerator
 
     def inspect
       enums = __enums_or_nil__
-      return "#<#{self.class}: uninitialized>" if enums.nil?
+      return __ir_binary_if_ascii__("#<#{self.class}: uninitialized>") if enums.nil?
 
       seen = ::Thread.current[:__enumerator_product_inspect__] ||= []
-      return "#<#{self.class}: ...>" if seen.any? { |o| o.equal?(self) }
+      return __ir_binary_if_ascii__("#<#{self.class}: ...>") if seen.any? { |o| o.equal?(self) }
 
       seen.push(self)
       begin
-        "#<#{self.class}: #{enums.inspect}>"
+        __ir_binary_if_ascii__("#<#{self.class}: #{enums.inspect}>")
       ensure
         seen.pop
         ::Thread.current[:__enumerator_product_inspect__] = nil if seen.empty?
@@ -7696,7 +7697,7 @@ class Enumerator
     # for, since building it was a good part of what making a sequence cost
     def inspect
       form = @__inspect_str__
-      case form
+      __ir_binary_if_ascii__ case form
       when ::String then form
       when :step then "((#{@__source__.inspect}).step)"
       when ::Array
@@ -8012,7 +8013,7 @@ class Data
     path = ::Module.instance_method(:to_s).bind(self.class).call
     named = !path.start_with?("#")
     stack = (::Thread.current[:__data_inspect__] ||= [])
-    return "#<data #{path}:...>" if stack.any? { |seen| seen.equal?(self) }
+    return __ir_binary_if_ascii__("#<data #{path}:...>") if stack.any? { |seen| seen.equal?(self) }
     stack.push(self)
     begin
       out = +"#<data "
@@ -8023,7 +8024,7 @@ class Data
         label = name.to_s.match?(/\A[[:alpha:]_][[:alnum:]_]*\z/) ? name.to_s : name.to_sym.inspect
         out << "#{label}=#{__data_value__(name).inspect}"
       end
-      out << ">"
+      __ir_binary_if_ascii__(out << ">")
     ensure
       stack.pop
     end
@@ -10295,7 +10296,7 @@ module ObjectSpace
     end
 
     def inspect
-      "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@__table__.size}>"
+      __ir_binary_if_ascii__("#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@__table__.size}>")
     end
 
     # MRI's map is native data Marshal cannot write; this one dumped its table.

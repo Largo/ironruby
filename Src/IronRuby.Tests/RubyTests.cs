@@ -151,6 +151,7 @@ namespace IronRuby.Tests {
                 Scenario_InspectObjectId1,
                 Scenario_DescriptionEncoding1,
                 Scenario_DescriptionEncoding2,
+                Scenario_DescriptionEncoding3,
 
                 Scenario_RubyMethodMissing1, 
                 Scenario_RubyMethodMissing2, 

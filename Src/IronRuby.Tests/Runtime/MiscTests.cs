@@ -114,6 +114,29 @@ p RuntimeError.new(""x"").inspect.encoding, RuntimeError.new(""é"").inspect.enc
         }
 
         /// <summary>
+        /// The descriptions the prelude builds - Enumerator and its kinds, Data, Set, Fiber - are BINARY while
+        /// they are ASCII, as MRI's; a refinement's is US-ASCII, as a module name is.
+        /// </summary>
+        public void Scenario_DescriptionEncoding3() {
+            TestOutput(@"
+require 'ruby4'
+p [1].each.inspect.encoding, [1].lazy.map { }.inspect.encoding, ([1].each + [2]).inspect.encoding, 1.step(10, 2).inspect.encoding
+p Data.define(:a).new(a: 1).inspect.encoding, Set[1].inspect.encoding, Fiber.new { }.inspect.encoding
+p Module.new { refine(String) { } }.refinements.first.inspect.encoding, TracePoint.new(:line) { }.inspect.encoding
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:US-ASCII>
+#<Encoding:BINARY (ASCII-8BIT)>
+");
+        }
+
+        /// <summary>
         /// Kernel#inspect of an object met again inside its own inspect: MRI's "#&lt;Foo:0x... ...&gt;".
         /// </summary>
         public void Scenario_InspectRecursive1() {

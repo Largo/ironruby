@@ -1083,13 +1083,13 @@ class Set
     plain = __core_set__?
 
     if ids.include?(object_id)
-      return plain ? "#{self.class}[...]" : sprintf('#<%s: {...}>', self.class.name)
+      return __ir_binary_if_ascii__(plain ? "#{self.class}[...]" : sprintf('#<%s: {...}>', self.class.name))
     end
 
     ids << object_id
     begin
       body = to_a.inspect[1..-2]
-      return plain ? "#{self.class}[#{body}]" : sprintf('#<%s: {%s}>', self.class, body)
+      return __ir_binary_if_ascii__(plain ? "#{self.class}[#{body}]" : sprintf('#<%s: {%s}>', self.class, body))
     ensure
       ids.pop
     end
