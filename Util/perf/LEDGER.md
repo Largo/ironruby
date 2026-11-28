@@ -1997,6 +1997,61 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/loopivar (/perf-step, 2026-11-28, not gated) - an outlined `while' loop may write self's
+  instance variables: OFF by default (`IR_LOOP_IVAR_WRITES=1`)**, on 4b928db (33818f7 merged with
+  0bf3598). The OSR loop compiler bailed on `@x = v' ("instance variable write in an outlined loop")
+  and the method JIT declines a method whose loop writes one ("a deopt after an effect").
+  - **How common.** No AWFY loop stops first at the write: the OSR tier tried 17 AWFY loops and each
+    stops at a call before it (Richards' `schedule` loop, the one that writes `@current_task`, at
+    `is_task_holding_or_waiting`). app-shapes: 1 of the 53 loops tried (prettyprint.rb:292, a block
+    that also calls). So the target is the shape itself (`while i < n; @c += 1; i += 1; end`), not AWFY.
+  - **What it does.** `@x = v' / `@x op= v' in the outlined copy of a `while' is a logged store into
+    self's variable (JitCompiler.EmitLoopIVarWrite, JitRuntime.WriteSelfIVar: WriteSelfAttr's store
+    without the attr_writer check). It deopts before storing on what it cannot do without raising or
+    changing self's shape (self not a plain Ruby object, frozen, the variable not there yet, a full
+    log); a deopt later in the iteration takes the store back from the log and the generic code re-runs
+    the iteration from the loop's snapshot, so the writes the source makes are made once, in its order,
+    and a FrozenError or other exception comes from the iteration the source raises it in. Not the
+    brief's hold-back (store at the end of the iteration), which Sink.cs does for method bodies: a
+    thread racing a deopt can see the variable go back by one write and forward again, as it already
+    can for the Array and Hash stores and `o.x = v' the loop tier logs. A Float is stored boxed (a raw
+    store promotes the object and makes its class born raw: `n.times { @n += 1 }' on later objects of
+    that class ran 2x slower). Block loops (BlockLoopSite's `times'/`each' copies, marked
+    WhileLoopExpression.IsBlockLoop) still refuse the write: there the logged store was no faster than
+    the generic block call (`each { |x| @last = x }' 1.25x slower), and the counter step after the
+    block's last statement keeps it from going unlogged.
+  - **Numbers** (Util/bench/loopivar-shapes.rb, switch off -> on). Bytes per iteration: `@n += 1'
+    32.9 -> 24.0 (the Integer box left), a cached-value counter 16 -> 0, a Float 40 -> 24 (boxed), the
+    controls equal. Instructions (callgrind, before Floats were boxed and block loops excluded):
+    while_count 0.46, while_small 0.35, while_float 0.42, while_two 0.75, control 1.000. Clock
+    (ab.rb, 8 rounds, least): while_count 0.80 (overlap), while_small 0.57, while_float 0.77, while_two
+    0.97 (overlap), each_last 1.01, the control 1.06 (overlap) - **but times_count 1.39, no overlap**,
+    and that block loop compiles the same either way: run alone it is 30.6 against 29.9; run after
+    while_count's compiled loop 66-69 ns against 31, every time (taskset 2 CPUs, two rounds), and in
+    another run while_count itself was 47 against 30. Something the logged stores leave behind slows
+    the process's other code; not found (the per-thread JitUndoLog, long-lived and so in gen 2,
+    taking a young box reference on every store is a guess, not a finding). Hence off by default.
+    alloc.rb (switch on, block loops then included): flat (geomean 0.995, Richards -5%). AWFY, 10
+    alternating rounds, switch off/on, then with block loops included: Bounce 0.974, Richards 0.976,
+    Towers 0.964, DeltaBlue 0.945, all overlapping, as expected with no AWFY loop changed.
+  - **Checks**: `Util/loop-ivar-matrix.rb` (new: Integer, Float and String values, a read after a write
+    in the iteration, a variable not there yet, removed, Bignum growth, type changes, frozen before
+    the loop and at iteration k inside and outside a rescue, break and an exception after k writes,
+    a subclass's object and a singleton's, times and each blocks, Marshal/dup/inspect after, a reader
+    thread, a thread adding variables, a callee's instance_variable_set and freeze) prints CRuby's
+    output on the base and on the branch with the switch off and on (24 loops outlined, 22 deopts
+    taken back in the run with it on). gate-matrices (loop-ivar, ivar, loop-exit, osr-array, block-loop,
+    jit, hot-shapes, jit-scan, marshal) in every mode, run while the switch was on by default, and with
+    it off: PASS, twice (before and after block loops were excluded). `Util/ivar-stress.rb` gains a
+    part where eight threads count into their own variable of one object in a `while' and a block loop
+    while adding and removing others: OK with the switch off and on (17 loops outlined). spec
+    language/while, until, loop, variables, core/kernel instance_variable_set/get,
+    remove_instance_variable, core/integer/times, core/array/each: as on the base. IronRuby.Tests
+    (Debug, switch then on): PASSED.
+  - **Next**: find what slows the rest of the process (a longer run with the GC's event counters on
+    the two orders), then hold the stores back to the end of the iteration (Sink.cs's scheme per
+    iteration) so that they need no log at all, which also answers the racing reader.
+
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,
   perf/arymin, perf/rescuelight and perf/splatpos with castcheck's, nilblock's and dotsfwd's findings,

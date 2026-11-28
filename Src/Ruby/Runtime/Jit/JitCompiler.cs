@@ -1759,6 +1759,66 @@ namespace IronRuby.Runtime.Jit {
             return EmitAndOr(node.Left, node, node.Operation == "&&", out type);
         }
 
+        /// <summary>
+        /// With IR_LOOP_IVAR_WRITES=1, outlined `while' loops store into self's instance variables (`@x = v', `@x op= v').
+        /// Off by default: the loops get faster (a counter 0.57-0.80), but once one has run, the process's other code
+        /// ran up to 2x slower in the measurements (a generic `n.times { @n += 1 }' afterwards, diagnosed no further
+        /// than the logged stores; Util/perf/LEDGER.md, perf/loopivar). A block loop (BlockLoopSite: `n.times { @n += 1 }', `a.each { |x| @last = x }')
+        /// still refuses them: there the logged store cost as much as the generic block call it replaced, or more
+        /// (`each { |x| @last = x }' 1.25x), and its last statement is followed by the loop's counter step, so it
+        /// cannot go unlogged either (Util/perf/LEDGER.md, perf/loopivar).
+        /// </summary>
+        internal static readonly bool LoopIVarWrites = Environment.GetEnvironmentVariable("IR_LOOP_IVAR_WRITES") == "1";
+
+        /// <summary>
+        /// `@x = v' / `@x op= v' in an outlined loop: the store `o.x = v' makes there (EmitAttributeWrite), into self's
+        /// variable (JitRuntime.WriteSelfIVar). It logs the value it replaces, so that a deopt later in the iteration
+        /// takes it back and the iteration restarts in the generic code as if it had not been made (the loop's
+        /// snapshot; JitUndoLog); what the store cannot make without raising or changing self's shape - a frozen self,
+        /// a variable self does not have yet, self not a plain Ruby object - deopts before it, and the generic code
+        /// makes the write, or raises, in the iteration the source does. The value is v.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitLoopIVarWrite(InstanceVariable/*!*/ target, string op, RExpr/*!*/ right, out JT type) {
+            JT vt;
+            MSA.Expression v;
+            if (op != null) {
+                // `@x op= v'  ->  `@x = @x op v', the read and the operator first, as in a method
+                JT ct;
+                var current = NumericIVar(target, Emit(target, out ct), ref ct);
+                var operand = Emit(right, out vt);
+                operand = NumericIVar(right, operand, ref vt);
+                if (IsNumeric(ct) && IsNumeric(vt)) {
+                    v = EmitBinary(op, current, ct, operand, vt, out vt);
+                } else if ((ct == JT.Obj && IsNumeric(vt)) || (IsNumeric(ct) && vt == JT.Obj)) {
+                    v = EmitSpeculatedBinary(op, current, ct, target, operand, vt, right, out vt);
+                } else {
+                    throw Bail("instance variable op-assign on " + ct + ", " + vt);
+                }
+            } else {
+                v = Emit(right, out vt);
+            }
+            if (vt == JT.Never || vt == JT.None) { throw Bail("instance variable write of a value that jumps away"); }
+            _canDeopt = true;
+            _hashWrite = true;
+            if (_undoLog == null) {
+                // in loop mode the entry sets both up
+                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            }
+            var site = Ast.Constant(new InstanceVariableSite(target.Name));
+            var value = Ast.Variable(ClrType(vt), "#value");
+            type = vt;
+            // A Float is stored boxed, not raw as typed method bodies store one (WriteSelfAttrDouble): a raw store
+            // over a Float promotes the object, and its class's later instances are born raw, which makes every
+            // generic read and write of their variables slower (`n.times { @n += 1 }' 2x, after a loop of the same
+            // class stored a Float raw), for a loop no faster than the generic one (Util/perf/LEDGER.md, perf/loopivar).
+            return Ast.Block(ClrType(vt), new[] { value },
+                Ast.Assign(value, v),
+                Ast.Call(JitRuntime.M("WriteSelfIVar"), _self, BoxForStore(value, vt), site, _undoLog),
+                value
+            );
+        }
+
         private MSA.Expression/*!*/ EmitAssignment(SimpleAssignmentExpression/*!*/ node, string op, bool conditional, out JT type) {
 
             var element = node.Left as ArrayItemAccess;
@@ -1767,8 +1827,12 @@ namespace IronRuby.Runtime.Jit {
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {
                 // A write can raise (FrozenError), and an exception leaving an outlined loop
-                // part way through would leave the scope's locals as they were on entry.
-                if (_loop != null) { throw Bail("instance variable write in an outlined loop"); }
+                // part way through would leave the scope's locals as they were on entry: in a loop
+                // the write is a logged store that deopts instead (EmitLoopIVarWrite).
+                if (_loop != null) {
+                    if (!LoopIVarWrites || _loop.IsBlockLoop) { throw Bail("instance variable write in an outlined loop"); }
+                    return EmitLoopIVarWrite(ivarTarget, op, node.Right, out type);
+                }
                 JT vt;
                 MSA.Expression v;
                 if (op != null) {
