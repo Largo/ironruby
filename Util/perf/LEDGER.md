@@ -8107,6 +8107,16 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/jitcalls, second round (2026-11-28) - stage 3's first step or stage 4's slice: measured, designed, not
+  built** (gap 1). Chosen by what the JIT declines in eight AWFY benchmarks: every hot method turned away after the
+  screen is turned away by the effect rule (`append`, `release`, `hold_self`, `remove_first`, `split_bucket`,
+  `read_required_char`, `skip_white_space`); none is a loop waiting for a call into a pure typed callee, so stage 4's
+  slice reaches nothing hot. The step, resuming at a top-level statement with the state written into the scope,
+  is designed in `Docs/jit-resume-deopt.md` ("Stage 3, first step"): its generic suffix is the same compiler as stage
+  3a's generic tail. Alone it would unlock methods worth about 2% of Richards and under 1.4% of DeltaBlue (the
+  profiles of gap 11), stage 1's kind of gain, which measured nothing on a benchmark. So it is to be built as the
+  suffix compiler's second user, after 3a's yield loop, which has a measured target.
+
 - **perf/jitcalls (2026-11-28) - general calls in typed bodies, the narrowest slice: designed and counted, not
   built** (gap 1). The design and the counts are in `Docs/jit-resume-deopt.md`, "Stage 2 again". The slice sound in
   one step is a typed body whose one general call is its last operation (nothing after it to deopt, re-check or

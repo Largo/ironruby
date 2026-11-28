@@ -458,6 +458,86 @@ the callee's own deopts absorbed at the boundary, stage 4), inside a loop the ty
 resume for the loop as soon as the callee is not known pure. That, or stage 3 itself, is the next step on this gap;
 another slice of stage 2 is not.
 
+## Stage 3, first step: resume at a top-level statement, sharing 3a's generic tail (round thirty-seven, design)
+
+Chosen over stage 4's narrow slice (a typed loop calling a pure typed callee) by what the JIT declines in AWFY
+(`IR_JIT_VERBOSE=1`, Richards, DeltaBlue, Havlak, CD, Json, Bounce, Towers, List on c0c3335): every hot method it
+turns away after the screen is turned away by the effect rule - Richards' `append`, `release` and `hold_self`
+("a deopt after an effect"), DeltaBlue's and Havlak's `Vector#remove_first`, Havlak's `split_bucket`, Json's
+`read_required_char`, and Json's `skip_white_space` ("a loop in a body that can deopt and has an effect"). None
+is a loop waiting for a call into a pure typed callee; Richards' `schedule` calls `run_task`, which is the
+benchmark's work and not pure.
+
+### The step
+
+A typed body may deopt after an effect when the failing operation stands in a **top-level statement** of the
+method body (or in the condition or body of a top-level `while`) and nothing observable happened in that
+statement before the guard. It then **resumes at the start of that statement** in generic code, with its frame
+state written into the scope, instead of restarting the body.
+
+- **Per-statement purity.** The compiler tracks `_pure` per top-level statement as it does per body now. A deopt
+  after an effect *within the same statement* still declines the body. For a top-level `while`, the statement is
+  re-entered at its head: sound only if the failing guard is in the condition or before the first effect of the
+  iteration (the OSR copy's rule), since the iterations already run left their effects and their locals.
+- **The generic suffix.** Statements `k..n` of the body, compiled by the AstGenerator exactly as the generic body
+  compiles them (the same sites, line markers, TraceLineExpressions, `return` as `gen.Return`), as a lambda over the
+  method's scope: `Func<RubyMethodScope, object, Proc, object>` (scope, self, block -> the method's value). Built the
+  first time statement `k` resumes, cached on the specialization, cold code. This is stage 3a's "generic tail"
+  (way 2) with a different start: 3a's tail is the suffix of a loop body after the yield, run for one iteration and
+  then handed back to the loop; this one is the suffix of the method body, run to the end. One compiler serves both:
+  `GenericSuffix.Compile(Statements list, int start, MethodDeclaration ast, bool endsIteration)`.
+- **The frame state.** The typed body throws `JitResumeException(k, object[] locals)` with its live typed locals
+  boxed through the representation funnel (`NarrowLong`, booleans as `true`/`false`, never-assigned as nil). The
+  entry, already wrapped in the light frame's try/filter/finally by stage 1 (`WrapResumeBody`), catches it,
+  makes the scope once (stage 1's `JitFrame.Scope`: `CreateMethodScopeLazy` with the generic body's
+  `MethodFrameShape`, which the generic compile records for the stub, and `blk`), stores the locals into its
+  tuple by the generic body's slot order, takes element writes made since statement `k` began back
+  (`JitUndoLog` gets a mark per top-level statement, not per entry), and calls the suffix. A scope already made
+  by a call in the typed body is that scope: by the rule of "Once the scope exists", the call that made it was the
+  typed body's last act, so the resume is right after it and the tuple is already authoritative.
+- **Exceptions, flow, frames.** The suffix runs inside the entry's light-frame try/filter/finally, so `return`
+  from a proc made there, LocalJumpError after the method returned and `ensure` are the generic body's. Its lambda
+  is named as the generic body's frame (`JitStub.Named`) and carries the line markers, so a backtrace from it shows
+  the method once, at its line. Tracing: the suffix has the generic hooks. Stack: the resume checks it, as
+  `CreateMethodScope` would.
+- **Accounting.** A resume counts as a deopt for retiring the specialization (`OnDeopt`), or a body that resumes
+  on every call stays in place and is slower than the generic one.
+
+### What it unlocks, and what it is worth alone
+
+`append` (its deopt is `mouse.link` in the condition of the top-level `while`, after `packet.link = NO_WORK` in
+statement 1: it resumes at the `while` head with `mouse` written back), `add_input_and_check_priority` and
+`release` (Richards), `remove_first` (DeltaBlue, Havlak), `read_required_char` (Json). Not `skip_white_space`: its
+effect and its deopt are in the same iteration (3a's handback or stage 5). By the ledger's profiles that is
+`append` 2.1% and `add_input_and_check_priority` 2.7% of Richards, `remove_first` under 1.4% of DeltaBlue; stage 1,
+the same kind of gain, measured 13-14% on its shape and nothing on a benchmark. Alone, this step does not pay for
+its code.
+
+### So: build it as 3a's second user, not first
+
+Stage 3a's yield loop has a measured target (`ueach100`: about 40 ns per element against CRuby's 28, about 23 for
+a typed copy) and needs the same suffix compiler for its way 2. Order:
+
+1. 3a step 1 (perf/iter's): Handback and MethodReturned in `OsrLoopSite`.
+2. `GenericSuffix` with 3a step 2 as its first user (the generic tail after the yield), gated by
+   `Util/yield-loop-matrix.rb` and measured on `Util/bench/yield-shapes.rb`.
+3. This step, as `GenericSuffix`'s second user, behind `-X:JITResume=3`, gated by the rows below, measured on
+   Richards and on a shape of `append`.
+
+### Its matrix rows (to add to `Util/jit-matrix.rb` section 11 with the step)
+
+| Row | Checks |
+|---|---|
+| `append` shape: effect in statement 1, receiver of another class in the loop's condition on iteration 1, 3, n | resume at the `while` head, the statement-1 write not repeated, `mouse` the loop's value |
+| deopt in statement k after effects in statements < k, with locals of each representation (Int, Lng past 2**31, Dbl, Bool, nil, never assigned) | the write-back funnel |
+| element write in statement k, then a deopt in statement k | the per-statement undo mark: the write taken back, the statement re-run once |
+| a call in statement j that makes the scope (`binding`), a deopt in statement j+1 | the scope's tuple is the state; `local_variable_set` from the callee is seen |
+| `ensure` around the body, `return` in the suffix, a proc made by `binding.eval("proc { return 7 }")` called after the resume and after the method returned | flow and the frame's try/filter/finally |
+| an exception in the suffix | the backtrace has the method once, at the suffix's line |
+| a TracePoint enabled by a call in statement j | `:line` for statements after j, `:return` once |
+| a deopt in statement k on every call | the specialization retires (`OnDeopt`) |
+| four threads, receivers of two classes | per-invocation state |
+
 ## Stage 3a: a yield in an outlined loop (gap 18)
 
 Status: design, with its matrix (`Util/yield-loop-matrix.rb`, which CRuby and the unchanged build print
