@@ -284,9 +284,10 @@ namespace IronRuby.Runtime {
 
             var context = tosConversion.Context;
             using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(obj)) {
-                MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
+                string className = context.GetClassDisplayName(obj);
+                MutableString str = CreateObjectDescription(context, className);
                 str.Append("#<");
-                str.Append(context.GetClassDisplayName(obj));
+                str.Append(className);
 
                 // Ruby prints 2*object_id for objects
                 str.Append(':');
@@ -308,15 +309,18 @@ namespace IronRuby.Runtime {
                         } else {
                             str.Append(", ");
                         }
-                        // TODO (encoding):
-                        str.Append(var.Key);
+                        if (var.Key.IsAscii()) {
+                            str.Append(var.Key);
+                        } else {
+                            AppendToObjectDescription(str, MutableString.Create(var.Key, context.GetIdentifierEncoding()));
+                        }
                         str.Append('=');
 
                         var inspectSite = inspectStorage.GetCallSite("inspect");
                         object inspectedValue = inspectSite.Target(inspectSite, var.Value);
 
                         var tosSite = tosConversion.GetSite(ConvertToSAction.Make(context));
-                        str.Append(tosSite.Target(tosSite, inspectedValue));
+                        AppendToObjectDescription(str, tosSite.Target(tosSite, inspectedValue));
                     }
                 }
                 str.Append(">");
@@ -325,8 +329,31 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// MRI's default descriptions (rb_any_to_s, rb_obj_inspect, and the "#&lt;Foo:0x...&gt;" of most
+        /// core #inspect methods) are BINARY strings: Object.new.to_s.encoding is ASCII-8BIT. Only a
+        /// class name that is not ASCII gives the result its own encoding, as rb_sprintf's PRIsVALUE does.
+        /// </summary>
+        public static MutableString/*!*/ CreateObjectDescription(RubyContext/*!*/ context, string/*!*/ className) {
+            return MutableString.CreateMutable(className.IsAscii() ? RubyEncoding.Binary : context.GetIdentifierEncoding());
+        }
+
+        /// <summary>
+        /// Appends a part of an object's description the way rb_obj_inspect does: a part that is not ASCII
+        /// takes an ASCII-only description over to its encoding ("#&lt;Foo @s=\"é\"&gt;" is UTF-8), and one
+        /// that would be incompatible with what the description already holds is added as bytes, leaving
+        /// it BINARY, where String#&lt;&lt; would raise Encoding::CompatibilityError.
+        /// </summary>
+        public static void AppendToObjectDescription(MutableString/*!*/ str, MutableString/*!*/ part) {
+            if (str.Encoding == RubyEncoding.Binary && !part.IsAscii() && !str.IsAscii()) {
+                str.Append(part.ToByteArray());
+            } else {
+                str.Append(part);
+            }
+        }
+
         public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
-            MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
+            MutableString str = CreateObjectDescription(context, className);
             str.Append("#<");
             str.Append(className);
 
