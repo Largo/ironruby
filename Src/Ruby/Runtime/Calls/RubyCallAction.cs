@@ -376,6 +376,12 @@ namespace IronRuby.Runtime.Calls {
 
         private const int MaxSharedRules = 16;
 
+        // Shared rules of one method for calls of different shapes (see BindShared).
+        private const int MaxShapesPerMethod = 4;
+
+        // IR_SHARED_SHAPES=0: one shared rule per method, receiver type and delegate type; a call it does not match gets a rule of its own.
+        private static readonly bool _ShareShapes = Environment.GetEnvironmentVariable("IR_SHARED_SHAPES") != "0";
+
         private const RubyCallFlags SharableCallFlags = RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasRhsArgument |
             RubyCallFlags.HasBlock | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSourceBlock |
             RubyCallFlags.HasLightScope | RubyCallFlags.HasFreshSplat;
@@ -573,12 +579,20 @@ namespace IronRuby.Runtime.Calls {
             }
 
             SharedRule shared = null;
+            int sameMethod = 0;
             var sharedRules = _sharedRules;
             if (sharedRules != null) {
                 foreach (var rule in sharedRules) {
                     if (rule.Member == member && rule.IsMissing == isMissing && rule.TargetType == targetType && rule.DelegateType == typeof(T)) {
-                        shared = rule;
-                        break;
+                        if (shared == null) { shared = rule; }
+                        if (!_ShareShapes) { break; }
+                        // A rule that holds this version already has not matched this call - its arguments are of other types
+                        // (see below): a later rule of the method, made for calls of another shape, may.
+                        sameMethod++;
+                        if (rule.Rule == null || !rule.Versions.Contains(version)) {
+                            shared = rule;
+                            break;
+                        }
                     }
                 }
             }
@@ -633,6 +647,20 @@ namespace IronRuby.Runtime.Calls {
                     }
                 } else {
                     CacheTarget(compiled);
+                    // Every shared rule of the method holds the version and none matched: a call of another shape - OpenStruct's
+                    // define_singleton_method!(name, ...) with a Symbol at one site and a String at the next. Its rule of its own
+                    // tests the one class version, so on objects that each have a singleton class it was built and compiled again
+                    // for every object (~200 us, 220-240 binds in a process's first OpenStructs). The next call of its kind on
+                    // another class version builds a shared rule for its shape (BindSharedRule), which takes in later versions in
+                    // its test as the first one does.
+                    if (_ShareShapes && sameMethod < MaxShapesPerMethod) {
+                        lock (_SharedRulesLock) {
+                            sharedRules = _sharedRules;
+                            if (sharedRules.Length < MaxSharedRules) {
+                                _sharedRules = ArrayUtils.Append(sharedRules, new SharedRule(member, isMissing, targetType, typeof(T), version));
+                            }
+                        }
+                    }
                 }
                 return compiled;
             }

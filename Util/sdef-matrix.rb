@@ -336,5 +336,25 @@ t12 = 2.times.map { |t| Thread.new { bad = 0; 1500.times { |k| n = :"th#{t}_#{k 
 t12 << Thread.new { bad = 0; 6000.times { bad += 1 unless s12.respond_to?(:a) && s12.a == :a && !s12.respond_to?(:pv) }; bad }
 row "threads define while one asks", t12.map(&:value)
 
+# ---------------------------------------------------------------- 13. one method called with arguments of different shapes from several sites
+# A shared rule serves the receivers of many classes (here, one singleton class per object) for calls of one shape; calls of
+# another shape (a String where the first site passes a Symbol, a block, more arguments) get shared rules of their own.
+class C13
+  def m(a, b = nil) = [a.class, b.class]
+  def k(a, x: 1) = [a.class, x]
+  alias_method :dsm13!, :define_singleton_method
+end
+def c13_object(i) = C13.new.tap { |o| o.singleton_class if i % 3 != 0 }
+row "two sites, Symbol and String", tally12(600) { |i| o = c13_object(i); [o.m(:a), o.m("a"), o.m(1, 2.0)] }
+row "define_singleton_method by Symbol, String, Method", tally12(400) { |i| o = c13_object(i); pr = proc { i }
+  o.dsm13!(:"s13_#{i % 7}", &pr); o.dsm13!("t13_#{i % 7}", &pr); o.dsm13!(:u13, o.method(:m))
+  [o.public_send(:"s13_#{i % 7}") == i, o.public_send(:"t13_#{i % 7}") == i, o.u13(:z)] }
+row "keywords and not", tally12(400) { |i| o = c13_object(i); [o.k(1), o.k("s", x: 2), o.k(:y, **{ x: 3 })] }
+row "redefined after the rules are shared", tally12(600) { |i| C13.class_eval { def m(a, b = nil) = :redefined } if i == 300; o = c13_object(i); [o.m(:a), o.m("a")] }
+row "singleton overrides on some", tally12(600) { |i| o = c13_object(i); (def o.m(a, b = nil) = :own) if i % 5 == 0; [o.m(:a), o.m("a")] }
+t13 = 3.times.map { |t| Thread.new { bad = 0; 2000.times { |i| o = c13_object(i + t); v = [o.m(:a), o.m("a"), o.m(1, 2.0)]
+  bad += 1 unless v == [[Symbol, NilClass], [String, NilClass], [Integer, Float]] || v == [:redefined, :redefined, :redefined] }; bad } }
+row "threads", t13.map(&:value)
+
 $stderr.puts "jit=#{defined?(IronRuby) ? 'ironruby' : 'cruby'}"
 puts "end"
