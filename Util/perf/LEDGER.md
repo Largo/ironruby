@@ -3052,6 +3052,48 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   character, its answers over a shortened subject, and an error for an incompatible String pattern;
   Kernel#binding through Method#call/bind_call/to_proc raises; RubyRegex.MatchWindow has an
   allowBroken overload.
+  Fifth round (2026-11-27, on 374584c): string-search's last 63 lines. '.' (\A., (?m:.)) on a byte of a
+  split character: such a byte reaches .NET as a lone U+DC00-U+DCFF, which the astral-safe '.' excluded;
+  StringScanner's allowBroken path, the only one that matches a broken subject, now has a translation of its
+  own in which '.' takes it. string-search -> same. StringScanner_DotOnSplitByte1. Left: \S and [^x] on such
+  a byte (CRuby matches; not in the matrix). For the gate: only StringScanner matches from inside a
+  character change.
+  Not taken this round, the other candidate: a call on a later line of a multi-line statement reports the
+  statement's line. The line is a SourceLineMarker per statement (AstGenerator.AddDebugInfo): free in the
+  interpreter, which maps instructions to sequence points, but a store into the compiled frame's record
+  (PrecompiledFrames) in compiled code, and the method JIT and light frames keep lines their own way. Carrying
+  a call's own line means a marker before each call whose line differs from the last one emitted on that path
+  (and after it, for a later call back on the statement's line): free in the interpreter, a store per such
+  call in compiled code, and support in the JIT's and light frames' line records - multi-line statements only.
+  Sixth round (2026-11-28, on claude/happy-gauss-95wm2j f67ac44 + the fifth), one commit each with CRuby
+  4.0's output as a test:
+  - TracePoint reports attr_reader/attr_writer calls as :c_call/:c_return: while c_call is traced the
+    attribute rule takes the library methods' tracing, the attribute dispatchers stand aside and the JIT's
+    attribute sites do not bind - all decided when a site binds (tracing toggles rebind every rule and bump
+    the method version). frame-cost and app-shapes (invoice, render, rules, ostruct) by clock against the
+    same merge without it: within noise. TracePoint_AttrAccessorCCall1.
+  - StringScanner's escaped-bytes translation: \S \D \W \H, a class negated at its top and \X take an
+    undecodable byte too (Onigmo's rule; [\S] and \w do not). StringScanner_NegatedClassOnSplitByte1.
+  - "float X out of range of integer" prints X as %-.10g (Inf, NaN, 1e+30) everywhere
+    (RubyUtils.FormatFloatG10). Float_OutOfRangeMessage1.
+  - round/floor/ceil/truncate's Float digits convert as rb_num2int ("integer 3000000000 too big to
+    convert to 'int'"; NaN a RangeError). Float_RoundDigitsRange1.
+  - sort_by/min_by(n) gather with a private alias of the built-in push, not a program's Array#<<.
+    Enumerable_SortByOwnPush1.
+  - Method#unbind of a `public :m' entry gives the inherited body's owner. Method_UnbindForwarder1.
+  - Method#to_proc's lambda reports the method's source_location, by the same rules (nil for puts).
+    Method_ToProcSourceLocation1.
+  - A core method CRuby writes in Ruby is at CRuby's file and line, prelude or C#
+    (gen-internal-methods.rb records lines: InternalMethods.SourceLines). Method_InternalSourceLine1.
+  All matrices (jit) on this branch against the same merge without it: callable-parameters, array-take's
+  Inf row and sort-by's Array#<< row now same. Left: sort-by's order of equal keys and which pair a NaN
+  comparison names (CRuby's own qsort), string-race-matrix (readers racing writers without a GVL; the
+  unchanged build answers the same "wrong"/raises rows - perf/strrace's subject), and the known-left list.
+  For the gate, behaviour that changed outside a message: TracePoint events for attribute calls; StringScanner
+  matches from inside a character for \S and negated classes; NaN digits for round are a RangeError (were
+  FloatDomainError); sort_by no longer calls Array#<<; Method#unbind's owner for a visibility forwarder;
+  Proc#source_location of a method's to_proc; Method#source_location and #inspect of core methods (C# ones
+  now have CRuby's location; prelude ones CRuby's line).
 - **perf/json (2026-11-27) - `case` over String literals looks its subject up once while String#===
   is the library's (gap 7)** - not gated. Commit 0a78877 on `claude/perf-strsearch`, based on
   claude/happy-gauss-95wm2j 15285eb with 0518f08 merged in. Measured first: a perf profile of AWFY

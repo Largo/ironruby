@@ -246,14 +246,19 @@ namespace IronRuby.Runtime.Calls {
 
             // Rules are rebound when c_call tracing is switched on or off, so a rule bound without it costs nothing.
             if (TracePoint.CCallTracing && !metaBuilder.Error && metaBuilder.Result != null) {
-                metaBuilder.Result = AddCallTracing(metaBuilder.Result, args, name);
+                metaBuilder.Result = AddCallTracing(this, metaBuilder.Result, args, name);
             }
         }
 
-        private Expression/*!*/ AddCallTracing(Expression/*!*/ call, CallArguments/*!*/ args, string/*!*/ name) {
+        /// <summary>
+        /// :c_call before and :c_return after <paramref name="call"/>, the body of a rule for <paramref name="info"/>, a
+        /// method CRuby implements in C (a library method, an attr_reader or attr_writer). Only for a rule bound while
+        /// c_call is traced: switching it on or off rebinds every rule.
+        /// </summary>
+        internal static Expression/*!*/ AddCallTracing(RubyMemberInfo/*!*/ info, Expression/*!*/ call, CallArguments/*!*/ args, string/*!*/ name) {
             Expression scope = AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope));
             Expression target = AstUtils.Convert(args.TargetExpression, typeof(object));
-            Expression method = AstUtils.Constant(this, typeof(RubyMemberInfo));
+            Expression method = AstUtils.Constant(info, typeof(RubyMemberInfo));
             Expression methodName = AstUtils.Constant(name);
             Expression before = Methods.TraceLibraryCall.OpCall(scope, target, method, methodName);
 

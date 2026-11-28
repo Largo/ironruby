@@ -983,6 +983,99 @@ nil
         }
 
         /// <summary>
+        /// From a scan pointer inside a character, '.' (and \A., (?m:.)) matches a byte of the split character
+        /// as a character of its own, as Onigmo does: such a byte reaches .NET as a lone U+DC00-U+DCFF.
+        /// </summary>
+        public void StringScanner_DotOnSplitByte1() {
+            TestOutput(@"
+require 'ruby4'
+require 'strscan'
+def at(s, pos) = StringScanner.new(s).tap { |x| x.pos = pos }
+p at(""h\u00e9llo"", 2).check(/./), at(""h\u00e9llo"", 2).scan(/\A./), at(""h\u00e9llo"", 2).scan_full(/./, false, true)
+p at(""a\u{1F600}b"", 2).scan(/./), at(""a\u{1F600}b"", 3).scan(/(?m:.)/), at(""a\u{1F600}b"", 4).scan(/./)
+e = at(""\xA4\xA2a"".dup.force_encoding(""EUC-JP""), 1)
+p e.check(/./), e.scan(/\A.a/)
+p at(""h\u00e9llo"", 2).scan(/.l/), at(""h\u00e9llo"", 2).scan(/..+/)
+", @"
+""\xA9""
+""\xA9""
+""\xA9""
+""\x9F""
+""\x98""
+""\x80""
+""\xA2""
+""\xA2a""
+""\xA9l""
+""\xA9llo""
+");
+        }
+
+        /// <summary>
+        /// From a scan pointer inside a character, Onigmo matches a byte of the split character with a negated escape
+        /// (\S \D \W \H), a class negated at its top ([^l]) and \X, but not with a positive class ([\S], \w, \p{Any}).
+        /// </summary>
+        public void StringScanner_NegatedClassOnSplitByte1() {
+            TestOutput(@"
+require 'ruby4'
+require 'strscan'
+def at(s, pos) = StringScanner.new(s).tap { |x| x.pos = pos }
+p ['.', (at(""h\u00e9llo"", 2).scan(Regexp.new('.')) rescue $!.class)]
+p ['\\S', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\S')) rescue $!.class)]
+p ['[^l]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^l]')) rescue $!.class)]
+p ['[^a-z]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^a-z]')) rescue $!.class)]
+p ['\\D', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\D')) rescue $!.class)]
+p ['\\W', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\W')) rescue $!.class)]
+p ['\\H', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\H')) rescue $!.class)]
+p ['[[:^space:]]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[[:^space:]]')) rescue $!.class)]
+p ['[^\\s]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^\\s]')) rescue $!.class)]
+p ['P{Space}', (at(""h\u00e9llo"", 2).scan(Regexp.new('P{Space}')) rescue $!.class)]
+p ['[\\s\\S]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[\\s\\S]')) rescue $!.class)]
+p ['[\\S]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[\\S]')) rescue $!.class)]
+p ['\\w', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\w')) rescue $!.class)]
+p ['\\s', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\s')) rescue $!.class)]
+p ['[^\\w]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^\\w]')) rescue $!.class)]
+p ['[\\W]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[\\W]')) rescue $!.class)]
+p ['[^l]+', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^l]+')) rescue $!.class)]
+p ['\\S+', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\S+')) rescue $!.class)]
+p ['\\X', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\X')) rescue $!.class)]
+p ['\\R', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\R')) rescue $!.class)]
+p ['[^\\n]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^\\n]')) rescue $!.class)]
+p ['(?i)[^l]', (at(""h\u00e9llo"", 2).scan(Regexp.new('(?i)[^l]')) rescue $!.class)]
+p ['[^\\u00e9]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^\\u00e9]')) rescue $!.class)]
+p ['\\p{Any}', (at(""h\u00e9llo"", 2).scan(Regexp.new('\\p{Any}')) rescue $!.class)]
+p ['[\\x80-\\xff]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[\\x80-\\xff]')) rescue $!.class)]
+p ['[^l\\u3042]', (at(""h\u00e9llo"", 2).scan(Regexp.new('[^l\\u3042]')) rescue $!.class)]
+", @"
+[""."", ""\xA9""]
+[""\\S"", ""\xA9""]
+[""[^l]"", ""\xA9""]
+[""[^a-z]"", ""\xA9""]
+[""\\D"", ""\xA9""]
+[""\\W"", ""\xA9""]
+[""\\H"", ""\xA9""]
+[""[[:^space:]]"", nil]
+[""[^\\s]"", ""\xA9""]
+[""P{Space}"", nil]
+[""[\\s\\S]"", nil]
+[""[\\S]"", nil]
+[""\\w"", nil]
+[""\\s"", nil]
+[""[^\\w]"", ""\xA9""]
+[""[\\W]"", nil]
+[""[^l]+"", ""\xA9""]
+[""\\S+"", ""\xA9llo""]
+[""\\X"", ""\xA9""]
+[""\\R"", nil]
+[""[^\\n]"", ""\xA9""]
+[""(?i)[^l]"", ""\xA9""]
+[""[^\\u00e9]"", ""\xA9""]
+[""\\p{Any}"", nil]
+[""[\\x80-\\xff]"", RegexpError]
+[""[^l\\u3042]"", ""\xA9""]
+");
+        }
+
+        /// <summary>
         /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
         /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
         /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET

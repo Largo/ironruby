@@ -615,8 +615,8 @@ module Enumerable
     keys = []
     each do |*values|
       item = __enum_item__(values)
-      keys << (values.size == 1 ? block.call(item) : __enum_yield__(values, &block))
-      items << item
+      keys.__send__(:__list_push__, values.size == 1 ? block.call(item) : __enum_yield__(values, &block))
+      items.__send__(:__list_push__, item)
       # the block #each was given answers nil, as MRI's does, should #each keep it and call it
       nil
     end
@@ -634,8 +634,8 @@ module Enumerable
     items = []
     keys = []
     each do |item|
-      items << item
-      keys << yield(item)
+      items.__send__(:__list_push__, item)
+      keys.__send__(:__list_push__, yield(item))
     end
     i = -1
     items.__send__(:__list_sort_by__) { keys[i = i.succ] }
@@ -1340,6 +1340,10 @@ class Array
   # change when a program redefines Array#sort_by.
   alias :__list_sort_by__ :sort_by
   private :__list_sort_by__
+  # and Array#push, with which they gather the keys and elements: a program's own Array#<< is
+  # not called by MRI's sort_by
+  alias :__list_push__ :push
+  private :__list_push__
   # #dig indexes with an Integer and nothing else: unlike #[] it does not take a
   # Range or an arithmetic sequence, because there would be no way to keep
   # digging into the several elements that would answer.
