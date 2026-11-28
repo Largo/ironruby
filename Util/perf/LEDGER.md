@@ -1901,6 +1901,21 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/hashany (/perf-step, 2026-11-28, on 540bdb0 + e9a8a9e) - `Hash#any?` is Hash's own
+  (rb_hash_any_p); `group_by`, `uniq`, `each_with_object` walk a plain Hash with a one-value
+  block** - clock only, not gated. `Hash#any? { |k, v| }` 695 -> 403 ns (CRuby 228; 0.58),
+  `group_by` 1334 -> 976 (0.73; CRuby 968), `each_with_object` 1208 -> 906 (0.75; 964),
+  `uniq { }` 1284 -> 924 (0.72; 837); Array rows within the noise. `Hash#any?` now matches CRuby
+  on owner, frames and a prepended, singleton or redefined #each (never called). Enumerable's
+  all?/any?/none? forwarders are NoInlining: R2R dropped their frame (already so before).
+  - `Util/hash-walk-matrix.rb` extended (any?/all?/none?, group_by, uniq, each_with_object):
+    CRuby's output but for two old tie orders, in five modes and R2R; IR_HASH_WALK=0 gives the
+    unchanged build's but for Hash#any? (not behind the switch). ruby/spec core/hash and
+    core/enumerable the same examples on both builds; 61 IronRuby.Tests pass.
+  - Left: `Hash#sum` (2.7x): the one-value walk would take a third off (the fold alone 1052 ->
+    694 ns), but its compensated-sum body is written once against `|*values|`, so a prologue
+    means a second copy of it. `Hash#any?` itself is still 1.8x CRuby: the block call per entry.
+
 - **perf/hashwalk (/perf-core, 2026-11-27, on 52f4f22) - the prelude's Enumerable methods
   walk a plain Hash with a one-value block (`__plain_each__?`, `IR_HASH_WALK`)** - clock only,
   not gated. The lever perf/hsortby named: filter_map, min_by, max_by, sort_by, min_by(n),
