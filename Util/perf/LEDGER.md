@@ -8527,6 +8527,21 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/ownerpark (round thirty-seven, 2026-11-28) - a parked scope the thread that parked first takes and parks with plain
+  loads and stores: measured, not kept** (gap 13). The take of a parked scope is the cycle's one atomic left after
+  perf/endpark. The prototype (`IR_PARK_OWNER`) gave `ParkedScopeSlot` an `Owner` (the first thread to park, set once by
+  compare-exchange) and an `Owned` spot only that thread reads and writes; every other thread, and the owner when `Owned` is
+  taken (a recursion) or full, used `Parked` and `Deeper` with their exchanges as before. Sound for the same reason the
+  exchanges are: an object is in one place at a time and each place is taken exclusively (`Owned` by the one thread that
+  uses it), a Fiber runs on a thread of its own, and a trap handler or finalizer running at a safe point inside a call finds
+  `Owned` taken. Harness (`IronRuby.Tests /blockcost`), ns, off/on: take and park (P1) 11.0/8.0, the parked cycle 37.7/33.3,
+  `e1`'s steps 38.8/35.8, `nyl`'s 43.6/39.7. End to end, `ab.rb -r 10` off/on, ns per call: `e1` 96.0/96.0, `eachl`
+  92.0/92.0, `each1` 111.5/107.3, `map1` 123.5/127.1, `times1` 107.9/111.0, `nyl` 107.5/107.4, `nbl` 99.0/97.2, controls `ep`,
+  `call`, `nb0` level - every row overlapping. 3 ns a call is under the noise of a call that now costs 90-110 ns, as
+  perf/endpark's 8 ns was; not worth a second parking place and a thread that keeps one ParkedProcs after it ends. Census
+  (Src/StdLib and Util/bench): no method changed, as a runtime-only change. With perf/endpark, the parked cycle's atomics are
+  done: what is left of it is reinitializing the scope and the Procs.
+
 - **perf/jitcalls, second round (2026-11-28) - stage 3's first step or stage 4's slice: measured, designed, not
   built** (gap 1). Chosen by what the JIT declines in eight AWFY benchmarks: every hot method turned away after the
   screen is turned away by the effect rule (`append`, `release`, `hold_self`, `remove_first`, `split_bucket`,
