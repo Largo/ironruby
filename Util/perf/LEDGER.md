@@ -1358,6 +1358,15 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     effect rule ("a deopt after an effect (call next)": the next iteration's read can deopt
     after this one's write), and it is called 459 times an iteration against `at`'s 799,304,
     so it is not worth a body that could take that.
+    Round forty-one looked at its bytes (see Landed, perf/havlakalloc): of 1.9 GB an
+    iteration, method scopes 25%, Procs 15%, BlockParams 6% - callers that pass a literal
+    block to som.rb's `Vector#each`, `has_some` and through them `SomSet#contains`, `add`,
+    and `UnionFindNode#find_set`, none of which could park its scope because the callee's
+    scope cleared the caller's Proc's reuse for good. Now 1.44 GB, 0.96 of the time. Left:
+    `SomSet`'s `def each(&block); @items.each(&block); end` (a named block is a Proc for
+    good), `Object[]` 20% (the instance-variable slot arrays of new objects and the
+    Vectors' storage), `Range` 8% (`(a..b).each` makes one per call), and the light
+    `Vector#each` costs 3-4% more instructions per call than the scope-ful one did.
 26. **Start-up: `gem` and `irb` answer in 0.7 to 2.2 s, CRuby in 0.1 to 0.2** (the one
     thing that has to stay fast while the tiers stay on by default, and it is not fast).
     2026-11-18, a7060a27, the ReadyToRun host (`IR_CONFIG=R2R`, what `ir.sh` runs when
@@ -1903,6 +1912,48 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
+
+- **perf/havlakalloc 56526b1 c8010fb (round forty-one, 2026-11-28) - a light frame's scope holds its
+  block until it is parked, not for good (gap 25)** - not gated. Havlak allocated 1.77 GB per iteration;
+  the allocation-tick probe gave method scopes 25%, `Object[]` 16%, Procs 14.5%, Range 6%, BlockParams 6%.
+  Bytes per call of its hot helpers, method by method: a caller passing a literal to som.rb's
+  `Vector#each` 374 B (its method scope, its Proc, a BlockParam, the Range), `SomSet#contains` 406,
+  `UnionFindNode#find_set` 462. Every method that `yield`s from inside its own block literal kept its
+  caller from parking (`IR_PARKED_SCOPES` diagnostics: the caller's staged Proc not reusable): a
+  light-frame callee that makes its scope cleared its block's ReusableFlag for good
+  (`CreateMethodScopeLazy`, `ReuseParkedScopeLazy`: "whatever asked for the scope may keep it"). Now
+  the scope only holds the block (`Proc.HeldFlag`: not reusable while set) and `EndPark` releases it when
+  it parks the scope - parking proves that nothing captured the scope and that its own Procs are
+  reusable and inactive, so nothing that outlived the call reaches the block through it. A call that does
+  not park, an exception, and every other ClearReusable (a captured block scope, a retry) leave the block
+  not reusable, as before. And `Vector#each`/`has_some`, `(a..b).each { |i| yield @s[i] }`, were kept
+  out of light frames by `RangeExpression in a body with literal blocks` (measured 5-7% slower per call
+  as light frames when their callers could not park anyway); with the hold they are let in, so their
+  callers park. Switch for both: IR_SCOPE_HELD_BLOCKS=0. Census: 130 methods more are light frames (all
+  by the Range rule), none moved down.
+  Bytes (alloc.rb against 186fb0e): Havlak 1,774,355,834 -> 1,436,289,102 (0.81), DeltaBlue 14,559,508
+  -> 9,697,205 (0.67), Towers 181 -> 146 KB, the rest level (Richards 636-810 KB on the base and
+  733-834 on the new in three runs: noise); geomean 0.957. Per call (probe): a caller of `Vector#each`
+  374 -> 134 B, `find_set` 462 -> 222, a caller of a light `@a.each { |x| yield x }` 334 -> 94.
+  Time: ten alternating AWFY processes against the base, medians: Havlak 0.959 (ranges 2.83-3.09 s
+  and 2.85-3.01 s), DeltaBlue 1.011, CD 1.026 (one outlier of 557 ms in the new; CD's changed methods are
+  called once per iteration); in one tree with the switch off and on: Havlak 0.964, DeltaBlue 0.995.
+  Instructions (callgrind, switch off -> on, three runs, steady to 0.1%): per call of the Havlak
+  helpers `vec_each` +2.8%, `has_some` +4.4%, `contains` +2.7%, `find_set` +3.7% - the light
+  `Vector#each` costs more per call than the scope-ful one, as measured when it was kept out; the time
+  saved is the collector's.
+  Checks: Util/held-block-matrix.rb (new: the callee's binding kept and yielded through later, a Proc of
+  the callee kept that yields to the caller's block, an exception after the callee's scope is made, a
+  fiber, threads, block_given?, break; with the hold a no-op three rows go wrong) and the parked-scope,
+  block-scope-reuse, block-nest-reuse, nested-proc, loop-exit, osr-array, jit, hot-shapes, block-given,
+  block-pass, binding-lvar, light-entry, loop-light, super-light, rescue-light matrices in the gate's six
+  modes and IR_SCOPE_HELD_BLOCKS=0: 112 same. ruby/spec language/block, def, yield, break, range,
+  core/binding, core/proc, core/range/each, core/kernel/block_given: no failures on either build.
+  IronRuby.Tests on Debug net10.0 (Util/parallel-tests.sh): 1,403 tests, none failed or flaky, as on the
+  base (both report the driver's "Current culture:" line as a test never run).
+  For the gate: the per-call instruction rise above, on code that has no use for the parking; every way
+  a method's block can escape through its scope without capturing it or keeping a Proc of the method
+  (the hold is released on that proof alone).
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
