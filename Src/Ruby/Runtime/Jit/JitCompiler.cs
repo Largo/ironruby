@@ -2481,6 +2481,49 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Constant(false);
         }
 
+        // IR_JIT_TYPE_TEST=0 turns EmitTypeTest off
+        internal static readonly bool TypeTests = Environment.GetEnvironmentVariable("IR_JIT_TYPE_TEST") != "0";
+
+        /// <summary>`x.is_a?(C)', `x.kind_of?(C)', `x.instance_of?(C)' or the same on self, C a constant and no block.</summary>
+        internal static bool IsTypeTest(MethodCall/*!*/ node) {
+            if (!TypeTests || node.Block != null || node.Target == null && node.IsVariableCall) { return false; }
+            if (node.MethodName != "is_a?" && node.MethodName != "kind_of?" && node.MethodName != "instance_of?") { return false; }
+            var args = node.Arguments;
+            return args != null && args.Expressions.Length == 1 && args.Expressions[0] is ConstantVariable;
+        }
+
+        /// <summary>
+        /// `x.is_a?(C)', `x.kind_of?(C)', `x.instance_of?(C)': Kernel's answer, a walk of the ancestors of x's class (its
+        /// singleton class, with the modules it was extended with, included) or a comparison with x's class
+        /// (JitRuntime.IsKindOf), with no frame and no call. C is the folded constant (EmitConstant), which the entry's
+        /// constant version guards. The site (JitRuntime.KernelMethodSite) checks that x's class resolves the name to
+        /// Kernel's method under the current global method version - which moves when a class is reopened with a method,
+        /// a module included, prepended or extended, or a singleton class made - and deopts otherwise: a redefined or
+        /// missing is_a? (a BasicObject, method_missing), and a C that is no module (TypeError) are the generic call's.
+        /// Ancestors are read when the test runs, so a module included after the body was compiled is seen. Not where a
+        /// refinement is active: a refined is_a? is what the call reaches.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitTypeTest(MethodCall/*!*/ node, out JT type) {
+            if (!_refinements.IsEmpty) { throw Bail(node.MethodName + " with refinements active"); }
+            var site = new JitRuntime.KernelMethodSite(node.MethodName, LibraryMethods(node.MethodName, _context.ObjectClass));
+            MSA.Expression receiver;
+            if (node.Target == null) {
+                receiver = _self;
+            } else {
+                JT rt;
+                receiver = Coerce(Emit(node.Target, out rt), rt, JT.Obj);
+            }
+            JT ct;
+            var module = Coerce(Emit(node.Arguments.Expressions[0], out ct), ct, JT.Obj);
+            // a constant folded to something that is no module would deopt on every call (the TypeError is the generic call's)
+            var folded = module as MSA.ConstantExpression;
+            if (folded != null && !(folded.Value is RubyModule)) { throw Bail(node.MethodName + " of a constant that is no module"); }
+            _canDeopt = true;
+            type = JT.Bool;
+            return Ast.Call(JitRuntime.M("IsKindOf"), Ast.Constant(_context), receiver, module, Ast.Constant(site),
+                Ast.Constant(node.MethodName == "instance_of?"));
+        }
+
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
             if (node.Block != null && !PassesNoBlock(node)) {
                 // an iterator with a literal block inside a core iterator's outlined loop: run in place (JitCompiler.Nest.cs)
@@ -2499,6 +2542,9 @@ namespace IronRuby.Runtime.Jit {
 
             // `raise ...' or `fail ...' (EmitRaise): a deopt, and the generic body raises.
             if (IsRaiseCall(node)) { return EmitRaise(node, out type); }
+
+            // `x.is_a?(C)', `kind_of?', `instance_of?' (EmitTypeTest)
+            if (IsTypeTest(node)) { return EmitTypeTest(node, out type); }
 
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
@@ -4218,6 +4264,11 @@ namespace IronRuby.Runtime.Jit {
             if (node.Target != null && argc == 0 && node.MethodName == "!") {
                 // `!x' (JitCompiler.EmitNot)
                 return WalkCondition(node.Target);
+            }
+
+            if (JitCompiler.IsTypeTest(node)) {
+                // `x.is_a?(C)' and the like (JitCompiler.EmitTypeTest): x is any object, C a constant
+                return (node.Target == null || Walk(node.Target)) && (WalkConstant((ConstantVariable)args.Expressions[0]) || No(node));
             }
 
             // `v.nil?', `v == w', `v != w', `v.equal?(w)' on any object (JitCompiler.EmitIdentityCall); `=='

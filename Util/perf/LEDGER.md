@@ -1901,6 +1901,42 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitisa (2026-11-28, census and timed, not gated) - `is_a?`, `kind_of?` and `instance_of?` in the method JIT's
+  typed body** (the census's "MethodCall (screen)": is_a? 693; switch `IR_JIT_TYPE_TEST`). Built on happy-gauss
+  f67ac44 merged with perf/jitbody e19f454.
+  - **What.** `x.is_a?(C)`, `x.kind_of?(C)` and `x.instance_of?(C)` (or on self), with C a constant and no block,
+    compile to `JitRuntime.IsKindOf`. It does Kernel's test with no frame or call: the ancestors of x's immediate
+    class, its singleton class included (`RubyContext.IsKindOf`), or `GetClassOf(x) == C` for instance_of?.
+  - **Guards.** C is the folded constant, guarded by the entry's constant version. A constant folded to something
+    that is no module bails at compile time. The new `JitRuntime.KernelMethodSite` checks that x's class resolves
+    the name to Kernel's method (public) under the current global method version. It keeps four entries
+    (class, version), each immutable, so a racing write only loses an entry. A class that resolves to anything
+    else deopts, and the generic call handles it: a BasicObject's NoMethodError, method_missing, a redefinition in
+    the class, a singleton or Kernel, a non-module C's TypeError, a CLR type group's conversion. Not compiled where
+    a refinement is active. The ancestors are walked on every test, so an include, prepend or extend after compile
+    is seen whether or not it moved a method version.
+  - **The polymorphic site.** IdentityCallSite holds one class and resolves again on every change: an `is_a?` fed
+    two classes in turn was no faster than the generic call (poly2 89.4 vs 89.3 ns). Four entries fix that.
+  - **Census** (Src/StdLib, Util/bench, AWFY): 180 methods up, none down, all never -> maybe. 154 are maybe only
+    because the census resolves no constant without a scope; 26 are behind a call.
+  - **Hot methods.** AWFY calls none of the three. app-shapes: 118 -> 121 specialized (`Set#__core_set__?`,
+    `check_refused` twice); declines 29 -> 32. The three new declines are existing screen optimism that the
+    `is_a?` refusal used to hide: `v.to_i` and `n.call` taken as possible attribute reads (URI::Generic#set_port,
+    Enumerator::Lazy#size) and a deopt after an effect at `[]` (CSV::Parser#prepare_variable). By clock
+    (ab.rb -r 7), app-shapes' rules and set overlap the switch off (1.01 each).
+  - **Clock** (ab.rb -r 3, `Util/bench/isa-shapes.rb`, ns, off -> new, CRuby): mono 72.9 -> 57.2 (46.9), poly2
+    89.8 -> 71.8 (63.5), poly4 143.6 -> 91.5 (62.9), a module argument 76.0 -> 65.7 (51.8), instance_of 67.3 ->
+    54.3 (46.1), an Integer/Float/else chain 150.6 -> 126.2 (75.3), on self 71.4 -> 52.3 (42.6); no overlap.
+  - **Checks.** `Util/jit-isa-matrix.rb` (new, 38 rows): receivers of every kind; Comparable, Enumerable, Module
+    and Class arguments; instance_of? with a singleton class; include, prepend and extend (an Object, a String,
+    Integer) after the body is hot; a constant swapped to another class and to a non-module; is_a?(5); a
+    BasicObject; method_missing; is_a? redefined in a class, a singleton, a class reopened and Kernel, then
+    restored; refined. It prints CRuby's output with the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
+    IR_LIGHT_FRAMES=0 and the switch off. jit, jit-calls, jit-const, hot-shapes, sdef and extend in the same
+    five modes: CRuby's output on both builds. One sdef run with the JIT on exited 1 with the right output; 19
+    more runs (11 on this build, 8 on the base) exited 0. ruby/spec core/kernel is_a, kind_of, instance_of and
+    core/module/case_compare: no failures on either build. IronRuby.Tests (Debug), all 1,402: PASSED.
+
 - **perf/jitrescue (2026-11-28, census and timed, not gated) - `begin`/`rescue`/`else`/`ensure` in the method JIT's
   typed body** (gap 22's remainder; switch `IR_JIT_RESCUE`). Built on happy-gauss 4320d4a, perf/jitbody 238d994 and
   perf/lsite f7ae738 (lazy `$!`, IR_LAZY_ERRINFO).
