@@ -963,7 +963,10 @@ namespace IronRuby.Runtime.Calls {
 
             object target = args.Target;
             var context = targetClass.Context;
-            if (!(target is long || target is BigInteger) || targetClass != context.IntegerClass ||
+            // by its CLR name only, as Int32's members are: CRuby's Integer has no snake_case `is_even' or `to_string' (and
+            // a program that duck-types on `compare_to' must see NoMethodError, not Int32#CompareTo's ArgumentError)
+            if (methodName.Length == 0 || !Char.IsUpper(methodName[0]) ||
+                !(target is long || target is BigInteger) || targetClass != context.IntegerClass ||
                 !(context.GetClrTypeModule(target.GetType()) is RubyClass ownClass) || ownClass == targetClass) {
                 return notFound;
             }

@@ -3768,24 +3768,23 @@ Integer
         }
 
         /// <summary>
-        /// A CLR member only an Int64's or a BigInteger's own type has is reachable on such an Integer, by its CLR or its
-        /// snake_case name. The CLR instance methods of Integer and Float (Int32's, Double's) take snake_case names too,
-        /// though, as Ruby built-ins, they stay out of the method lists.
+        /// A CLR member only an Int64's or a BigInteger's own type has is reachable on such an Integer by its CLR name, as the
+        /// CLR instance methods of Integer and Float (Int32's, Double's) are. Not by a snake_case name: CRuby's Integer has no
+        /// to_string or compare_to, and a program that duck-types on one must get NoMethodError. They stay out of the method lists.
         /// </summary>
         public void ClrIntegerClrMembers1() {
             TestOutput(@"
 big = 2**70
-p big.IsEven, big.is_even, (big + 1).IsEven, big.Sign, (-big).sign
+p big.IsEven, (big + 1).IsEven, big.Sign
 p((2**40).IsEven) rescue p $!.class
-p 5.to_string, 255.to_string('X'), (2**40).to_string, big.to_string, 5.compare_to(3), 1.5.to_string, 1.5.compare_to(2.0)
-p 5.respond_to?(:to_string), 5.methods.include?(:to_string), Integer.instance_methods.include?(:compare_to)
+p 5.ToString, 255.ToString('X'), (2**40).ToString, big.ToString, 5.CompareTo(3), 1.5.ToString, 1.5.CompareTo(2.0)
+p 5.respond_to?(:to_string), 5.methods.include?(:ToString), Integer.instance_methods.include?(:compare_to)
+p [5, 1.5, big, 2**40].map { |o| [:to_string, :compare_to, :is_even, :sign].map { |m| (o.send(m, *([1] * (m == :compare_to ? 1 : 0))) rescue $!.class) } }
 p((5.foo_bar rescue $!.class), (big.foo_bar rescue $!.class))
 ", @"
 true
-true
 false
 1
--1
 NoMethodError
 '5'
 'FF'
@@ -3794,9 +3793,10 @@ NoMethodError
 1
 '1.5'
 -1
-true
 false
 false
+false
+[[NoMethodError, NoMethodError, NoMethodError, NoMethodError], [NoMethodError, NoMethodError, NoMethodError, NoMethodError], [NoMethodError, NoMethodError, NoMethodError, NoMethodError], [NoMethodError, NoMethodError, NoMethodError, NoMethodError]]
 NoMethodError
 NoMethodError
 ");
