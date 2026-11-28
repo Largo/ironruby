@@ -178,6 +178,12 @@ namespace IronRuby.Compiler.Ast {
                 blockArgVariable = transformedBlock = null;
             }
 
+            // `&b' of a method that only passes its block b on: held for the call (RubyOps.HoldPassedBlock, Proc.PassHeldFlag)
+            bool passesBlock = block != null && !block.IsDefinition && IsPassedBlock(gen, ((BlockReference)block).Expression);
+            if (passesBlock) {
+                transformedBlock = Ast.Call(_HoldPassedBlock, AstUtils.Convert(transformedBlock, typeof(Proc)));
+            }
+
             var siteBuilder = new CallSiteBuilder(gen, transformedTarget, blockArgVariable);
 
             // `recv.m(args, &blk)': MRI evaluates the receiver and the arguments - expanding a
@@ -262,11 +268,31 @@ namespace IronRuby.Compiler.Ast {
                     "#RB: method call with a block ('" + methodName + "')");
             }
 
+            if (passesBlock) {
+                // the receiver took the block and the call returned: unless the receiver confirmed it, the block is not reusable
+                var passResult = gen.CurrentScope.DefineHiddenVariable("#pass-result", typeof(object));
+                result = Ast.Block(
+                    Ast.Assign(passResult, AstUtils.Convert(result, typeof(object))),
+                    Ast.Call(_EndPassedBlock, AstUtils.Convert(blockArgVariable, typeof(Proc))),
+                    passResult
+                );
+            }
+
             if (assignmentRhsArgument != null) {
                 result = Ast.Block(result, rhsVariable);
             }
 
             return result;
+        }
+
+        private static readonly System.Reflection.MethodInfo/*!*/ _HoldPassedBlock = typeof(RubyOps).GetMethod("HoldPassedBlock");
+        private static readonly System.Reflection.MethodInfo/*!*/ _EndPassedBlock = typeof(RubyOps).GetMethod("EndPassedBlock");
+
+        // `&b' where b is the block parameter of a method that only passes it on (AstGenerator.MethodScope.PassedBlock)
+        private static bool IsPassedBlock(AstGenerator/*!*/ gen, Expression/*!*/ expression) {
+            var passed = gen.CurrentMethod.PassedBlock;
+            var local = expression as LocalVariable;
+            return passed != null && local != null && local.Name == passed.Name && local.DefinitionLexicalDepth == passed.DefinitionLexicalDepth;
         }
 
         /// <summary>

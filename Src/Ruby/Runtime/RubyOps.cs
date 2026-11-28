@@ -502,9 +502,14 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static RuntimeFlowControl/*!*/ EnterLightMethodNamingBlock(Proc blockParameter) {
             RubyUtils.SafePoint();
-            if (blockParameter != null && blockParameter.Kind == ProcKind.Block) {
-                blockParameter.ConvertAsMethodFrame();
-                return blockParameter;
+            if (blockParameter != null) {
+                if (blockParameter.Kind == ProcKind.Block) {
+                    blockParameter.ConvertAsMethodFrame();
+                    return blockParameter;
+                }
+                // a block another method passed on (Proc.PassHeldFlag): this method may keep it - or pass it on, by `super' too, to
+                // a receiver that confirms the pass, which must not make it reusable again
+                blockParameter.ClearReusable();
             }
             return InactiveRfc;
         }
@@ -515,7 +520,44 @@ namespace IronRuby.Runtime {
                 blockParameter.ConvertAsLightFrame();
                 return blockParameter;
             }
+            // and one another method passed on to it is not kept by it either (Proc.PassHeldFlag)
+            blockParameter.ConfirmPass();
             return InactiveRfc;
+        }
+
+        /// <summary>
+        /// EnterLightMethodNamingBlock of a method that only passes its block on (JitStub.BlockParameterOnlyPassed, IR_PASSED_BLOCKS):
+        /// a literal block stays reusable unless a call it is passed to may keep it (Proc.PassHeldFlag, HoldPassedBlock,
+        /// EndPassedBlock); one another method passed on to it is confirmed, as this one passes it on in the same way.
+        /// </summary>
+        public static RuntimeFlowControl/*!*/ EnterLightMethodPassingBlock(Proc blockParameter) {
+            RubyUtils.SafePoint();
+            if (blockParameter != null) {
+                if (blockParameter.Kind == ProcKind.Block) {
+                    blockParameter.ConvertAsPassingMethodFrame();
+                    return blockParameter;
+                }
+                blockParameter.ConfirmPass();
+            }
+            return InactiveRfc;
+        }
+
+        /// <summary>
+        /// The block argument `&b' of a call in a method that only passes its block b on: held until the receiver confirms that it
+        /// keeps nothing (Proc.PassHeldFlag).
+        /// </summary>
+        public static Proc HoldPassedBlock(Proc block) {
+            if (block != null) {
+                block.HoldForPass();
+            }
+            return block;
+        }
+
+        /// <summary>The call HoldPassedBlock passed the block to returned (Proc.EndPass).</summary>
+        public static void EndPassedBlock(Proc block) {
+            if (block != null) {
+                block.EndPass();
+            }
         }
 
         /// <summary>

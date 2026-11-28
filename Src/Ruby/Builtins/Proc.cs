@@ -81,7 +81,17 @@ namespace IronRuby.Builtins {
         // reusable when its callee's scope is parked (`c.each { }' where `def each; (a..b).each { |i| yield @s[i] }; end').
         // A call that does not park, an exception, any other clear of ReusableFlag leave the proc not reusable, as they did.
         private const int HeldFlag = 32;
-        private const int ReusableMask = ReusableFlag | HeldFlag;
+
+        // A method that only passes its named block on (`def each(&b) = @items.each(&b)', JitStub.BlockParameterOnlyPassed) is
+        // handing it to a call (RubyOps.HoldPassedBlock): not reusable while set. A receiver known to keep nothing - a light frame
+        // that only yields, a [BlockNotKept] library method, another method that only passes it on - lifts it as it takes the
+        // block (ConfirmPass); any other receiver leaves it, and the passing method then clears ReusableFlag for good once the
+        // call returns (RubyOps.EndPassedBlock). An exception out of the call leaves it set: not reusable.
+        private const int PassHeldFlag = 64;
+        private const int ReusableMask = ReusableFlag | HeldFlag | PassHeldFlag;
+
+        /// <summary>IR_PASSED_BLOCKS=0: a method's named block is converted for good, as it was, even if the method only passes it on.</summary>
+        internal static readonly bool PassedBlocksEnabled = Environment.GetEnvironmentVariable("IR_PASSED_BLOCKS") != "0";
 
         /// <summary>IR_SCOPE_HELD_BLOCKS=0: a light-frame method's scope clears its block's ReusableFlag for good, as it did.</summary>
         internal static readonly bool ScopeHeldBlocksEnabled = Environment.GetEnvironmentVariable("IR_SCOPE_HELD_BLOCKS") != "0";
@@ -150,6 +160,35 @@ namespace IronRuby.Builtins {
         internal void ConvertAsMethodFrame() {
             _kind = (int)ProcKind.Proc | SelfConverterFlag | MethodConverterFlag;
             _activeFlowControlScope = this;
+        }
+
+        /// <summary>
+        /// ConvertAsMethodFrame of a literal block for a light-frame method that only passes it on (RubyOps.EnterLightMethodPassingBlock):
+        /// reusable as a light frame's literal is (ConvertAsLightFrame) unless a call it is passed to may keep it (PassHeldFlag).
+        /// </summary>
+        internal void ConvertAsPassingMethodFrame() {
+            _kind = ((_dispatcher.ReusesProc && TracePoint.ActiveEvents == 0)
+                ? (int)ProcKind.Proc | SelfConverterFlag | MethodConverterFlag | ReusableFlag
+                : (int)ProcKind.Proc | SelfConverterFlag | MethodConverterFlag) | (_kind & HeldFlag);
+            _activeFlowControlScope = this;
+        }
+
+        /// <summary>The block is being passed to a call by a method that only passes it on (see PassHeldFlag).</summary>
+        internal void HoldForPass() {
+            _kind |= PassHeldFlag;
+        }
+
+        /// <summary>The receiver of a passed block keeps nothing (see PassHeldFlag).</summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        internal void ConfirmPass() {
+            _kind &= ~PassHeldFlag;
+        }
+
+        /// <summary>The call a passed block was given to returned: if its receiver did not confirm the pass, it may keep the block.</summary>
+        internal void EndPass() {
+            if ((_kind & PassHeldFlag) != 0) {
+                _kind &= ~(PassHeldFlag | ReusableFlag);
+            }
         }
 
         /// <summary>

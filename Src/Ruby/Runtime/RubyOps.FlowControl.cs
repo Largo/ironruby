@@ -32,9 +32,14 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static RuntimeFlowControl/*!*/ CreateRfcForMethod(Proc proc) {
-            if (proc != null && proc.Kind == ProcKind.Block) {
-                proc.ConvertAsFrame();
-                return proc;
+            if (proc != null) {
+                if (proc.Kind == ProcKind.Block) {
+                    proc.ConvertAsFrame();
+                    return proc;
+                }
+                // A block another method passed on (Proc.PassHeldFlag): this method's scope holds it and may keep it, and may pass
+                // it on to a receiver that confirms the pass - which must not make it reusable again.
+                proc.ClearReusable();
             }
             return InactiveRfc;
         }

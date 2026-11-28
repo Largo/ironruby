@@ -524,6 +524,8 @@ namespace IronRuby.Runtime {
         public static BlockParam/*!*/ CreateBfcForBlockNotKept(Proc/*!*/ proc) {
             Assert.NotNull(proc);
             if (proc.Kind != ProcKind.Block) {
+                // a block another method passes on is not kept here either (Proc.PassHeldFlag)
+                proc.ConfirmPass();
                 return new BlockParam(proc, BlockCallerKind.Yield, false);
             }
 
