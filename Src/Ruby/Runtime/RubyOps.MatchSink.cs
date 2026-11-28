@@ -20,85 +20,61 @@ namespace IronRuby.Runtime {
 
     /// <summary>
     /// The $~ of a light frame that makes no scope for its String, Symbol and Regexp calls (RubyCallFlags.HasMatchSink,
-    /// MethodDefinition.IsMatchSink). The rule of such a call gives the library method a scope of the thread's own to store
-    /// $~ in (EnterMatchSink), and hands what it stored to the frame when it returns (LeaveMatchSink); the frame keeps it in a
-    /// CLR local (TakeMatchSink) and puts it into its scope if one is made later (SeedLightScopeMatch) - for a TracePoint's
-    /// binding, say. So $~ is the frame's, as in CRuby, and nothing shared holds a match: the sink scopes are cleared as they
-    /// are left. A stack, because a library method may run Ruby code after it has stored $~ (`sub(re, hash)' calls the
-    /// hash's default proc), and that code's own calls must not take the match of the call that is still running.
+    /// MethodDefinition.IsMatchSink): a scope of its own that holds nothing but $~ - its sink - which the frame takes at its
+    /// first such call from the thread's free sinks (TakeMatchSink), gives those calls as their scope, and gives back when it
+    /// returns (ReturnMatchSink, which clears it). The library method stores $~ in it; a scope the frame makes later starts with
+    /// it (SeedLightScopeMatch) - for a TracePoint's binding, say. So $~ is the frame's, as in CRuby; nothing shared holds a
+    /// match; and a call costs no more than the light call it is, the frame two reads of a thread static.
     /// </summary>
     public static partial class RubyOps {
-        // stored in a sink scope when it is entered: a store by the library method replaces it
-        private static readonly MatchData MatchSinkUnset = new MatchData();
+        private const int MaxFreeMatchSinks = 8;
 
-        // A thread's sink scopes, one per call in progress, and what the last call left stored until the frame that made it
-        // takes it (MatchSinkUnset if nothing, or taken). One object, so that each helper reads one thread static.
-        private sealed class MatchSinkState {
-            internal RubyTopLevelScope[] Sinks = new RubyTopLevelScope[4];
-            internal int Depth;
-            internal MatchData Taken = MatchSinkUnset;
+        // A thread's sinks not taken by a frame. A list, not a stack: a frame that never returns (a Fiber left suspended) only
+        // takes one out of it.
+        private sealed class MatchSinkPool {
+            internal readonly RubyTopLevelScope[] Free = new RubyTopLevelScope[MaxFreeMatchSinks];
+            internal int Count;
         }
 
         [ThreadStatic]
-        private static MatchSinkState t_matchSink;
+        private static MatchSinkPool t_matchSinks;
 
-        public static RubyScope/*!*/ EnterMatchSink(RubyContext/*!*/ context) {
-            var state = t_matchSink ?? (t_matchSink = new MatchSinkState());
-            int depth = state.Depth;
-            var sinks = state.Sinks;
-            if (depth == sinks.Length) {
-                Array.Resize(ref sinks, depth * 2);
-                state.Sinks = sinks;
+        /// <summary>
+        /// A sink for a light frame of the runtime of <paramref name="declaringScope"/>, the frame's declaring scope.
+        /// </summary>
+        public static RubyScope/*!*/ TakeMatchSink(RubyScope/*!*/ declaringScope) {
+            var context = declaringScope.RubyContext;
+            var pool = t_matchSinks;
+            if (pool != null && pool.Count > 0) {
+                int i = --pool.Count;
+                var sink = pool.Free[i];
+                pool.Free[i] = null;
+                // several runtimes may run on a thread: a sink is the runtime's whose methods it is given to
+                if (sink.RubyContext == context) {
+                    return sink;
+                }
             }
-            var sink = sinks[depth];
-            // several runtimes may run on a thread: a sink scope is the runtime's whose methods it is given to
-            if (sink == null || sink.RubyContext != context) {
-                sinks[depth] = sink = new RubyTopLevelScope(context);
-            }
-            sink.CurrentMatch = MatchSinkUnset;
-            state.Depth = depth + 1;
-            return sink;
-        }
-
-        public static void LeaveMatchSink() {
-            var state = t_matchSink;
-            var sink = state.Sinks[--state.Depth];
-            state.Taken = sink.CurrentMatch;
-            sink.CurrentMatch = null;
-        }
-
-        // the call raised: what it stored is no frame's
-        public static void AbortMatchSink() {
-            var state = t_matchSink;
-            state.Sinks[--state.Depth].CurrentMatch = null;
-            state.Taken = MatchSinkUnset;
+            return new RubyTopLevelScope(context);
         }
 
         /// <summary>
-        /// The frame's $~ after a call of its light site with RubyCallFlags.HasMatchSink: what the call stored, or
-        /// <paramref name="previous"/> if it stored nothing (a method of the program's own, a library method that did not
-        /// match: CRuby leaves the caller's $~ then too).
+        /// Called as the frame that took <paramref name="sink"/> returns: its $~ is no one's any more.
         /// </summary>
-        public static MatchData TakeMatchSink(MatchData previous) {
-            var state = t_matchSink;
-            if (state == null) {
-                // the thread has entered no sink: nothing was stored
-                return previous;
+        public static void ReturnMatchSink(RubyScope/*!*/ sink) {
+            var top = (RubyTopLevelScope)sink;
+            top.CurrentMatch = null;
+            var pool = t_matchSinks ?? (t_matchSinks = new MatchSinkPool());
+            if (pool.Count < MaxFreeMatchSinks) {
+                pool.Free[pool.Count++] = top;
             }
-            var match = state.Taken;
-            if (ReferenceEquals(match, MatchSinkUnset)) {
-                return previous;
-            }
-            state.Taken = MatchSinkUnset;
-            return match;
         }
 
         /// <summary>
-        /// The scope a light frame that is a match sink makes on demand, given the frame's $~.
+        /// The scope a light frame that is a match sink makes on demand, given the $~ of its sink (null if it has taken none).
         /// </summary>
-        public static RubyMethodScope/*!*/ SeedLightScopeMatch(RubyMethodScope/*!*/ scope, MatchData match) {
-            if (match != null) {
-                scope.CurrentMatch = match;
+        public static RubyMethodScope/*!*/ SeedLightScopeMatch(RubyMethodScope/*!*/ scope, RubyScope sink) {
+            if (sink != null) {
+                scope.CurrentMatch = ((RubyTopLevelScope)sink).CurrentMatch;
             }
             return scope;
         }

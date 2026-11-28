@@ -341,7 +341,7 @@ namespace IronRuby.Compiler.Ast {
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  
                 // leave frame:
-                (light != null) ? Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
+                (light != null) ? LeaveLightFrame(light, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
                 Ast.Empty(),
                 profileEnd
             );
@@ -635,14 +635,13 @@ namespace IronRuby.Compiler.Ast {
         };
 
         /// <summary>
-        /// IR_LIGHT_MATCH_SINK=1 lets a method whose regex literal goes to a method that stores $~ into light frames if nothing in
-        /// it reads its $~ (see IsMatchSink). Off by default: the frame's $~ handed from a sink scope of the thread's to a CLR
-        /// variable costs about what the scope made on demand did (Util/perf/LEDGER.md, perf/lightmatch).
+        /// IR_LIGHT_MATCH_SINK=0 keeps a method whose regex literal goes to a method that stores $~ out of light frames, as before
+        /// (see IsMatchSink).
         /// </summary>
-        internal static readonly bool LightMatchSinkEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MATCH_SINK") == "1";
+        internal static readonly bool LightMatchSinkEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MATCH_SINK") != "0";
 
         // The names of RegexScopeMethods that String, Symbol and Regexp define (RubyCallAction.IsMatchSinkMethod): a light site
-        // of one in a method that is a match sink stores $~ in a sink scope (RubyCallFlags.HasMatchSink).
+        // of one in a method that is a match sink stores $~ in the frame's sink (RubyCallFlags.HasMatchSink).
         private static readonly HashSet<string>/*!*/ MatchSinkMethods = new HashSet<string> {
             "=~", "===", "match", "gsub", "gsub!", "sub", "sub!", "scan", "split", "index", "rindex", "byteindex",
             "byterindex", "[]", "[]=", "slice", "slice!", "start_with?", "partition", "rpartition",
@@ -671,10 +670,11 @@ namespace IronRuby.Compiler.Ast {
         /// `$~', `$&', `$1', Regexp.last_match or other reference to it, no block or lambda (whose binding a callee may be given),
         /// no binding, string eval or call made by name (MatchObserverMethods), no global but the runtime's own
         /// (MatchSinkGlobals: `alias $m $~' makes `$m' the frame's $~). Such a method's light frame lets the String, Symbol and
-        /// Regexp methods it calls store $~ in a sink scope of the thread's, from which the frame takes it into a CLR variable
-        /// (RubyCallFlags.HasMatchSink, RubyOps.TakeMatchSink), where it would otherwise make its scope for them on every call
-        /// and call them again (gap 16 of Util/perf/LEDGER.md). A scope the frame makes later gets that $~, for a TracePoint's
-        /// binding; $~ after the method returns is its caller's, as in CRuby.
+        /// Regexp methods it calls store $~ in a sink of the frame's own, a scope that holds nothing else, taken from the thread's
+        /// free ones at the first such call and given back as the frame returns (RubyCallFlags.HasMatchSink, RubyOps.TakeMatchSink),
+        /// where the frame would otherwise make its scope for them on every call and call them again (gap 16 of
+        /// Util/perf/LEDGER.md). A scope the frame makes later gets that $~, for a TracePoint's binding; $~ after the method
+        /// returns is its caller's, as in CRuby.
         /// </summary>
         private bool IsMatchSink() {
             if (!LightMatchSinkEnabled || !LightRegexEnabled) {
@@ -728,6 +728,8 @@ namespace IronRuby.Compiler.Ast {
             internal MSA.Expression/*!*/ MakeScope;
             internal Func<MSA.Expression, MSA.Expression>/*!*/ MakeScopeIfTraced;
             internal MSA.Expression/*!*/ Name;
+            // The frame's sink (RubyOps.TakeMatchSink) if it is a match sink, given back as it returns.
+            internal MSA.ParameterExpression MatchSink;
 
             /// <summary>
             /// Replaces CreateMethodScope: the locals, the safe point and the call's flow-control frame, the alias
@@ -1684,8 +1686,10 @@ namespace IronRuby.Compiler.Ast {
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
             bool blockLiterals = LightBlocksEnabled && HasLightBlockLiteral();
-            // A match sink keeps its $~ in a CLR variable and puts it into the scope it makes on demand (RubyOps.TakeMatchSink).
-            var matchSlot = (!blockLiterals && IsMatchSink()) ? scope.DefineHiddenVariable("#match", typeof(MatchData)) : null;
+            // A match sink keeps its $~ in a sink scope of its own, taken at its first call that stores $~, and puts it into the
+            // scope it makes on demand (RubyOps.TakeMatchSink, SeedLightScopeMatch); it gives the sink back as it returns.
+            var matchSlot = (!blockLiterals && IsMatchSink()) ? scope.DefineHiddenVariable("#sink", typeof(RubyScope)) : null;
+            light.MatchSink = matchSlot;
             MSA.Expression lateScope = Ast.Call(_LightScopeInLoop, light.MakeScope, inLoop);
             if (matchSlot != null) {
                 lateScope = Ast.Call(_SeedLightScopeMatch, lateScope, matchSlot);
@@ -1735,6 +1739,30 @@ namespace IronRuby.Compiler.Ast {
         private static readonly MethodInfo/*!*/ _LightScopeInLoop = typeof(RubyOps).GetMethod("LightScopeInLoop");
         private static readonly MethodInfo/*!*/ _SeedLightScopeMatch = typeof(RubyOps).GetMethod("SeedLightScopeMatch");
         private static readonly MethodInfo/*!*/ _TakeMatchSink = typeof(RubyOps).GetMethod("TakeMatchSink");
+        private static readonly MethodInfo/*!*/ _ReturnMatchSink = typeof(RubyOps).GetMethod("ReturnMatchSink");
+
+        private static MSA.Expression/*!*/ LeaveLightFrame(LightFrame/*!*/ light, MSA.ParameterExpression/*!*/ scopeVariable) {
+            MSA.Expression leave = Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable);
+            if (light.MatchSink == null) {
+                return leave;
+            }
+            // A TracePoint's :return hook runs after this (TraceReturnExpression) and may make the scope then: it is made now,
+            // with the sink's $~, before the sink is given back.
+            return Ast.IfThenElse(Ast.NotEqual(light.MatchSink, AstUtils.Constant(null, typeof(RubyScope))),
+                Ast.Block(
+                    Ast.IfThen(
+                        Ast.NotEqual(
+                            Ast.And(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), AstUtils.Constant((int)TraceEvents.Return)),
+                            AstUtils.Constant(0)
+                        ),
+                        Ast.Block(light.LazyScope, AstUtils.Empty())
+                    ),
+                    leave,
+                    Ast.Call(_ReturnMatchSink, light.MatchSink)
+                ),
+                leave
+            );
+        }
         private static readonly MethodInfo/*!*/ _EnterLightLoop = typeof(RubyOps).GetMethod("EnterLightLoop");
         private static readonly MethodInfo/*!*/ _LeaveLightLoop = typeof(RubyOps).GetMethod("LeaveLightLoop");
 
@@ -1758,8 +1786,8 @@ namespace IronRuby.Compiler.Ast {
             // makes none. The scope made on demand has the frame's locals (its tuple, made from the register locals if those are
             // used), self, block and flow-control frame, which is all the block and the call read from it.
             internal bool BlockLiterals;
-            // The frame's $~ when nothing in it reads $~ (IsMatchSink), null otherwise: a light site of one of MatchSinkMethods has
-            // RubyCallFlags.HasMatchSink, and the frame takes the match its call stored into this variable (MakeLightCall).
+            // The frame's sink when nothing in it reads $~ (IsMatchSink), null otherwise: a light site of one of MatchSinkMethods has
+            // RubyCallFlags.HasMatchSink and is given the sink as its scope (MakeLightCall).
             internal MSA.ParameterExpression MatchSlot;
 
             // see LightFrame.MakesCalls
@@ -2321,7 +2349,13 @@ namespace IronRuby.Compiler.Ast {
                 temps[0] = result;
                 MakesCalls = true;
                 // (a LightDynamicExpression takes its builder's arguments: each site gets a copy)
-                var sinkLightArgs = matchSink ? new AstExpressions(lightArgs) : null;
+                AstExpressions sinkLightArgs = null;
+                if (matchSink) {
+                    // the frame's sink, taken at its first such call (RubyOps.TakeMatchSink), in place of the declaring scope
+                    sinkLightArgs = new AstExpressions(lightArgs);
+                    sinkLightArgs[0] = Ast.Coalesce(MatchSlot, Ast.Assign(MatchSlot,
+                        Ast.Call(_TakeMatchSink, AstUtils.Convert(_declaringScope, typeof(RubyScope)))));
+                }
                 var sinkFullArgs = matchSink ? new AstExpressions(fullArgs) : null;
                 var sinkLateArgs = matchSink ? new AstExpressions(fullArgs) : null;
                 body.Add(Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), lightArgs)));
@@ -2332,8 +2366,8 @@ namespace IronRuby.Compiler.Ast {
                 }
                 MSA.Expression value = Ast.Condition(needsScope, AstUtils.LightDynamic(action, typeof(object), fullArgs), result);
                 if (matchSink) {
-                    // The light call stored $~ in a sink scope, and the frame takes it (RubyOps.TakeMatchSink). Once the frame has
-                    // its scope, the call stores $~ there, as an ordinary one does.
+                    // The light call stores $~ in the frame's sink. Once the frame has its scope, the call stores $~ there, as an
+                    // ordinary one does.
                     body.RemoveAt(body.Count - 1);
                     value = Ast.Condition(
                         Ast.NotEqual(_scope, AstUtils.Constant(null, _scope.Type)),
@@ -2342,7 +2376,7 @@ namespace IronRuby.Compiler.Ast {
                             Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), sinkLightArgs)),
                             Ast.Condition(needsScope,
                                 AstUtils.LightDynamic(action, typeof(object), sinkLateArgs),
-                                Ast.Block(Ast.Assign(MatchSlot, Ast.Call(_TakeMatchSink, MatchSlot)), result)
+                                result
                             )
                         )
                     );

@@ -139,6 +139,12 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // A site with RubyCallFlags.HasMatchSink passes the frame's sink, not even the declaring scope: what the call would
+            // read of the scope (refinements) is left to the rule, which then answers RubyOps.LightScopeRequired.
+            if (Signature.HasMatchSink) {
+                return null;
+            }
+
             // Nor can it hold RubyMethodInfo.BuildCallNoFlow's unmarking of a keyword-arguments
             // hash handed to a method that declares no keywords. A call site's syntax decides
             // whether it passes keywords, so seeing one here means every call at this site
@@ -372,7 +378,7 @@ namespace IronRuby.Runtime.Calls {
 
         private const RubyCallFlags SharableCallFlags = RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasRhsArgument |
             RubyCallFlags.HasBlock | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSourceBlock |
-            RubyCallFlags.HasLightScope | RubyCallFlags.HasFreshSplat | RubyCallFlags.HasMatchSink;
+            RubyCallFlags.HasLightScope | RubyCallFlags.HasFreshSplat;
 
         private static readonly object _SharedRulesLock = new object();
         private SharedRule[] _sharedRules;
@@ -777,21 +783,6 @@ namespace IronRuby.Runtime.Calls {
                 }
                 method.Info.BuildCall(metaBuilder, args, methodName);
 
-                // The method stores $~ in a sink scope of the thread's, and the frame takes it from there (RubyOps.EnterMatchSink).
-                var sink = args.MatchSink ? args.MatchSinkVariable : null;
-                if (sink != null && !metaBuilder.Error && metaBuilder.Result != null) {
-                    var result = Ast.Variable(typeof(object), "#result");
-                    metaBuilder.Result = Ast.Block(new[] { sink, result },
-                        Ast.Assign(sink, Ast.Call(_EnterMatchSink, AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)))),
-                        Ast.TryFault(
-                            Ast.Assign(result, AstUtils.Convert(metaBuilder.Result, typeof(object))),
-                            Ast.Call(_AbortMatchSink)
-                        ),
-                        Ast.Call(_LeaveMatchSink),
-                        result
-                    );
-                }
-
                 // MRI 3.4+: a block passed to a method that never uses it may be ignored
                 if (args.Signature.HasSourceBlock && RequiresUnusedBlockCheck(method.Info) && !metaBuilder.Error && metaBuilder.Result != null) {
                     metaBuilder.Result = Ast.Block(
@@ -989,7 +980,7 @@ namespace IronRuby.Runtime.Calls {
         /// A library method of String, Symbol or Regexp (MutableStringOps, SymbolOps, RubyRegexOps): one that takes its caller's
         /// scope to store $~ in it and for the runtime, and for nothing else - not to resolve a call it makes, which goes through
         /// a site of its own without the caller's refinements, as CRuby's rb_funcall does. A site with RubyCallFlags.HasMatchSink
-        /// gives it a sink scope of the thread's (CallArguments.MatchSink). Not while c_call is traced: the rule then reports the
+        /// gives it the frame's sink, its scope argument (CallArguments.MatchSink). Not while c_call is traced: the rule then reports the
         /// call with the caller's scope (RubyLibraryMethodInfo.AddCallTracing), and switching tracing rebinds every rule.
         /// </summary>
         internal static bool IsMatchSinkMethod(RubyContext/*!*/ context, RubyMemberInfo/*!*/ method) {
@@ -1011,9 +1002,6 @@ namespace IronRuby.Runtime.Calls {
             return true;
         }
 
-        private static readonly MethodInfo/*!*/ _EnterMatchSink = typeof(RubyOps).GetMethod("EnterMatchSink");
-        private static readonly MethodInfo/*!*/ _LeaveMatchSink = typeof(RubyOps).GetMethod("LeaveMatchSink");
-        private static readonly MethodInfo/*!*/ _AbortMatchSink = typeof(RubyOps).GetMethod("AbortMatchSink");
 
         internal static MethodResolutionResult Resolve(MetaObjectBuilder/*!*/ metaBuilder, string/*!*/ methodName, CallArguments/*!*/ args,
             out RubyMemberInfo methodMissing) {

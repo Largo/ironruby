@@ -91,16 +91,10 @@ namespace IronRuby.Runtime.Calls {
 
         /// <summary>
         /// Set by RubyCallAction.BuildCall at a site with RubyCallFlags.HasMatchSink once the method is resolved and is one that
-        /// takes the scope only to store $~ (RubyCallAction.IsMatchSinkMethod): the scope the rule gives it is then a sink scope
-        /// of the thread's (RubyOps.EnterMatchSink, in MatchSinkVariable), and reading it is not reading the frame's.
+        /// takes the scope only to store $~ (RubyCallAction.IsMatchSinkMethod): the scope argument is then the frame's sink
+        /// (RubyOps.TakeMatchSink), which the method is given, and reading it is not reading the frame's scope.
         /// </summary>
         internal bool MatchSink;
-        private DynamicMetaObject _sinkScope;
-
-        // The rule's variable for the sink scope, null if the method did not read the scope.
-        internal ParameterExpression MatchSinkVariable {
-            get { return (_sinkScope != null) ? (ParameterExpression)_sinkScope.Expression : null; }
-        }
 
         /// <summary>
         /// The scope argument's expression, for a helper that takes the scope only for its runtime (GetInstanceVariable,
@@ -113,12 +107,8 @@ namespace IronRuby.Runtime.Calls {
         public DynamicMetaObject/*!*/ MetaScope {
             get {
                 if (MatchSink) {
-                    if (_sinkScope == null) {
-                        // (the value is for nothing but the binder's questions, which a sink scope answers as the empty one does)
-                        var empty = ((RubyContext)_context.Value).EmptyScope;
-                        _sinkScope = new DynamicMetaObject(Ast.Variable(typeof(RubyScope), "#sink"), BindingRestrictions.Empty, empty);
-                    }
-                    return _sinkScope;
+                    Debug.Assert(_scope != null && _signature.HasScope);
+                    return _scope;
                 }
                 if (_signature.HasLightScope) {
                     ScopeRead = true;

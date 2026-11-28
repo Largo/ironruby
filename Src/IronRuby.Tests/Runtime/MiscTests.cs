@@ -8178,10 +8178,9 @@ false
         }
 
         /// <summary>
-        /// IR_LIGHT_MATCH_SINK=1 (off by default: run the test with it set to exercise it): a light frame whose regex literals
-        /// go to String and Regexp methods that store $~, in a method that reads no $~ of its own (MethodDefinition.IsMatchSink):
-        /// the caller's $~ is left as it was, in its thread too; a method that reads its $~ ($~, Regexp.last_match, binding)
-        /// sees its match.
+        /// IR_LIGHT_MATCH_SINK: a light frame whose regex literals go to String and Regexp methods that store $~, in a method
+        /// that reads no $~ of its own (MethodDefinition.IsMatchSink): the caller's $~ is left as it was, in its thread too; a
+        /// method that reads its $~ ($~, Regexp.last_match, binding) sees its match.
         /// </summary>
         public void Method_LightFrameMatchSink1() {
             TestOutput(@"
@@ -8221,9 +8220,8 @@ p th.value
         }
 
         /// <summary>
-        /// IR_LIGHT_MATCH_SINK=1 (off by default: run the test with it set to exercise it): the match a light frame's String
-        /// call stores is the frame's alone (RubyOps.TakeMatchSink): once the frame has returned nothing keeps it, or the String
-        /// it matched in - not a scope the runtime shares.
+        /// IR_LIGHT_MATCH_SINK: the match a light frame's String call stores is the frame's alone (RubyOps.TakeMatchSink): once
+        /// the frame has returned nothing keeps it, or the String it matched in - its sink is cleared as it is given back.
         /// </summary>
         public void Method_LightFrameMatchSinkRetention1() {
             TestOutput(@"

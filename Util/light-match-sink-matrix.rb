@@ -1,6 +1,6 @@
 # Differential matrix for the frame-local $~ of a method that runs in a light frame and gives a regex to a String,
 # Symbol or Regexp method that stores $~ (MethodDefinition.IsMatchSink, RubyCallFlags.HasMatchSink,
-# IR_LIGHT_MATCH_SINK=1, off by default). CRuby's rules, which each row checks:
+# IR_LIGHT_MATCH_SINK). CRuby's rules, which each row checks:
 #
 # - $~ is the frame's own: a method's match does not set its caller's $~, and leaves it as it was (nil or a match);
 # - a block sees its method's $~ (and sets it), a lambda too;
@@ -11,15 +11,15 @@
 #   rpartition, byteindex and their bang forms sets $~ (or clears it on no match);
 # - a method calling String#=~ with an object of its own: that object's =~ runs in its own frame.
 #
-# A method that nothing in reads its $~ keeps it in a CLR variable of its light frame, and puts it into the scope if one is
-# made later (RubyOps.TakeMatchSink); rows 8-11 are about that.
+# A method that nothing in reads its $~ keeps it in a sink of its light frame's own, and puts it into the scope if one is
+# made later (RubyOps.TakeMatchSink); rows 8-13 are about that.
 #
 # Every method is called hot (N times) so that its sites are bound and compiled, then once more for the row.
-# Run under CRuby and ./ir.sh (JIT on and off, light frames off, the switch on) and diff:
+# Run under CRuby and ./ir.sh (JIT on and off, light frames off, the switch off) and diff:
 #
 #   ruby Util/light-match-sink-matrix.rb > /tmp/mri.txt
 #   ./ir.sh Util/light-match-sink-matrix.rb > /tmp/ir.txt && diff /tmp/mri.txt /tmp/ir.txt
-#   IR_LIGHT_MATCH_SINK=1 ./ir.sh Util/light-match-sink-matrix.rb > /tmp/on.txt && diff /tmp/mri.txt /tmp/on.txt
+#   IR_LIGHT_MATCH_SINK=0 ./ir.sh Util/light-match-sink-matrix.rb > /tmp/off.txt && diff /tmp/mri.txt /tmp/off.txt
 #
 # Every row must match, and the last line be `end'.
 
@@ -271,5 +271,21 @@ class ProtMatcher
   protected def =~(_) = :protected_called
 end
 row "12. String#=~ with a private =~", [hot { (S.eqt_obj(STR, PrivMatcher.new) rescue $!.class) }, (S.eqt_obj(STR, ProtMatcher.new) rescue $!.class)]
+
+# 13. a method that raises after its match, and methods suspended in Fibers between matches: each frame's $~ its own
+class Raiser
+  def boom(s); s.sub(/b+/, ""); raise ArgumentError, s; end
+  def fib(s, t); a = s.index(/b+/); Fiber.yield a; b = t.index(/c/); [a, b]; end
+end
+rz = Raiser.new
+r = [hot { (rz.boom(STR) rescue $!.message) }, ("zz" =~ /z/; (rz.boom(STR) rescue nil); $~ && $~[0])]
+f1 = Fiber.new { rz.fib("abbc", "xc") }
+f2 = Fiber.new { rz.fib("bb", "ccc") }
+r << f1.resume << f2.resume << f1.resume << f2.resume
+seen = []
+tp4 = TracePoint.new(:raise) { |t| seen << t.binding.eval("$~ && $~[0]") if t.method_id == :boom }
+tp4.enable { rz.boom(STR) rescue nil }
+r << seen
+row "13. raise after the match, Fibers", r
 
 puts "end"
