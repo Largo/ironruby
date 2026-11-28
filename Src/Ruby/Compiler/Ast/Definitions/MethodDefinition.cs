@@ -520,6 +520,12 @@ namespace IronRuby.Compiler.Ast {
         internal static readonly bool LightBlockPassEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCK_PASS") != "0";
 
         /// <summary>
+        /// IR_LIGHT_LITERAL_CALLS=0 sends every call with a block in a light frame whose body has literal blocks through the full
+        /// site with the scope made on demand, as before round thirty-seven (see NarrowLiterals, LightFrameRewriter.LiteralCalls).
+        /// </summary>
+        internal static readonly bool LightLiteralCallsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_LITERAL_CALLS") != "0";
+
+        /// <summary>
         /// IR_LIGHT_SPLAT=0 keeps every method that splats a value (`inner(*args)', `[*a]', `yield(*a)') out of light frames
         /// (see IsScopeFree and LightFrameRewriter.VisitExtension).
         /// </summary>
@@ -991,6 +997,72 @@ namespace IronRuby.Compiler.Ast {
         // Some statement of a light-frame candidate is scope-free only with its literal blocks (see LightFrameRewriter.BlockLiterals).
         private bool HasLightBlockLiteral() {
             return !IsBodyScopeFree(false);
+        }
+
+        /// <summary>
+        /// Every literal block of the body is of the narrow shape (Docs/light-frame-literal-blocks.md): it reads and writes no
+        /// local of an enclosing scope, has no return, yield, super, nested literal or lambda, and calls none of the Kernel
+        /// methods that reach for the frame (binding, eval, local_variables, __method__, __callee__, block_given?, iterator?).
+        /// Its Proc is still made over the frame's scope, made on demand, so a callee that keeps it, a binding taken through
+        /// send and a TracePoint find the method's scope as before; what the shape keeps out is a literal whose own code would
+        /// reach the frame through the scope its call no longer makes.
+        /// </summary>
+        private bool HasOnlyNarrowLiterals() {
+            var checker = new NarrowLiteralChecker();
+            checker.Walk(Body);
+            return checker.Literals > 0 && !checker.Wide;
+        }
+
+        private sealed class NarrowLiteralChecker : Walker {
+            internal bool Wide;
+            internal int Literals;
+            private int _inBlock;
+            private int _blockDepth;
+
+            private static readonly System.Collections.Generic.HashSet<string> FrameMethods = new System.Collections.Generic.HashSet<string> {
+                "binding", "eval", "local_variables", "__method__", "__callee__", "block_given?", "iterator?",
+            };
+
+            public override bool Enter(BlockDefinition/*!*/ node) {
+                Literals++;
+                if (_inBlock > 0) {
+                    Wide = true;
+                    return false;
+                }
+                _inBlock++;
+                _blockDepth = node.DefinedScope.Depth;
+                return true;
+            }
+
+            public override void Exit(BlockDefinition/*!*/ node) {
+                _inBlock--;
+            }
+
+            public override bool Enter(LambdaDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(ClassDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(ModuleDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(SingletonDefinition/*!*/ node) { Wide = true; return false; }
+
+            public override bool Enter(LocalVariable/*!*/ node) {
+                if (_inBlock > 0 && node.DefinitionLexicalDepth < _blockDepth) { Wide = true; }
+                return true;
+            }
+
+            public override bool Enter(ReturnStatement/*!*/ node) { if (_inBlock > 0) { Wide = true; } return true; }
+            public override bool Enter(YieldCall/*!*/ node) { if (_inBlock > 0) { Wide = true; } return true; }
+            // (the walker does not visit a call's block: Walker.Walk(MethodCall) leaves it to whoever asks)
+            public override bool Enter(SuperCall/*!*/ node) {
+                if (_inBlock > 0) { Wide = true; }
+                if (node.Block != null) { node.Block.Walk(this); }
+                return true;
+            }
+
+            public override bool Enter(MethodCall/*!*/ node) {
+                if (_inBlock > 0 && node.Target == null && FrameMethods.Contains(node.MethodName)) { Wide = true; }
+                if (node.Block != null) { node.Block.Walk(this); }
+                return true;
+            }
         }
 
         // Declares keyword parameters, a `**rest' or `**nil'. Not `...', whose signature says `**' but whose lowering is a
@@ -1609,6 +1681,7 @@ namespace IronRuby.Compiler.Ast {
 
             var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, inLoop, HasBlockGuard) {
                 BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral(),
+                LiteralCalls = LightLiteralCallsEnabled && LightBlockPassEnabled && HasOnlyNarrowLiterals(),
                 BlockParameter = LightBlockGivenEnabled ? blockParameter : null,
                 SuperModule = LightSuperEnabled ? ConstantValue(declaringModule) as RubyModule : null,
                 SuperName = _name,
@@ -1670,6 +1743,13 @@ namespace IronRuby.Compiler.Ast {
             // makes none. The scope made on demand has the frame's locals (its tuple, made from the register locals if those are
             // used), self, block and flow-control frame, which is all the block and the call read from it.
             internal bool BlockLiterals;
+
+            // Every literal of the body is of the narrow shape (MethodDefinition.HasOnlyNarrowLiterals): a call with a block takes
+            // the light site as in a body without literals (LightScopeCall), the literal's Proc, made over the scope made on
+            // demand, being its block argument like any other; a rule that reads the caller's scope answers LightScopeRequired and
+            // the call is made again through the full site with that scope. It is the call that no longer makes the scope, not
+            // the literal: a literal's instantiation still does.
+            internal bool LiteralCalls;
 
             // see LightFrame.MakesCalls
             internal bool MakesCalls;
@@ -2136,7 +2216,7 @@ namespace IronRuby.Compiler.Ast {
                 // blocks, whose calls use the scope made on demand (BlockLiterals). The Proc is an argument like the others: the
                 // rules bind it as a block parameter whatever scope they are given, and one that reads the caller's scope answers
                 // RubyOps.LightScopeRequired as for any call.
-                bool blockPass = signature.HasBlock && LightBlockPassEnabled && !BlockLiterals && _rfc != null;
+                bool blockPass = signature.HasBlock && LightBlockPassEnabled && (!BlockLiterals || LiteralCalls) && _rfc != null;
                 if (!signature.HasScope || signature.HasBlock && !blockPass || signature.ResolveOnly || signature.IsSuperCall || signature.IsVirtualCall ||
                     signature.IsInteropCall || signature.HasLightScope) {
                     return null;

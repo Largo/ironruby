@@ -1166,6 +1166,58 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     made twice cost. Nothing was built; the about 800 methods of the census's regex lines stay
     out. A step on them has to make the second call or the late scope cheaper (perf/lsite and
     perf/lsite2 tried the second and were rejected), not the light entry.
+    Round thirty-seven (perf/lazyproc, measured and designed, not built;
+    `Docs/light-frame-literal-blocks.md`): a literal block is this gap's commonest case. A light
+    method calling `nb { }` is 116-123 ns against `nb(&P)`'s 52-62 and CRuby's 35-40. About 15 ns
+    of the difference is the Proc (`nbl` against `nbx`); about 45 is that, in a body with a
+    literal, a call with a block leaves the light site for the full one with the scope made on
+    demand (`blockPass = ... && !BlockLiterals`): the same `nb(&P)` is 108 in a body that also has
+    a literal (`nbx`) and 62 in one without, while a call without a block there stays at 56
+    (`nby`). How those 45 ns divide between the full site, the scope's publication (the frame's
+    exit with a scope, the parking around it) and the object is not measured - no profiler on
+    this host - and decides which of the doc's two changes to build: A, a literal that reads no
+    enclosing local and has no `return`, `binding` or nested literal called through the light
+    site; B, its Proc's scope made but not published as the frame's (no slow exit, no parking,
+    the frame's calls still light), with one scope per invocation and the frame's exit marking it
+    left when the Proc escaped.
+    perf/literalsite (see Landed, not gated) built A and with it the attribution: where the
+    literal runs, its Proc makes the scope anyway and A changes nothing (`nbl` 118 -> 114,
+    overlapping); where it does not, A takes the whole 45 ns (`nbx` 100 -> 56, `nbp`'s 56). So
+    the full site costs about nothing, and the literal's own ~60 ns is the scope made and
+    published (the object, `LeaveLightMethodFrameSlow`, the parking around it) plus the Proc:
+    change B is what is left for `nb { }` and `a.each { }`.
+    perf/procscope then prototyped B for timing (not kept, see Rejected) and it measured nothing
+    to take: publishing the scope costs nothing (`nb { }` 120 -> 120 ns), and an unpublished
+    scope cannot be parked, so `a.each { }` got slower (148 -> 160). The literal's cost is the
+    scope object and the Proc themselves, made or taken parked - which cost the same - and for a
+    callee that yields the conversion and the yield (`ny { 1 }` 164 against CRuby's 54). No step
+    of the frame's bookkeeping is left to cut; what would take it is a block that is not a heap
+    Proc over a heap scope until it escapes, a calling convention of its own.
+    perf/bcc (design only) wrote that convention down: `Docs/block-calling-convention.md`. The
+    cost model per call (`ny { 1 }` 160 ns against CRuby's 50, `a.each { |x| }` 142 against 73;
+    48 bytes with parking, 336 without, the time the same; a block passed on is never parked,
+    358 bytes; a conversion is already faster than CRuby's, 172 against 239), the nine steps
+    IronRuby takes against CRuby's captured block on the caller's frame, a block descriptor
+    (self, dispatcher, the frame's tuple and header, the Proc made only on escape) and every
+    way it escapes, and stages: 0, attribution of the ~100 ns among the nine steps on a host
+    with perf, which decides the rest; A, `[BlockNotKept]` library iterators with narrow
+    literals; B, Ruby methods that only yield; C, pass-on; D, literals that read the frame's
+    locals - each with its matrix and an upper bound.
+    perf/stage0 measured it (`Src/IronRuby.Tests/Perf/BlockCostHarness.cs`, `IronRuby.Tests
+    /blockcost`): the steps the compiled code calls, timed alone and together against the same
+    calls end to end. A literal costs 50-54 ns over a stored Proc (`nyl` - `nyp`, `e1` - `ep`),
+    and the parked cycle with the locals tuple is 52: the literal's cost is the parked cycle,
+    about 16 ns of it its two atomics (one `CompareExchange` 10.4 ns here, a `Volatile.Write`
+    2.5). Passing any block and yielding costs another 55-63 ns, of which the yield is 16 and
+    the call site, rule and frames around it 35-45, which the convention does not reach.
+    Stage A pays most per round (up to ~50 ns of `e1`); the park's compare-exchange as a release
+    write is a step of its own, about 8 ns per call (perf/iter3 could not see it end to end).
+    perf/endpark took that step (see Landed): the harness's take-and-park 24 -> 16 ns, end to end
+    within the noise.
+    perf/stagea simulated stage A in the harness before building it and found nothing to build (see
+    Rejected): the descriptor's per-call fill costs what the parked cycle costs, `e1`'s steps 44 ns
+    parked against 46-61 as a descriptor. The literal's 45-50 ns end to end is not in one runtime step.
+
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -1948,6 +2000,54 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   Start-up on the R2R host, best of ten alternating, two runs, base -> new ms: `-e 1` 497 -> 506 and
   502 -> 471, `gem --version` 590 -> 572 and 577 -> 590, `gem list` 1006 -> 989 and 977 -> 982,
   `require "irb"` 1029 -> 1005 and 984 -> 992, irb 1+1 1133 -> 1071 and 1065 -> 1066: level.
+- **perf/endpark (round thirty-seven, 2026-11-28) - EndPark publishes the parked scope with a release
+  write, not a compare-exchange (gap 13)** - time, not gated. Stage 0 found the parked cycle's two atomics
+  about 16 ns of a literal's 50, one `CompareExchange` 10.4 ns here against a `Volatile.Write`'s 2.5. The
+  take stays an exchange; the park is now `Volatile.Write(ref slot.Parked, parked)`. Why it is sound: the
+  write is a release, so the scope, its tuple and the staged Procs written before it are visible to a
+  taker whose exchange finds the object. The object being published is held by this call alone (taken by
+  exchange from the slot or from Spare, or new), so no two parkers can publish the same one. What the
+  write overwrites is a scope another call parked meanwhile: it is dropped, and a taker that had read it
+  fails its exchange and makes a scope of its own - the old code dropped the newer one instead, the same
+  loss. A dropped object never comes back, since only its holder publishes. Exclusion was the take's
+  exchange all along: one parked object never reaches two frames. `IR_PARK_WRITE=0` is the old code.
+  Harness (`IronRuby.Tests /blockcost`), ns: take+park (P1) 24 -> 16, the `e1` steps together 50-52 ->
+  40-42, `nyl`'s 67 -> 63-65. End to end, `ab.rb -r 10` off/on, ns per call: `nyl` 151.8/151.3,
+  `eachl` 135.8/131.6, `each1` 153.7/156.7, `map1` 174.2/175.4, `times1` 161.2/157.5, `call` (no literal)
+  60.0/61.9, `nb0` 39.9/39.9 - all within the spread, as perf/iter3 found for 8 ns. Checked: parked-scope
+  (with its two-thread rows), block-scope-reuse (and its race), block-nest-reuse, nested-proc and
+  parked-iterator in the six modes and with the switch off: PASS, 42 same; block-scope-reuse-race ten runs
+  alone, stale 0 leaked 0 every time; sixteen threads calling one parking method (`each` and `map`
+  literals that read and write the frame's locals, a `Thread.pass` in the block) for 90 s with the JIT
+  and 90 s without, 104 million calls each, and 30 s with the switch off: every result right.
+
+- **perf/literalsite (round thirty-seven, 2026-11-27) - a call with a block in a light frame whose
+  literals are all narrow takes the light site (gaps 16 and 13)** - instructions not counted, time and
+  bytes, not gated. Change A of `Docs/light-frame-literal-blocks.md`. In a light body with literal blocks
+  every call with a block took the full site with the scope made on demand (`blockPass = ... &&
+  !BlockLiterals`), so `return nb(&P) if a; nb { }` made a scope on the hot path, which never reaches the
+  literal. Now, when every literal of the body is of the narrow shape (`HasOnlyNarrowLiterals`: no
+  enclosing local read or written, no return, yield, super, nested literal, lambda, def or class body,
+  no call of binding, eval, local_variables, __method__, __callee__, block_given?, iterator? - the AST
+  walker does not visit a call's block, so the checker walks it), such a call takes the `HasLightScope`
+  site as in a body without literals, with LightScopeRequired sending it to the full site with the scope
+  as before; a literal's Proc is still made over the scope made on demand. `IR_LIGHT_LITERAL_CALLS=0` is
+  the old code. Six alternating rounds against the switch off, ns per call: `nbx` 100 -> 56 (CRuby 44),
+  `nbp` 56 -> 56, `nby` 52 -> 48, `nbl` 118 -> 114, `eachl` 138 -> 140, `each1` 159 -> 162, `times1` 164 ->
+  157, `map1` 167 -> 172, `call` 59 -> 60 (all but `nbx` overlapping); bytes a call with parking off, `nbx`
+  208 -> 24. What it measured is the point (see gap 16): the full site is not where a literal's cost is.
+  Checked: `Util/literal-block-light-matrix.rb` (new: the narrow shape to a light method, each, times,
+  map; escape through `&b` kept and called after the method returned, `define_method`, `Kernel.proc`,
+  `lambda`, the kept Proc's `binding.local_variables`; break with an ensure, next, raise, throw; the
+  callee taking `binding`, `send(:binding)` in the literal, `local_variables`, `__method__`, `$~` set
+  through `send`, `eval` in the method, a private callee, `block_given?`; recursion, re-entrancy, four
+  threads; six bodies that are not of the shape; TracePoint `:call`/`:b_call`/`:c_call` and a `:b_call`
+  binding) with CRuby's output on both builds and with the switch off; with it block-pass, block-given,
+  parked-scope, block-scope-reuse (three), block-nest-reuse, light-entry, light-rest, parked-iterator,
+  hot-shapes and jit in the seven modes and the switch off: PASS, 91 same. ruby/spec language/block,
+  proc, return and core/proc: 496 examples, no failure on either build. IronRuby.Tests in full on a
+  Debug build: one failure, `Fiber_ThreadRaiseInSwitchBookkeeping1`, run while the specs loaded the
+  host; alone it passed five times of five (three of three on the baseline).
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
@@ -7448,6 +7548,46 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/stagea (round thirty-seven, 2026-11-28) - stage A of `Docs/block-calling-convention.md`, a narrow
+  literal given to a `[BlockNotKept]` iterator as a block descriptor: simulated, not built** (gap 13).
+  Before the matrix or the compiler work, the harness (`IronRuby.Tests /blockcost`, now with bytes per
+  iteration) timed what `e1`'s call would do with a descriptor: the literal's Proc taken from a slot by the
+  thread that owns it with plain reads and writes (no atomic), its scope never made, a frame header filled
+  with what the scope would be made from on demand (shape, declaring scope and module, the locals tuple,
+  self, block, rfc, callee), the `[BlockNotKept]` yield, and the Proc given back cleared. Best of five,
+  3,000,000 iterations, two runs, ns per call: `e1`'s steps parked (as now, after perf/endpark) 40-44;
+  as a descriptor with the full header 57-62; with only the header fields that change per call stored
+  (the tuple and the rfc; the rest compared first) 41-47; with no header at all 29-33, and that floor
+  holds the yield's 15 alone. A header is needed (a `send(:binding)` in the block must see the method's
+  locals, so the tuple stays, and the scope made from it needs the rest), and filling it is reference
+  stores into a heap object, each a GC write barrier: the same work the parked scope's reinitialization
+  (`ReuseParkedScopeLazy`, 6 ns) and the cycle's clearing do. The stage-0 bound (~50 ns of `e1`) took the
+  descriptor's fill as free. End to end the literal's cost sits elsewhere too: `ept`, `ep` with a narrow
+  literal in a branch never taken, is 100-102 ns against `ep`'s 90-92 and `e1`'s 145-151, so having a
+  literal costs the frame 10 ns (its tuple, the park checks) and evaluating it 45-49, of which the
+  runtime steps the descriptor would replace are about 29 (44 less the yield's 15) and the rest the
+  compiled code around the instantiation. What would pay is the block reaching the caller's state where
+  it is, CRuby's captured `ep`, without copying it into a heap object per call; the DLR's call sites pass
+  objects, not references into a frame. Stages B and D carry the same fill (B: `nyl`'s steps 68-73 hold
+  the same cycle). Left as they were: the code; the harness keeps the simulated rows.
+
+- **perf/procscope (round thirty-seven, 2026-11-28) - a literal's Proc over a scope made but not
+  published as the frame's (change B of `Docs/light-frame-literal-blocks.md`): prototyped, measured,
+  not kept** (gaps 16 and 13). A timing prototype (`IR_PROC_SCOPE=1`): for a body whose literals are all
+  narrow, the literal's instantiation took `#proc-scope ?? (#proc-scope = MakeScope)` instead of the
+  frame's scope made on demand, and the frame's own scope on demand took `#proc-scope` if it existed, so
+  `#scope` stayed null, the frame left through the inlined fast path and did not park. Six alternating
+  rounds, ns per call, off against prototype (CRuby): `nb { }` 120 / 120 (40), `ny { 1 }` 164 / 169 (54),
+  `a.each { }` 148 / 160, 1.08 (70), `a.map { |x| x + 1 }` 193 / 198 (117), controls level. Publishing
+  is not the cost, and an unpublished scope gives up parking. With perf/literalsite (the site is not it
+  either), what a literal costs its caller is the scope object and the Proc themselves; the frame's
+  bookkeeping around them has nothing left to cut. So the escape hazards the round was to build for (a
+  LightScopeRequired after the Proc was made, binding in a callee after an escape, the kept Proc called
+  after the return, two literals sharing `#proc-scope`, threads, a TracePoint enabled mid-call) got no
+  matrix: the prototype ran only `Util/literal-block-light-matrix.rb` (CRuby's output) as a smoke test.
+  Found on the side: `def nb; 1; end; nb { }` allocates 288 bytes a call with parking on, where a callee
+  that yields gets 48: a literal given to a method that never touches its block is never parked.
 
 - **perf/dotsfwd (/perf-frame, 2026-11-27) - `...` forwarding without the rest Array: stopped
   before building, the forwarded values are reachable after the call** (no code; on bbe4b1a,

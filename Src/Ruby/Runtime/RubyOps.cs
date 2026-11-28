@@ -392,6 +392,9 @@ namespace IronRuby.Runtime {
         /// Parks the scope with the staged Procs, cleared of the call that ended; or, if a Proc may be held or another call
         /// parked first, keeps the emptied ParkedProcs for the next.
         /// </summary>
+        // IR_PARK_WRITE=0: EndPark publishes with a compare-exchange, as before round thirty-seven's perf/endpark.
+        internal static readonly bool ParkByWrite = Environment.GetEnvironmentVariable("IR_PARK_WRITE") != "0";
+
         [Emitted]
         public static void EndPark(ParkedScopeSlot/*!*/ slot, ParkedProcs/*!*/ parked, RubyScope/*!*/ scope, bool procsParkable) {
             if (procsParkable) {
@@ -405,6 +408,15 @@ namespace IronRuby.Runtime {
                 methodScope.ClearCallState();
                 parked.Scope = methodScope;
                 parked.ThreadId = Environment.CurrentManagedThreadId;
+                if (ParkByWrite) {
+                    // A release write, not an exchange: everything above is visible to the taker whose exchange finds this
+                    // object. What the slot held is dropped - a scope another call parked meanwhile, which nothing uses; a
+                    // taker that read it before this write fails its exchange and makes a scope of its own - and cannot come
+                    // back, since only a parker publishes, and only an object it holds alone (taken by exchange, from Spare by
+                    // exchange, or new). The take stays an exchange: it is what keeps one parked scope out of two frames.
+                    Volatile.Write(ref slot.Parked, parked);
+                    return;
+                }
                 if (Interlocked.CompareExchange(ref slot.Parked, parked, null) == null) {
                     return;
                 }
