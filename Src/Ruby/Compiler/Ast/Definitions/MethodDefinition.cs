@@ -1413,10 +1413,12 @@ namespace IronRuby.Compiler.Ast {
                 // Range#initialize checks the stack before the <=> it calls for bounds that are not two Integers. Not in a body
                 // with literal blocks: its light frame makes the scope before the Proc all the same, and SOM's
                 // `def each; (@first..(@last - 1)).each { |i| yield @s[i] }; end' was 5-7% slower per call as one than with
-                // the scope made on entry (`(a..b)' kept such a body out of light frames until then).
+                // the scope made on entry (`(a..b)' kept such a body out of light frames until then). Unless the block such a
+                // light frame is given stays reusable when its scope is parked (Proc.HeldFlag): a method with a scope converts
+                // its block for good, so its caller, Havlak's `contains' and `find_set', could not park its own scope and Proc.
                 var range = node as RangeExpression;
                 if (range != null) {
-                    if (blockLiterals) {
+                    if (blockLiterals && !IronRuby.Builtins.Proc.ScopeHeldBlocksEnabled) {
                         return Refuse(why, "RangeExpression in a body with literal blocks");
                     }
                     return IsScopeFree(range.Begin, false, why) && IsScopeFree(range.End, false, why);

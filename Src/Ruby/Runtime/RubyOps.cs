@@ -316,7 +316,7 @@ namespace IronRuby.Runtime {
 
             // (as CreateMethodScopeLazy: the scope holds the block, and whatever asked for the scope may keep it)
             if (blockParameter != null) {
-                blockParameter.ClearReusable();
+                blockParameter.HoldForScope();
             }
             var scope = parked.Scope;
             scope.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, rfc, calleeName);
@@ -422,6 +422,8 @@ namespace IronRuby.Runtime {
                     proc?.ClearForPark();
                 }
                 var methodScope = (RubyMethodScope)scope;
+                // nothing kept the scope (BeginPark) nor a Proc of it (StageParkedProc): nor the block it held (Proc.HeldFlag)
+                methodScope.BlockParameter?.ReleaseHold();
                 methodScope.ClearCallState();
                 parked.Scope = methodScope;
                 parked.ThreadId = Environment.CurrentManagedThreadId;
@@ -566,9 +568,9 @@ namespace IronRuby.Runtime {
             RubyModule/*!*/ declaringModule, MutableTuple locals, object selfObject, Proc blockParameter,
             InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
 
-            // the scope holds the block, and whatever asked for the scope may keep it
+            // the scope holds the block, and whatever asked for the scope may keep it - until the scope is parked (Proc.HeldFlag)
             if (blockParameter != null) {
-                blockParameter.ClearReusable();
+                blockParameter.HoldForScope();
             }
             return new RubyMethodScope(shape, parentScope, declaringModule, locals, selfObject, blockParameter,
                 interpretedFrame, rfc, calleeName);
