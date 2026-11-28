@@ -999,7 +999,7 @@ namespace IronRuby.Runtime.Jit {
             if (code.Resume != null) { code.Resume.Specialization = spec; }
             spec.Entry = CompileEntry(BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec));
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
-                _keywords.Count <= JitKeywordCall.MaxKeywords) {
+                _keywords.Count <= JitKeywordCall.MaxKeywords && !_keywords.HasRest) {
                 spec.Direct = BuildDirectEntry(code, callee, version, spec).Compile();
             }
 
@@ -1396,7 +1396,7 @@ namespace IronRuby.Runtime.Jit {
                     values[_positional + j] = keywordValues[j] = Ast.Variable(typeof(object), "kw" + j);
                 }
                 var info = Ast.Constant(_keywords, typeof(object));
-                if (keywordValues.Length <= 3) {
+                if (keywordValues.Length <= 3 && !_keywords.HasRest) {
                     // match and bind in one call, the values coming back through out parameters
                     var readArgs = new MSA.Expression[keywordValues.Length + 2];
                     readArgs[0] = info;
@@ -1405,7 +1405,8 @@ namespace IronRuby.Runtime.Jit {
                     test = And(test, Ast.Call(JitRuntime.M("KeywordsRead" + keywordValues.Length), readArgs));
                 } else {
                     test = And(test, Ast.Call(JitRuntime.M("KeywordsMatch"), info, kw));
-                    for (int j = 0; j < keywordValues.Length; j++) {
+                    // the **rest is bound once every guard has passed (below)
+                    for (int j = 0; j < keywordValues.Length - (_keywords.HasRest ? 1 : 0); j++) {
                         test = And(test, Ast.Block(
                             Ast.Assign(keywordValues[j], Ast.Call(JitRuntime.M("KeywordValue"), info, kw, Ast.Constant(j))),
                             Ast.Constant(true)));
@@ -1438,6 +1439,15 @@ namespace IronRuby.Runtime.Jit {
             }
 
             MSA.Expression fast = Ast.Invoke(callee, typedArgs);
+            if (keywordValues != null && _keywords.HasRest) {
+                // The **rest, now that the typed body is going to run: the call's own hash taken over, as the generic body
+                // takes it, unless the body can deopt into the generic body, which binds the parameters from that hash again.
+                fast = Ast.Block(
+                    Ast.Assign(keywordValues[keywordValues.Length - 1], Ast.Call(JitRuntime.M("KeywordRest"),
+                        Ast.Constant(_keywords, typeof(object)), args[_positional], Ast.Constant(!code.CanDeopt))),
+                    fast
+                );
+            }
             if (code.ReturnType == JT.Lng) {
                 // The one place a specialized method's value becomes a Ruby object: it leaves
                 // through the representation funnel, so a result that fits in an Int32 is one.

@@ -26,11 +26,18 @@
  * the entry fills in. Any other default (`b: a + 1', `list: []') is left to the typed body: the
  * entry hands it RubyOps.DefaultArgument for an omitted one, and the body evaluates the default
  * itself, in declaration order, before its own statements (JitCompiler.EmitKeywordDefaults) - unless
- * the default assigns a local, which could be a keyword bound after it. **rest is not recognized:
- * such a method is never wrapped.
+ * the default assigns a local, which could be a keyword bound after it.
+ *
+ * A **rest after the keywords (`o = Rest(?kw?, names)' ending the prologue, IR_JIT_KWREST) is one
+ * more keyword slot, the last: the Match accepts keys it does not name, and the slot's value is a
+ * copy of the hash without the declared keywords - not the hash itself, as RubyOps.MakeKeywordRest
+ * takes it in the generic body: a guard that fails after it, or a deopt, runs the generic body,
+ * which binds the parameters from that hash again. The copy has no effect, so it is made with
+ * the other values, in the entry's guard.
  *
  * ***************************************************************************/
 
+using System;
 using System.Collections.Generic;
 using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
@@ -65,6 +72,13 @@ namespace IronRuby.Runtime.Jit {
         }
 
         internal int Count { get { return LocalNames.Length; } }
+
+        // A **rest parameter, bound in the last slot (its local is the last of LocalNames); its Symbols entry is null.
+        internal bool HasRest;
+        private RubyContext _context;
+
+        /// <summary>IR_JIT_KWREST=0: a method with keywords and **rest is not recognized, and so never wrapped, as before.</summary>
+        internal static readonly bool KwRestEnabled = System.Environment.GetEnvironmentVariable("IR_JIT_KWREST") != "0";
 
         // The optional positional parameters before the keyword hash (Parameters.KeywordsAfterOptionals):
         // `def m(a, b = 1, k: 2)' has one. Each has a literal default (OptionalDefaults); a call that
@@ -130,25 +144,25 @@ namespace IronRuby.Runtime.Jit {
                 break;
             }
 
-            // unless KeywordArgumentsMatch(?kw?, names, required, false) ... end
+            // unless KeywordArgumentsMatch(?kw?, names, required, false) ... end - which a signature with **rest and no
+            // required keyword has not: it has nothing to check (PrismAstBridge.BindKeywordsFrom)
             if (i >= n) { return null; }
             var matchStmt = statements[i] as UnlessExpression;
-            if (matchStmt == null || matchStmt.ElseClause != null) { return null; }
-            var match = matchStmt.Condition as KeywordParameterRead;
-            if (match == null || !match.IsMatch || match.AcceptsRest || !IsVar(match.Keywords, kwVar)) { return null; }
-            i++;
-
-            var names = match.Names;
-            if (names.Length == 0 || names.Length > MaxKeywords) { return null; }
+            KeywordParameterRead match = null;
+            if (matchStmt != null) {
+                if (matchStmt.ElseClause != null) { return null; }
+                match = matchStmt.Condition as KeywordParameterRead;
+                if (match == null || !match.IsMatch || match.AcceptsRest && !KwRestEnabled || !IsVar(match.Keywords, kwVar)) { return null; }
+                i++;
+            } else if (!KwRestEnabled) {
+                return null;
+            }
+            bool acceptsRest = (match == null) || match.AcceptsRest;
 
             var result = new JitKeywords();
             result.OptionalPositionals = optionalPositionals;
             result.OptionalDefaults = optionalDefaults;
-            result.RequiredCount = match.RequiredCountOrPosition;
-            result.MatchNames = new RubySymbol[names.Length];
-            for (int j = 0; j < names.Length; j++) {
-                result.MatchNames[j] = context.CreateSymbol(names[j], match.Encoding);
-            }
+            result.RequiredCount = (match != null) ? match.RequiredCountOrPosition : 0;
 
             // k = <read>, one per declared keyword, in declaration order
             var locals = new List<string>();
@@ -193,12 +207,52 @@ namespace IronRuby.Runtime.Jit {
                 defaultExprs.Add(defaultExpr);
                 i++;
             }
+            // without a Match, the names are the ones the bindings read, none of them required
+            string[] names;
+            if (match != null) {
+                names = match.Names;
+            } else {
+                names = new string[locals.Count];
+                for (int j = 0; j < names.Length; j++) {
+                    if (required[j]) { return null; }
+                    names[j] = symbols[j].ToString();
+                }
+            }
+            if (names.Length > MaxKeywords || names.Length == 0 && !acceptsRest) { return null; }
+            result.MatchNames = new RubySymbol[names.Length];
+            for (int j = 0; j < names.Length; j++) {
+                result.MatchNames[j] = (match != null) ? context.CreateSymbol(names[j], match.Encoding) : symbols[j];
+            }
             if (locals.Count != names.Length) { return null; }
+
+            // o = Rest(?kw?, names): the **rest, after the keywords, of every declared name
+            if (acceptsRest) {
+                var restBind = (i < n) ? statements[i] as SimpleAssignmentExpression : null;
+                var restRead = (restBind != null && restBind.Operation == null) ? restBind.Right as KeywordParameterRead : null;
+                var restLocal = (restBind != null) ? restBind.Left as LocalVariable : null;
+                if (restRead == null || !restRead.IsRest || !IsVar(restRead.Keywords, kwVar) || restLocal == null ||
+                    restLocal.DefinitionLexicalDepth != ast.DefinedScope.Depth || restRead.Names.Length != names.Length) {
+                    return null;
+                }
+                for (int j = 0; j < names.Length; j++) {
+                    if (Array.IndexOf(result.MatchNames, context.CreateSymbol(restRead.Names[j], restRead.Encoding)) < 0) { return null; }
+                }
+                locals.Add(restLocal.Name);
+                symbols.Add(null);
+                positions.Add(-1);
+                defaults.Add(null);
+                required.Add(false);
+                defaultExprs.Add(null);
+                result.HasRest = true;
+                result._context = context;
+                i++;
+            }
 
             // every name Match checks is one a binding reads, and vice versa
             for (int j = 0; j < names.Length; j++) {
                 if (!symbols.Contains(result.MatchNames[j])) { return null; }
             }
+            if (!acceptsRest && i < n && statements[i] is SimpleAssignmentExpression tail && tail.Right is KeywordParameterRead) { return null; }
 
             result.PrologueLength = i;
             result.LocalNames = locals.ToArray();
@@ -242,11 +296,28 @@ namespace IronRuby.Runtime.Jit {
         internal bool Matches(object kw) {
             if (kw == RubyOps.DefaultArgument) { return RequiredCount == 0; }
             var hash = kw as Hash;
-            return hash != null && hash.IsKeywordArguments && hash.HasKeywords(MatchNames, RequiredCount, false);
+            return hash != null && hash.IsKeywordArguments && hash.HasKeywords(MatchNames, RequiredCount, HasRest);
+        }
+
+        /// <summary>
+        /// The **rest, given <see cref="Matches"/>: what RubyOps.MakeKeywordRest binds. <paramref name="take"/>: the call's
+        /// own hash itself, as the generic body takes it - only once every guard of the entry has passed, for a typed body
+        /// that cannot deopt, since a failed guard or a deopt runs the generic body, which binds the parameters from that
+        /// hash again; otherwise a copy (see the top of this file).
+        /// </summary>
+        internal object Rest(object kw, bool take) {
+            var hash = kw as Hash;
+            if (hash == null) {
+                return new Hash(_context.EqualityComparer);
+            }
+            return take ? RubyOps.MakeKeywordRest(hash, MatchNames) : hash.CopyWithoutKeywords(MatchNames);
         }
 
         /// <summary>What the prologue binds keyword <paramref name="index"/> to, given <see cref="Matches"/>.</summary>
         internal object Value(object kw, int index) {
+            if (HasRest && index == Count - 1) {
+                return Rest(kw, false);
+            }
             object v = RubyOps.GetKeywordArgument(kw, Symbols[index], Positions[index]);
             return (v == RubyOps.DefaultArgument) ? Defaults[index] : v;
         }

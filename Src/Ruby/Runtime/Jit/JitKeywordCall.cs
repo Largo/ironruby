@@ -319,7 +319,8 @@ namespace IronRuby.Runtime.Jit {
         /// method whose prologue binds this call's arguments without complaint.
         /// </summary>
         private bool BindStub(State/*!*/ state, JitStub stub) {
-            if (stub == null || stub.Keywords == null) { return false; }
+            // a **rest is bound from the hash the call makes (JitKeywords.HasRest): no direct entry
+            if (stub == null || stub.Keywords == null || stub.Keywords.HasRest) { return false; }
 
             // The call passes every mandatory positional and, of the optional ones, a leading run;
             // the rest get their literal defaults here, as the entry would fill them in.

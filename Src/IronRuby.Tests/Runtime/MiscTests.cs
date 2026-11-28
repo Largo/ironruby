@@ -8711,6 +8711,43 @@ true
         }
 
         /// <summary>
+        /// Keyword methods with **rest in the method JIT (JitKeywords.HasRest, IR_JIT_KWREST), run hot: a guard that fails after
+        /// warm-up, a body that deopts (an overflow) and a missing keyword run the generic body, which binds from an intact
+        /// hash; the typed body's **rest is the call's own hash only when it cannot deopt. Expected output from CRuby 4.0.
+        /// </summary>
+        public void Method_KeywordRestJit1() {
+            TestOutput(@"
+def jr_req(k:, **o) = k + o.size
+def jr_opt(a, k: 1, **o) = [a + k, o]
+def jr_only(**o) = o
+def jr_mut(k: 0, **o) = (o[:added] = k; o)
+def jr_def(a, k: a * 2, j: 5, **o) = [k, j, o]
+seen = []
+3000.times do |i|
+  r = [
+    (jr_req(k: i == 2900 ? ""s"" : 1, z: 1) rescue $!.class),
+    jr_req(k: i == 2950 ? 2**62 + 2**62 - 1 : 1),
+    ((i == 2990 ? jr_req(z: 1) : jr_req(k: 1)) rescue $!.message),
+    jr_opt(i == 2900 ? 1.5 : 1, k: 2, z: 3),
+    jr_only(**(i.even? ? {a: 1} : {})),
+    (jr_only({a: 1}) rescue $!.message),
+    jr_def(3), jr_def(3, k: 1, z: 9)
+  ]
+  h = {k: 1, z: 2}; m = jr_mut(**h); r << m << h
+  a = jr_only(a: 1); b = jr_only(a: 1); a[:x] = 1; r << b
+  seen << r unless seen.include?(r)
+end
+seen.each { |r| p r }
+", @"
+[2, 1, 1, [3, {z: 3}], {a: 1}, ""wrong number of arguments (given 1, expected 0)"", [6, 5, {}], [1, 5, {z: 9}], {z: 2, added: 1}, {k: 1, z: 2}, {a: 1}]
+[2, 1, 1, [3, {z: 3}], {}, ""wrong number of arguments (given 1, expected 0)"", [6, 5, {}], [1, 5, {z: 9}], {z: 2, added: 1}, {k: 1, z: 2}, {a: 1}]
+[TypeError, 1, 1, [3.5, {z: 3}], {a: 1}, ""wrong number of arguments (given 1, expected 0)"", [6, 5, {}], [1, 5, {z: 9}], {z: 2, added: 1}, {k: 1, z: 2}, {a: 1}]
+[2, 9223372036854775807, 1, [3, {z: 3}], {a: 1}, ""wrong number of arguments (given 1, expected 0)"", [6, 5, {}], [1, 5, {z: 9}], {z: 2, added: 1}, {k: 1, z: 2}, {a: 1}]
+[2, 1, ""missing keyword: :k"", [3, {z: 3}], {a: 1}, ""wrong number of arguments (given 1, expected 0)"", [6, 5, {}], [1, 5, {z: 9}], {z: 2, added: 1}, {k: 1, z: 2}, {a: 1}]
+");
+        }
+
+        /// <summary>
         /// A method's keyword prologue (PrismAstBridge.LowerKeywords): which error wins when several things are wrong at once,
         /// and defaults run in order and only for omitted keywords (Util/kw-prologue-matrix.rb).
         /// </summary>
