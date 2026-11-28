@@ -39,7 +39,7 @@ class BcO
   def e1(a); a.each { |x| }; 1; end
   def e0(a); 1; end
   def ep(a); a.each(&PE); 1; end
-  def ept(a); return a.each { |y| } if a.nil?; a.each(&PE); 1; end
+  def ept(a); return a.each { |y| } unless a; a.each(&PE); 1; end
   def nyp(a) = ny(&PY)
   def grab(&b) = b
   def lit1 = grab { 1 }
@@ -438,13 +438,15 @@ def bc_run_nyp(o, a, n); i = 0; while i < n; o.nyp(a); i += 1; end; end
             engine.Execute(String.Format("bc_run_{0}(BcO.new, [1], {1})", name, n / 10));
             double best = Double.MaxValue;
             string code = String.Format("bc_run_{0}(BcO.new, [1], {1})", name, n);
+            long bytes0 = GC.GetAllocatedBytesForCurrentThread();
             for (int round = 0; round < 5; round++) {
                 var sw = Stopwatch.StartNew();
                 engine.Execute(code);
                 sw.Stop();
                 best = Math.Min(best, sw.Elapsed.TotalMilliseconds * 1e6 / n);
             }
-            Console.WriteLine("  {0,-80} {1,7:F1} ns", "end to end: " + name + " (the caller's while loop included)", best);
+            Console.WriteLine("  {0,-80} {1,7:F1} ns {2,4} B", "end to end: " + name + " (the caller's while loop included)", best,
+                (GC.GetAllocatedBytesForCurrentThread() - bytes0) / (5L * n));
         }
     }
     // perf/stagea's simulation of a block descriptor (Docs/block-calling-convention.md, "Stage A, simulated"): what the

@@ -305,7 +305,8 @@ namespace IronRuby.Compiler.Ast {
                 optionalsInitialization = AstUtils.Empty();
             }
             if (allowLightFrame && LightFramesEnabled && definitionRefinements == null && gen.Profiler == null && !gen.TraceEnabled &&
-                !gen.CompilerOptions.IsEval && !scope.HasClosures && IsLightFrameCandidate()) {
+                !gen.CompilerOptions.IsEval && !scope.HasClosures && IsLightFrameCandidate() &&
+                !(LightStraightLiteralEnabled && EvaluatesLiteralOnEveryCall())) {
                 light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
                     visiblePrameterCountAndSignatureFlags, parkSlot, ref statements);
             }
@@ -524,6 +525,12 @@ namespace IronRuby.Compiler.Ast {
         /// site with the scope made on demand, as before round thirty-seven (see NarrowLiterals, LightFrameRewriter.LiteralCalls).
         /// </summary>
         internal static readonly bool LightLiteralCallsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_LITERAL_CALLS") != "0";
+
+        /// <summary>
+        /// IR_LIGHT_STRAIGHT_LITERAL=0 lets a body that evaluates a literal block on every call run in a light frame, as before round
+        /// thirty-seven's perf/literalcode (see EvaluatesLiteralOnEveryCall).
+        /// </summary>
+        internal static readonly bool LightStraightLiteralEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_STRAIGHT_LITERAL") != "0";
 
         /// <summary>
         /// IR_LIGHT_SPLAT=0 keeps every method that splats a value (`inner(*args)', `[*a]', `yield(*a)') out of light frames
@@ -992,6 +999,68 @@ namespace IronRuby.Compiler.Ast {
             var defined = unless.Condition as IsDefinedExpression;
             var yieldCall = (defined != null) ? defined.Expression as YieldCall : null;
             return yieldCall != null && yieldCall.Arguments == null && yieldCall.Block == null;
+        }
+
+        /// <summary>
+        /// A statement of the body evaluates a literal block, and no statement before it can return: every call that returns
+        /// normally makes the literal's Proc, and with it the scope. Such a body runs faster with its scope made at entry (taken
+        /// parked) than in a light frame that makes it on demand from the literal: `def e1(a); a.each { |x| }; 1; end' 139 ns
+        /// against 116 a call, `each { |x| s += x }', map, times, `nb { }' 8-19% (perf/literalcode). The light frame stays for
+        /// a body whose literal is behind a return or a condition (`return nb(&P) if a; nb { }'), where it saves the scope.
+        /// </summary>
+        private bool EvaluatesLiteralOnEveryCall() {
+            var statements = (Body != null) ? Body.Statements : null;
+            if (statements == null) {
+                return false;
+            }
+            foreach (var statement in statements) {
+                if (EvaluatesLiteral(statement)) {
+                    return true;
+                }
+                var returns = new ReturnFinder();
+                statement.Walk(returns);
+                if (returns.Found) {
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        // Whether evaluating the expression evaluates a literal block whatever its values: a call with one, or such a call as the
+        // receiver or an argument of a call, or the right-hand side of an assignment that always evaluates it.
+        private static bool EvaluatesLiteral(Expression expression) {
+            switch (expression) {
+                case MethodCall call:
+                    if (call.Block is BlockDefinition) {
+                        return true;
+                    }
+                    if (call.Target != null && EvaluatesLiteral(call.Target)) {
+                        return true;
+                    }
+                    if (call.Arguments != null) {
+                        foreach (var argument in call.Arguments.Expressions) {
+                            if (EvaluatesLiteral(argument)) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                case SimpleAssignmentExpression assignment:
+                    return assignment.Operation != Symbols.And && assignment.Operation != Symbols.Or &&
+                        EvaluatesLiteral(assignment.Right);
+                default:
+                    return false;
+            }
+        }
+
+        private sealed class ReturnFinder : Walker {
+            internal bool Found;
+            public override bool Enter(ReturnStatement/*!*/ node) { Found = true; return false; }
+            // (the walker does not visit a call's block, where a return would leave the method too)
+            public override bool Enter(MethodCall/*!*/ node) {
+                if (node.Block is BlockDefinition) { node.Block.Walk(this); }
+                return true;
+            }
         }
 
         // Some statement of a light-frame candidate is scope-free only with its literal blocks (see LightFrameRewriter.BlockLiterals).

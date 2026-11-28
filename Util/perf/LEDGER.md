@@ -1217,6 +1217,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     perf/stagea simulated stage A in the harness before building it and found nothing to build (see
     Rejected): the descriptor's per-call fill costs what the parked cycle costs, `e1`'s steps 44 ns
     parked against 46-61 as a descriptor. The literal's 45-50 ns end to end is not in one runtime step.
+    perf/literalcode found where it is (see Landed): the light frame making the scope on demand
+    for a literal it always reaches; such a body now takes its scope at entry, 7-11% on those shapes.
 
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
@@ -1952,6 +1954,31 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
+
+- **perf/literalcode (round thirty-seven, 2026-11-28) - a body that evaluates a literal block on every call is not made a
+  light frame (gap 13)** - time, not gated. Asked to find the compiled code around a literal's instantiation (the 16-20 ns
+  perf/stagea left unattributed), the round dumped `e1`'s expression tree and its JIT code. The call with a literal in a light
+  frame does: the scope made on demand inside the literal's instantiation (`LightScopeInLoop` over `TakeParkedScope` and
+  `ReuseParkedScopeLazy`, the register locals copied into a tuple first), `InitializeBlock`, a try/catch for `EvalUnwinder`
+  around the call and a `BlockReturnResult` test after it, `LeaveLightMethodFrame` then taking its slow path because a scope
+  was made, and `BeginPark`/`EndPark`; the scope-making tree is inlined at every place that may need the scope (6 KB of code
+  against `ep`'s 3.4). Neither `InitializeBlock` moved to the retry path nor the try/catch removed (an upper bound, not sound)
+  showed anything in eight alternating rounds. What did: the same body as an ordinary frame, whose scope is taken parked at
+  entry, is faster than the light frame that makes it on demand - the light frame saves the scope only when the literal is not
+  reached. So `EvaluatesLiteralOnEveryCall` (a statement evaluates a literal block - a call with one, as a receiver or an
+  argument, the right-hand side of an assignment other than `||=`/`&&=` - and no statement before it holds a `return`) keeps
+  such a body out of light frames. `IR_LIGHT_STRAIGHT_LITERAL=0` is the old choice. `ab.rb -r 10`, off/on, ns per call:
+  `e1` 136.0/123.7, `eachl` 131.5/118.0, `empty1` 139.7/129.4, `each1` 151.1/135.0, `each4` 216.0/205.8, `map1` 167.9/151.6,
+  `times1` 153.7/140.6, `times4` 227.4/211.8, `nyl` 148.9/139.2, `nbl` 115.9/103.9; controls level (`ep` 90.7/88.0, `ept`
+  99.9/100.0, `nbx` 52.0/55.6, `nby`, `nbz`, `call` 59.0/59.4). Eight rounds of more shapes: a wrapper yielding from its
+  literal (`wrapc`) 280.6/252.5, a literal followed by four calls 179.6/156.9, `block_given?` after it 145.8/131.4, keywords
+  211.8/192.0, an optional 176.0/167.6, two literals 223.0/203.8. The harness's single end to end: `e1` 127.6 -> 123.3, `nyl`
+  134.3 -> 128.9, bytes the same. Correction to perf/stagea: `ept` there called `a.nil?`; without it `ept` is `ep` (84-91 ns,
+  95 B), so having a literal costs a light frame nothing, and `e1` - `ep` (about 40-48 ns) is all the literal's evaluation.
+  Checked: literal-block-light, block-pass, block-given, parked-scope (its two-thread rows), block-scope-reuse and its race,
+  block-nest-reuse, nested-proc, parked-iterator, hot-shapes, jit, light-entry and light-rest in the six modes and with the
+  switch off: PASS, 91 same. ruby/spec language in full on both builds: 2935 examples, the same one error (send_spec's
+  `into`/`to`). IronRuby.Tests in full on a Debug build: PASSED, no failure.
 
 - **perf/endpark (round thirty-seven, 2026-11-28) - EndPark publishes the parked scope with a release
   write, not a compare-exchange (gap 13)** - time, not gated. Stage 0 found the parked cycle's two atomics
