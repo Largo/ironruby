@@ -17,7 +17,9 @@ CASES = %w[plain class_change two_classes redefine redefine_value singleton sing
            subclass subclass_private private_value private_match protected_match remove_match frozen nil_entry
            nested nested_redefine nested_other nested_singleton
            write write_frozen write_private write_subclass_private write_missing write_thread
-           pop pop_frozen pop_private pop_subclass_private pop_missing pop_thread]
+           pop pop_frozen pop_private pop_subclass_private pop_missing pop_thread
+           succ succ_eq_redefined succ_eq_singleton succ_eq_subclass succ_eq_missing
+           phases phases_redefined]
 
 if ARGV[0] == 'list'
   puts CASES
@@ -105,6 +107,92 @@ def run_pop(pl, n, event)
     v.is_a?(Integer) ? moved += v : odd ||= v
   end
   [moved, pl.sizes(0), pl.sizes(1), pl.sizes(2), odd]
+end
+
+# CD's Node#successor: `x = self', then `x == y.right' walking up - an identity `==' on a local nothing samples
+# (JitCompiler.IsLocalObject), which IsIdentical checks against BasicObject#== per receiver
+class TNode
+  attr_accessor :key, :left, :right, :parent
+  def initialize(key); @key = key; end
+  def successor
+    x = self
+    return tree_min(x.right) if x.right
+    y = x.parent
+    while y && x == y.right
+      x = y
+      y = y.parent
+    end
+    y
+  end
+end
+def tree_min(x)
+  current = x
+  current = current.left while current.left
+  current
+end
+def tnode_tree(keys, cls = TNode)
+  nodes = keys.map { |k| cls.new(k) }
+  root = nil
+  nodes.each do |n|
+    if root.nil? then root = n; next end
+    cur = root
+    loop do
+      if n.key < cur.key
+        if cur.left then cur = cur.left else cur.left = n; n.parent = cur; break end
+      else
+        if cur.right then cur = cur.right else cur.right = n; n.parent = cur; break end
+      end
+    end
+  end
+  nodes
+end
+TKEYS = [50, 30, 70, 20, 40, 60, 80, 10, 25, 35, 45, 55, 65, 75, 90, 5, 95]
+# each node's successor's key (nil for the last), N times over, the event at the half: the keys seen, summed
+def run_succ(nodes, n, event)
+  sum = 0
+  ends = 0
+  odd = nil
+  n.times do |i|
+    event.call if i == n / 2
+    v = answer { s = nodes[i % nodes.size].successor; s && s.key }
+    if v.is_a?(Integer) then sum += v elsif v.nil? then ends += 1 else odd ||= v end
+  end
+  [sum, ends, odd]
+end
+
+# A method that calls another directly (RedBlackTree#get over find_node), the callee inlining a call on its parameter
+# for the class it saw: keys of one class for a while, then of another, then mixed (JitStub.CoolDownCheck)
+class PKeyA; attr_reader :v; def initialize(v); @v = v; end; def cmp(o); (@v == o.v) ? 0 : ((@v < o.v) ? -1 : 1); end; end
+class PKeyB; attr_reader :v; def initialize(v); @v = v; end; def cmp(o); (@v == o.v) ? 0 : ((@v < o.v) ? 1 : -1); end; end
+class PNode; attr_reader :key, :value; attr_accessor :left, :right; def initialize(k, v); @key = k; @value = v; end; end
+class PTree
+  def initialize; @root = nil; end
+  def add(key, value)
+    n = PNode.new(key, value)
+    if @root.nil? then @root = n; return end
+    cur = @root
+    loop do
+      if key.cmp(cur.key) < 0
+        if cur.left then cur = cur.left else cur.left = n; return end
+      else
+        if cur.right then cur = cur.right else cur.right = n; return end
+      end
+    end
+  end
+  def find(key)
+    current = @root
+    while current
+      c = key.cmp(current.key)
+      return current if c == 0
+      current = (c < 0) ? current.left : current.right
+    end
+    nil
+  end
+  def get(key)
+    node = find(key)
+    return nil unless node
+    node.value
+  end
 end
 
 # the same in a module: classes nested in one are candidates too (JitStub.ClassesDefining)
@@ -343,6 +431,41 @@ when 'pop_thread'
   stop_pt = true
   reader_pt.join
   p [r_pt, bad_pt]
+when 'succ'
+  p run_succ(tnode_tree(TKEYS), N, -> {})
+when 'succ_eq_redefined'
+  # == always true from the half: the walk goes on up to the root
+  nodes = tnode_tree(TKEYS)
+  p run_succ(nodes, N, -> { TNode.class_eval { def ==(o); true; end } })
+when 'succ_eq_singleton'
+  nodes = tnode_tree(TKEYS)
+  # 35 is a left child: equal to everything, its successor is no longer its parent
+  p run_succ(nodes, N, -> { n35 = nodes.find { |n| n.key == 35 }; def n35.==(o); true; end })
+when 'succ_eq_subclass'
+  Object.const_set(:TNodeEq, Class.new(TNode) { def ==(o); o.is_a?(TNode) && o.key.to_s.size == key.to_s.size; end })
+  plain = tnode_tree(TKEYS)
+  eqs = tnode_tree(TKEYS, TNodeEq)
+  cur = plain
+  p run_succ(cur, N / 2, -> {}) + run_succ(eqs, N / 2, -> {})
+when 'succ_eq_missing'
+  # a node class with no == of its own but method_missing (== is BasicObject's: method_missing is not reached)
+  Object.const_set(:TNodeMM, Class.new(TNode) { def method_missing(name, *a); name == :== ? false : super; end; def respond_to_missing?(n, p = false) = super })
+  p run_succ(tnode_tree(TKEYS, TNodeMM), N, -> {})
+when 'phases', 'phases_redefined'
+  ta = PTree.new; tb = PTree.new
+  (0...30).each { |i| ta.add(PKeyA.new(i * 7 % 30), i) }
+  (0...30).each { |i| tb.add(PKeyB.new(i * 11 % 30), i * 2) }
+  ka = (0...30).map { |i| PKeyA.new(i) }
+  kb = (0...30).map { |i| PKeyB.new(i) }
+  sum = 0
+  6.times do |phase|
+    PKeyB.class_eval { def cmp(o); 0; end } if c == 'phases_redefined' && phase == 4
+    2000.times do |i|
+      sum += (phase.even? ? ta.get(ka[i % 30]) : tb.get(kb[i % 30])) || 0
+    end
+  end
+  3000.times { |i| sum += (i.odd? ? ta.get(ka[i % 30]) : tb.get(kb[i % 30])) || 0 }
+  p sum
 when 'write_thread'
   # another thread reads the mark of key 3 while the writes go on; it must only ever see a value some touch wrote
   e3 = d.get_bucket(d.hash_of(3))

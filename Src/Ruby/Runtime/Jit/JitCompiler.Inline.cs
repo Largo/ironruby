@@ -73,6 +73,7 @@ namespace IronRuby.Runtime.Jit {
                     !JitRuntime.InlineUnsampled || !UnsampledCallees(node.MethodName, args.Length, out cls, out code, out otherCls, out otherCode)) {
                     return null;
                 }
+                NoteUnsampledObject(receiverLocal);
                 (_unsampledClasses ?? (_unsampledClasses = new System.Collections.Generic.Dictionary<string, RubyClass[]>()))[receiverLocal.Name] =
                     (otherCls != null) ? new[] { cls, otherCls } : new[] { cls };
             } else {
