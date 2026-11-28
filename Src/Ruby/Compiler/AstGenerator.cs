@@ -476,6 +476,10 @@ namespace IronRuby.Compiler.Ast {
             // The slot the method's literals take their parked Procs from (BlockDefinition), set by MethodDefinition before the
             // body is transformed if the method may have one at all; it is disabled afterwards if the body turns out not to qualify.
             internal ParkedScopeSlot ParkSlot;
+
+            // The method's block parameter, if the method only passes it on (JitStub.BlockParameterOnlyPassed, IR_PASSED_BLOCKS):
+            // each call it is passed to holds it until the receiver confirms that it keeps nothing (MethodCall, RubyOps.HoldPassedBlock).
+            internal LocalVariable PassedBlock;
             internal readonly List<MSA.Expression> ParkProcVariables = new List<MSA.Expression>();
             // the ParkedProcs the call took (RubyOps.TakeParkedScope), or null
             internal MSA.ParameterExpression ParkedVariable;

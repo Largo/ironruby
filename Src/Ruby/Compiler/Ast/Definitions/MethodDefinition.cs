@@ -238,6 +238,8 @@ namespace IronRuby.Compiler.Ast {
             gen.CurrentMethod.FrameLabel = frameLabel;
             gen.CurrentMethod.HasOwnCompiledFrame = true;
             gen.CurrentMethod.ForwardedRestSplat = ForwardedRest.Find(_parameters, Body);
+            gen.CurrentMethod.PassedBlock = (IronRuby.Builtins.Proc.PassedBlocksEnabled && _parameters.Block != null &&
+                IronRuby.Runtime.Jit.JitStub.BlockParameterOnlyPassed(this)) ? _parameters.Block : null;
 
             // The literals of the body take their Procs from this slot if the body turns out to park its scope (below).
             if (ParkedScopesEnabled && allowLightFrame && _parameters.Block == null && definitionRefinements == null && gen.Profiler == null &&
@@ -801,8 +803,16 @@ namespace IronRuby.Compiler.Ast {
             /// </summary>
             internal bool NamesBlock;
 
+            // The method only passes its named block on (AstGenerator.MethodScope.PassedBlock).
+            internal bool PassesBlock;
+
+            private static readonly MethodInfo/*!*/ _EnterLightMethodPassingBlock = typeof(RubyOps).GetMethod("EnterLightMethodPassingBlock");
+
             private MSA.Expression/*!*/ EnterMethod {
-                get { return NamesBlock ? Ast.Call(_EnterLightMethodNamingBlock, _blockParameter) : Methods.EnterLightMethod.OpCall(_blockParameter); }
+                get {
+                    return PassesBlock ? Ast.Call(_EnterLightMethodPassingBlock, _blockParameter) :
+                        NamesBlock ? Ast.Call(_EnterLightMethodNamingBlock, _blockParameter) : Methods.EnterLightMethod.OpCall(_blockParameter);
+                }
             }
 
             private MSA.Expression/*!*/ StackCheck {
@@ -1744,6 +1754,8 @@ namespace IronRuby.Compiler.Ast {
             light._blockParameter = blockParameter;
             // super hands the method's block on as `&b' would (SuperCall.TransformReadCore)
             light.NamesBlock = _parameters.Block != null || gen.CurrentMethod.HasSuperCall;
+            // (a block it only passes on may stay reusable: RubyOps.EnterLightMethodPassingBlock)
+            light.PassesBlock = gen.CurrentMethod.PassedBlock != null && !gen.CurrentMethod.HasSuperCall;
 
             var shape = Ast.Constant(new MethodFrameShape((string[])names.Value, visibleParameterCountAndSignatureFlags, _name));
             Func<MethodInfo, MSA.Expression, MSA.Expression> make = (method, locals) => method.OpCall(new AstExpressions {
