@@ -66,8 +66,9 @@ namespace IronRuby.Runtime.CApi {
             throw RubyExceptions.CreateTypeError(String.Format("no implicit conversion of {0} into Integer", ClassName(obj)));
         }
 
+        // rb_num2long's "%-.10g"
         private static string/*!*/ FormatFloat(double d) {
-            return _context.Inspect(d).ToString();
+            return RubyUtils.FormatFloatG10(d);
         }
 
         // C's long: 64-bit on Unix, 32-bit on Windows

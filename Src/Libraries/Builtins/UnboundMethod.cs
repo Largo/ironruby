@@ -273,7 +273,7 @@ namespace IronRuby.Builtins {
                 result.Append(MethodReflection.FormatParameters(context, info, methodName) ?? info.GetParameterSignature().ToParameterListString());
             }
 
-            var location = isMissingMethod ? null : GetSourceLocation(info);
+            var location = isMissingMethod ? null : GetSourceLocation(info, methodName);
             if (location != null) {
                 result.Append(' ');
                 result.Append(location[0] as MutableString);
@@ -317,7 +317,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source_location")]
         public static RubyArray GetSourceLocation(UnboundMethod/*!*/ self) {
-            return self._isMethodMissing ? null : GetSourceLocation(self.Info);
+            return self._isMethodMissing ? null : GetSourceLocation(self.Info, self.Name);
         }
 
         [RubyMethod("parameters")]
@@ -328,23 +328,30 @@ namespace IronRuby.Builtins {
             return MethodReflection.GetParameters(context, self.Info, self.Name);
         }
 
-        internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
+        internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info, string/*!*/ name) {
             RubyMethodInfo rubyInfo = info as RubyMethodInfo;
             if (rubyInfo != null) {
                 string file = rubyInfo.Document.FileName;
+                int line = rubyInfo.SourceSpan.Start.Line;
                 // A core method IronRuby writes in Ruby is located where MRI's is when MRI writes it
                 // in Ruby too (<internal:kernel> for Kernel#tap); where MRI's is C, it has no
                 // location at all, as a C method has none - method_source and pry rely on that.
                 if (RubyStackTraceBuilder.IsInternalFile(file)) {
                     string mriFile;
-                    if (!InternalMethods.SourceFiles.TryGetValue(MethodReflection.GetInternalMethodKey(rubyInfo.DeclaringModule, rubyInfo.DefinitionName), out mriFile)) {
+                    string key = MethodReflection.GetInternalMethodKey(rubyInfo.DeclaringModule, rubyInfo.DefinitionName);
+                    if (!InternalMethods.SourceFiles.TryGetValue(key, out mriFile)) {
                         return null;
                     }
                     file = mriFile;
+                    // and at CRuby's line there, not the prelude's
+                    int mriLine;
+                    if (InternalMethods.SourceLines.TryGetValue(key, out mriLine)) {
+                        line = mriLine;
+                    }
                 }
                 return new RubyArray(2) {
                     rubyInfo.DeclaringModule.Context.EncodePath(file),
-                    rubyInfo.SourceSpan.Start.Line
+                    line
                 };
             }
 
@@ -356,6 +363,17 @@ namespace IronRuby.Builtins {
                     lambdaInfo.Context.EncodePath(lambdaInfo.Lambda.Dispatcher.SourcePath),
                     lambdaInfo.Lambda.Dispatcher.SourceLine
                 };
+            }
+
+            // a core method IronRuby writes in C# that CRuby writes in Ruby (Integer#times) is located where CRuby's is
+            RubyModule owner = info.DeclaringModule;
+            if (info is RubyLibraryMethodInfo && owner != null && (owner.Name != null || owner.IsSingletonClass)) {
+                string key = MethodReflection.GetInternalMethodKey(owner, info.OriginalName ?? name);
+                string mriFile;
+                int mriLine;
+                if (InternalMethods.SourceFiles.TryGetValue(key, out mriFile) && InternalMethods.SourceLines.TryGetValue(key, out mriLine)) {
+                    return new RubyArray(2) { owner.Context.EncodePath(mriFile), mriLine };
+                }
             }
 
             return null;

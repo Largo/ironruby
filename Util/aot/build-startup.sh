@@ -92,7 +92,7 @@ fi
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 if ! "$AOT" startup -o "$OUT" --tfm "$TFM" $R2R --host "$HOST" ${RID:+--rid "$RID"} ${ROOT:+--root "$ROOT"} \
-     --cache "$CACHE" @Util/aot/startup-files.txt 2>"$OUT/log"; then
+     --cache "$CACHE" --evals Util/aot/startup-evals.txt @Util/aot/startup-files.txt 2>"$OUT/log"; then
   cat "$OUT/log" >&2
   exit 1
 fi

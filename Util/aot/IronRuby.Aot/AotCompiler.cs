@@ -229,6 +229,10 @@ namespace IronRuby.Aot {
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
             }
 
+            if (Library && Evals != null) {
+                CompileEvals(paths.Length, extended);
+            }
+
             // load-time initialization of the constants, in chunks to keep methods a sane size
             const int ChunkSize = 200;
             int chunks = 0;
@@ -544,6 +548,87 @@ namespace IronRuby.Aot {
         }
 
         /// <summary>
+        /// A string eval a startup command ran (Util/aot/startup-evals.txt, which IR_EVAL_RECORD records): its text and what it
+        /// was compiled for (RubyUtils.Evaluate, CreateCompilerOptionsForEval).
+        /// </summary>
+        public sealed class EvalUnit {
+            public byte[] Code;
+            public string Encoding, Path, BaseLabel, MethodName;
+            public int Line, Verbosity, BlockLevels;
+            public bool InMethod, HasUnsplat;
+            public string[] ParameterNames, LocalNames, ModuleNames;
+        }
+
+        /// <summary>A library's evals, compiled after its files (see PrecompiledEvalsAttribute).</summary>
+        public List<EvalUnit> Evals;
+
+        private readonly List<MethodBuilder> _evalEntryMethods = new();
+        private readonly List<string> _evalKeys = new(), _evalCodes = new();
+        private int _firstEvalClass;
+
+        /// <summary>
+        /// Each eval as RubyUtils.Evaluate compiles it - the same options, from the same record - into a class of its own after
+        /// the files' (RubyStartup&lt;firstClass + i&gt;, with its line table), its entry an EvalEntryPointDelegate. An eval the
+        /// compiler leaves out (refinements, a syntax error, a text it cannot transform) is compiled from its text at run time.
+        /// </summary>
+        private void CompileEvals(int firstClass, HashSet<string> extended) {
+            _firstEvalClass = firstClass;
+            foreach (var e in Evals) {
+                var encoding = RubyEncoding.FindByName(e.Encoding);
+                if (encoding == null) {
+                    Console.Error.WriteLine($"left out eval at {e.Path}:{e.Line}: encoding {e.Encoding}");
+                    continue;
+                }
+                // CreateCompilerOptionsForEval, from the record
+                var options = new RubyCompilerOptions() {
+                    IsEval = true,
+                    EvalFrameBaseLabel = e.BaseLabel,
+                    EvalFrameBlockLevels = e.BlockLevels,
+                    FactoryKind = TopScopeFactoryKind.None,
+                    LocalNames = e.LocalNames != null ? new List<string>(e.LocalNames) : null,
+                    TopLevelMethodName = e.InMethod ? e.MethodName : null,
+                    TopLevelParameterNames = e.InMethod ? e.ParameterNames : null,
+                    TopLevelHasUnsplatParameter = e.InMethod && e.HasUnsplat,
+                    InitialLocation = new SourceLocation(0, e.Line <= 0 ? 1 : e.Line, 1),
+                    EvalSourceEncoding = e.Code.Length >= 3 && encoding.IsAsciiIdentity && e.Code[0] == 0xEF && e.Code[1] == 0xBB && e.Code[2] == 0xBF ? RubyEncoding.UTF8 : encoding,
+                };
+                var unit = _context.CreateSourceUnit(new BinaryContentProvider(e.Code), e.Path, encoding.Encoding, SourceCodeKind.File);
+                SourceUnitTree ast;
+                Expression<Func<RubyScope, object, RubyModule, Proc, object>> lambda;
+                try {
+                    ast = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
+                    if (ast == null) throw new InvalidOperationException("syntax error");
+                    if (UnsupportedFinder.Find(ast) is string why) throw new InvalidOperationException(why);
+                    new ExtendWalker(extended).Walk(ast);
+                    new FrameLabelWalker(_frameOwners, _context, extended).Walk(ast);
+                    lambda = _context.TransformTree<Func<RubyScope, object, RubyModule, Proc, object>>(ast, unit, options);
+                } catch (Exception ex) {
+                    Console.Error.WriteLine($"left out eval at {e.Path}:{e.Line}: {ex.Message}");
+                    continue;
+                }
+                int index = firstClass + _evalEntryMethods.Count;
+                _lines.Add(new Dictionary<string, List<int>>());
+                _type = _module.DefineType("RubyStartup" + index, TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
+                _constantFields.Clear();
+                _rootedStrings.Clear();
+                _boxedLiterals.Clear();
+                var method = _type.DefineMethod(lambda.Name, MethodAttributes.Public | MethodAttributes.Static);
+                ExpressionCompiler.CompileToMethod((LambdaExpression)Rewrite(lambda), method);
+                DefineLineTable(_lines[_lines.Count - 1]);
+                _type.CreateType();
+                _evalEntryMethods.Add(method);
+                // the key the runtime computes for the eval (PrecompiledCode.EvalKey), with the tree's root as the marker that
+                // PrecompiledCode.Rooted replaces by the tree the library runs from
+                string path = RootPrefix != null ? e.Path.Replace(RootPrefix, PrecompiledCode.RootMarker.ToString()) : e.Path;
+                _evalKeys.Add(PrecompiledCode.EvalKey(e.Encoding, path, e.Line, e.Verbosity, e.InMethod, e.BaseLabel, e.BlockLevels,
+                    e.MethodName, e.ParameterNames, e.HasUnsplat, e.LocalNames, e.ModuleNames));
+                _evalCodes.Add(PrecompiledCode.HashEvalCode(e.Code));
+                Count("evals compiled");
+                Console.Error.WriteLine($"compiled eval at {e.Path}:{e.Line} ({e.Code.Length} bytes)");
+            }
+        }
+
+        /// <summary>
         /// RubyStartupIndex, the library's small entry class (the files' code is in RubyStartup&lt;i&gt;, one class per
         /// file, which is loaded when the file is), carrying the PrecompiledFilesAttribute:
         ///   Entry(i): the delegate of file i's top level, in PrecompiledFilesAttribute order;
@@ -566,6 +651,27 @@ namespace IronRuby.Aot {
                 il.Emit(OpCodes.Ldftn, _entryMethods[i]);
                 il.Emit(OpCodes.Newobj, funcType.GetConstructor(new[] { typeof(object), typeof(IntPtr) }));
                 il.Emit(OpCodes.Ret);
+            }
+
+            // EvalEntry(i): the delegate of eval i's code, in PrecompiledEvalsAttribute order
+            if (_evalEntryMethods.Count > 0) {
+                index.SetCustomAttribute(new CustomAttributeBuilder(typeof(PrecompiledEvalsAttribute).GetConstructors()[0],
+                    new object[] { _evalKeys.ToArray(), _evalCodes.ToArray(), _firstEvalClass }));
+                var evalType = typeof(Func<RubyScope, object, RubyModule, Proc, object>);
+                var evalEntry = index.DefineMethod("EvalEntry", MethodAttributes.Public | MethodAttributes.Static, evalType, new[] { typeof(int) });
+                var eil = evalEntry.GetILGenerator();
+                var evalLabels = _evalEntryMethods.Select(_ => eil.DefineLabel()).ToArray();
+                eil.Emit(OpCodes.Ldarg_0);
+                eil.Emit(OpCodes.Switch, evalLabels);
+                eil.Emit(OpCodes.Ldnull);
+                eil.Emit(OpCodes.Ret);
+                for (int i = 0; i < _evalEntryMethods.Count; i++) {
+                    eil.MarkLabel(evalLabels[i]);
+                    eil.Emit(OpCodes.Ldnull);
+                    eil.Emit(OpCodes.Ldftn, _evalEntryMethods[i]);
+                    eil.Emit(OpCodes.Newobj, evalType.GetConstructor(new[] { typeof(object), typeof(IntPtr) }));
+                    eil.Emit(OpCodes.Ret);
+                }
             }
 
             index.CreateType();

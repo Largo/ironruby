@@ -57,6 +57,40 @@ namespace IronRuby.Builtins {
             return own.Found && builtin.Found && ReferenceEquals(own.Info, builtin.Info);
         }
 
+        // IR_HASH_WALK=0 keeps a Hash on the generic walk (__plain_each__? answers for Arrays only).
+        private static readonly bool _hashWalk = Environment.GetEnvironmentVariable("IR_HASH_WALK") != "0";
+
+        /// <summary>
+        /// True for an Array as <see cref="IsPlainList"/> says, and for a Hash whose #each is the
+        /// built-in Hash#each: that one yields each entry once, as one [key, value] Array to a block
+        /// that takes one parameter or a rest (IDictionaryOps.Each splits the pair only for a block
+        /// that takes two or more). The prelude's Enumerable methods written in Ruby then walk it
+        /// with a one-value block, `each { |item| }`, and get the same item that a `|*values|` block
+        /// and __enum_item__ make, without the Array and the call per entry. MRI's Enumerable
+        /// methods call #each with no refinements in scope, and so does the prelude: a refined
+        /// Hash#each is not seen by either.
+        /// </summary>
+        [RubyMethod("__plain_each__?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsPlainEach(RubyContext/*!*/ context, object self) {
+            if (!(self is Hash)) {
+                return IsPlainList(context, self);
+            }
+            if (!_hashWalk) {
+                return false;
+            }
+            RubyClass hashClass = context.GetClass(typeof(Hash));
+            if (!IListOps.IsBuiltinMethod(hashClass, "each")) {
+                return false;
+            }
+            RubyClass cls = context.GetImmediateClassOf(self);
+            if (ReferenceEquals(cls, hashClass)) {
+                return true;
+            }
+            var own = cls.ResolveMethod("each", VisibilityContext.AllVisible);
+            var builtin = hashClass.ResolveMethod("each", VisibilityContext.AllVisible);
+            return own.Found && builtin.Found && ReferenceEquals(own.Info, builtin.Info);
+        }
+
         // Enumerable#group_by over a plain list (see IsPlainList): the prelude's loop with the
         // result Hash filled in directly, as MRI's group_by_i does. Array#each yields one value
         // per element, so enum_yield yields it plainly: a lambda is not forced to take an Array
@@ -194,17 +228,23 @@ namespace IronRuby.Builtins {
 
         #region all?, any?, none?
 
+        // Not inlined: a backtrace taken in the block names the frame by this method ('Enumerable#all?'), and
+        // ReadyToRun folds a forwarder this small into its caller (see IListOps' Array#all? and friends).
+
         [RubyMethod("all?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAll(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
             return TrueForItems(each, predicate, self, false, false);
         }
 
         [RubyMethod("none?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForNone(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
             return TrueForItems(each, predicate, self, true, false);
         }
 
         [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAny(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
             return TrueForItems(each, predicate, self, true, true);
         }
@@ -214,16 +254,19 @@ namespace IronRuby.Builtins {
         // and &block made every [x].any? { } pay for a splat, a Proc and two more calls: 400 ns where MRI
         // takes 70.
         [RubyMethod("all?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAll(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
             return PatternForItems(each, caseEquals, predicate, self, pattern, false, false);
         }
 
         [RubyMethod("none?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForNone(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
             return PatternForItems(each, caseEquals, predicate, self, pattern, true, false);
         }
 
         [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAny(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
             return PatternForItems(each, caseEquals, predicate, self, pattern, true, true);
         }

@@ -853,6 +853,7 @@ namespace IronRuby.Runtime.Jit {
         /// the entry back once its cool-down is over.
         /// </summary>
         protected void CoolDownCheck() {
+            bool settled = false;
             lock (_sync) {
                 if (_state != Cooling) { return; }
                 _coolCalls = CoolCheckCalls;
@@ -866,6 +867,19 @@ namespace IronRuby.Runtime.Jit {
                     _genericCostInterpreted = !_genericCompiled;
                 }
                 var spec = _current;
+                // A callee the body calls directly has been compiled again since (profiled again for a second class
+                // of an argument, say): the body bound the one that deopted, and would deopt again as it did. Compile
+                // it again instead, binding the callee's current body (RedBlackTree#get over find_node in CD).
+                if (HasReplacedCallee(spec)) {
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] profiling {0}/{1} arity {2} again: a callee it calls directly was compiled again",
+                            _declaringModule.Name ?? "main", _ast.Name, _arity);
+                    }
+                    // (Respecialize drops the entry it is given, which is the one being cooled)
+                    _state = Specialized;
+                    settled = Respecialize(spec);
+                    goto done;
+                }
                 spec.Countdown = 0;
                 spec.WindowDeopts = 0;
                 JitRuntime.DeoptRetried++;
@@ -877,6 +891,23 @@ namespace IronRuby.Runtime.Jit {
                 _direct = spec.Direct;
                 Install(spec.Entry);
             }
+            done:
+            if (settled) { NotifyOwner(); }
+        }
+
+        // Some specialization the body bound (JitCode.BoundCallees) is no longer its stub's current one.
+        private static bool HasReplacedCallee(Specialization/*!*/ spec) {
+            var bound = (spec.Code != null) ? spec.Code.BoundCallees : null;
+            if (bound == null) { return false; }
+            foreach (var callee in bound) {
+                if (!callee.Stub.IsCurrent(callee)) { return true; }
+            }
+            return false;
+        }
+
+        // A hint, read without the lock: the specialization is the one this stub runs now.
+        private bool IsCurrent(Specialization/*!*/ spec) {
+            return _state == Specialized && ReferenceEquals(System.Threading.Volatile.Read(ref _current), spec);
         }
 
         private bool TrySpecialize() {
@@ -1085,7 +1116,7 @@ namespace IronRuby.Runtime.Jit {
                 // (a body that does not call itself was made part of its entry, and not compiled on its own)
                 typed = spec.Typed ?? (spec.Typed = CompileTyped(code));
             }
-            return new JitCallee { Code = code, Target = Ast.Constant(typed, typed.GetType()) };
+            return new JitCallee { Code = code, Target = Ast.Constant(typed, typed.GetType()), Spec = spec };
         }
 
         /// <summary>

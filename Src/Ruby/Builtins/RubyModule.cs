@@ -2853,6 +2853,9 @@ namespace IronRuby.Builtins {
             var copy = target.Info.Copy(forwarder.Flags, target.Info.DeclaringModule);
             copy.AliasOwner = forwarder.AliasOwner ?? forwarderResult.Owner;
             copy.OriginalName = forwarder.OriginalName ?? target.Info.OriginalName;
+            if (forwarder.AliasOwner == null) {
+                copy.ForwardedBody = target.Info;
+            }
             return new MethodResolutionResult(copy, forwarderResult.Owner, true);
         }
 

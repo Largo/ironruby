@@ -103,7 +103,7 @@ namespace IronRuby.Runtime.Osr {
             return (s != null && Int64.TryParse(s, out v) && v > 0) ? v : 2000;
         }
 
-        internal static int Specialized, Retired, Entered, Deopts, StaleRebuilds;
+        internal static int Specialized, Retired, Entered, Deopts, StaleRebuilds, Kept;
         internal static long CompileTicks;
 
         /// <summary>
@@ -220,10 +220,20 @@ namespace IronRuby.Runtime.Osr {
                 }
 
                 if (guard != null && (guard.Stale || RubyUtils.CodeEpoch != guard.Epoch)) {
+                    // Nothing the copy was built on changed - another constant was reassigned, say, which moves the code
+                    // epoch every copy's safe point compares with: the copy is current (JitLoopGuard.TryKeep), and the loop
+                    // goes back to it at the next back edge rather than after a rebuild, which waited for
+                    // StaleRebuildSpacing of generic iterations and a compilation.
+                    if (Jit.JitCompiler._KeepOutlined && guard.TryKeep()) {
+                        Kept++;
+                        if (Verbose) { Console.Error.WriteLine("[osr] {0}: handed back, nothing it was built on changed: kept", _name); }
+                        Counting = false;
+                        Countdown = 1;
+                        return Retry;
+                    }
                     // Not a failure either: a method the copy was built on (an inlined Array#size, a bound
                     // callee) or a constant it folded changed since it was compiled - found on entry, or
-                    // while it ran (JitRuntime.OsrHandBack), on this thread or another; or something else
-                    // moved the code epoch the copy's safe points compare with. The generic loop calls what
+                    // while it ran (JitRuntime.OsrHandBack), on this thread or another. The generic loop calls what
                     // is defined now; a copy built for the new epoch takes over when StaleRebuildSpacing
                     // allows. However often that happens, the loop is not retired.
                     StaleRebuild();
@@ -322,8 +332,8 @@ namespace IronRuby.Runtime.Osr {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[osr] specialized={0} retired={1} entries={2} deopts={3} stale={4} compile={5:F1}ms",
-                    Specialized, Retired, Entered, Deopts, StaleRebuilds, CompileTicks * 1000.0 / Stopwatch.Frequency);
+                Console.Error.WriteLine("[osr] specialized={0} retired={1} entries={2} deopts={3} stale={4} kept={5} compile={6:F1}ms",
+                    Specialized, Retired, Entered, Deopts, StaleRebuilds, Kept, CompileTicks * 1000.0 / Stopwatch.Frequency);
             };
         }
     }

@@ -393,6 +393,98 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        #region any?
+
+        // Hash's own #any?, as MRI's rb_hash_any_p (all? and none? are Enumerable's there too). It walks the
+        // table as #each does - adding a key in the block raises, a deleted key is skipped - but never calls
+        // #each: a subclass's, a singleton's or a prepended #each, or a redefined Hash#each, is not used, and
+        // a backtrace from the block shows Hash#any? under it. Enumerable#any? went through #each and a block
+        // of ours, a Proc and a call per entry: {...}.any? { |k, v| } was 3.8x MRI. Not inlined, so that the
+        // frame is there to be named.
+
+        [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
+        public static object Any(BlockParam predicate, IDictionary<object, object>/*!*/ self) {
+            if (self.Count == 0) {
+                return ScriptingRuntimeHelpers.False;
+            }
+            // a pair is never false or nil
+            if (predicate == null) {
+                return ScriptingRuntimeHelpers.True;
+            }
+            return AnyEntry(predicate, null, null, self);
+        }
+
+        // The pattern form: pattern === [key, value] for each entry (any_p_i_pattern), the block never called.
+        [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object Any(BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, IDictionary<object, object>/*!*/ self, object pattern) {
+            if (self.Count == 0) {
+                return ScriptingRuntimeHelpers.False;
+            }
+            if (predicate != null) {
+                caseEquals.Context.ReportWarning("given block not used");
+            }
+            // MRI calls #=== with rb_funcall, which a private #=== answers too, as this site's does.
+            return AnyEntry(null, caseEquals.GetCallSite("==="), pattern, self);
+        }
+
+        // Either the block is given each entry - key and value as two values to a block that takes two or
+        // more (any_p_i_fast), the pair to any other (any_p_i) - or, with a site, the pattern is matched with
+        // the pair.
+        private static object AnyEntry(BlockParam predicate, CallSite<Func<CallSite, object, object, object>> site, object pattern,
+            IDictionary<object, object>/*!*/ self) {
+            bool yieldPair = predicate != null && IsPairYieldOptimizable(predicate);
+            var hash = self as Hash;
+            if (hash != null) {
+                hash.BeginIteration();
+                try {
+                    int index = 0;
+                    object key, value;
+                    while (hash.TryGetNextEntry(ref index, out key, out value)) {
+                        object result;
+                        if (site != null) {
+                            result = site.Target(site, pattern, MakeArray(key, value));
+                        } else if (yieldPair
+                            ? predicate.Yield(CustomStringDictionary.ObjToNull(key), value, out result)
+                            : predicate.Yield(MakeArray(key, value), out result)) {
+                            return result;
+                        }
+                        if (Protocols.IsTrue(result)) {
+                            return ScriptingRuntimeHelpers.True;
+                        }
+                    }
+                } finally {
+                    hash.EndIteration();
+                }
+                return ScriptingRuntimeHelpers.False;
+            }
+
+            // Any other IDictionary: as Each walks one.
+            var pairs = CopyKeyValuePairs(self);
+            for (int i = 0; i < pairs.Length; i++) {
+                object value;
+                if (!TryGetCurrentValue(self, pairs, i, out value)) {
+                    continue;
+                }
+                object result;
+                if (site != null) {
+                    result = site.Target(site, pattern, MakeArray(pairs[i].Key, value));
+                } else if (yieldPair
+                    ? predicate.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), value, out result)
+                    : predicate.Yield(MakeArray(pairs[i].Key, value), out result)) {
+                    return result;
+                }
+                if (Protocols.IsTrue(result)) {
+                    return ScriptingRuntimeHelpers.True;
+                }
+            }
+            return ScriptingRuntimeHelpers.False;
+        }
+
+        #endregion
+
         /// <summary>
         /// MRI's rb_block_pair_yield_optimizable: a non-lambda block that needs at least two
         /// arguments gets key and value as two values rather than as one pair. For a Ruby block
