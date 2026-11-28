@@ -1098,6 +1098,7 @@ namespace IronRuby.Tests {
                 Module_CopyInvalidatesConstantLookups1,
                 Kernel_PutsToStdoutWriter1,
                 Prelude_HiddenHelpers1,
+                Kernel_StringCheckFuncall1,
                 Prelude_HiddenState1,
                 Prelude_HiddenState2,
                 SyntaxError_MessageLocation1,
