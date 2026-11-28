@@ -2066,6 +2066,68 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     IronRuby.Tests (Debug): the new OsrYieldLoop1 and 110 tests named for loops, yield, blocks, iterators, break,
     next, redo pass with the switch on and off; the whole suite was not run.
 
+- **perf/kwcall (/perf-step, 2026-11-28) - the caller's keyword hash: nothing to win; a JIT'd
+  `**rest` whose body can deopt is declined** (fixes a slowdown perf/kwjit brought in).
+  - **The caller's hash** (clock, ns; CRuby in brackets), bodies with a global variable assignment:
+    a declared-keywords call `kd(k: 1)` 39 [42], `kd2(k: 1, j: 2)` 64 [45], `kr(k: 1)` 32 [40] -
+    the method JIT binds them from the call's pairs (JitKeywordCall) without the hash, at CRuby's
+    level already. A `**o` callee needs a hash for o; with the take-over the caller's hash *is* o,
+    which CRuby allocates too. What is left of a hash literal: `{k: 1}` 59 [50]. So the round's
+    40 ns is not the caller's to save.
+  - **What the profile found instead.** `kro(k: 1, z: 2)` into `def kro(k: 0, **o) = ($g = k)`
+    took 131 ns with perf/kwjit against 104 with `IR_JIT_KWREST=0`: the typed body can deopt, so
+    its rest was a copy, which costs more than the typed body saves (perf/kwjit's `krest_u`,
+    1.00 there, had hidden it). JitStub.TrySpecialize now declines a **rest whose compiled body
+    can deopt - it runs the generic body, which takes the call's hash over - and JitCensus.Probe
+    counts it so. JitKeywords.Rest's copy is then only the profiler's.
+  - **Clock** (`ab.rb -r 8`, ns; CRuby / `IR_JIT_KWREST=0` / on): `kro` 89.9 / 100.4 / 103.3
+    (overlap), `krest_u` 75.8 / 116.0 / 123.2 (overlap); still won: `krest` 69.7 / 104.0 / 87.2,
+    `krest_extra` 86.4 / 121.6 / 98.2, `onlyrest` 83.6 / 96.0 / 77.3.
+  - **Census** (`-d` against `IR_JIT_KWREST=0`, now counting the decline): JIT compiles +1, maybe +9,
+    never -10, nothing down (perf/kwjit's count said compiles +7, maybe +3: the Prism initializers
+    are `maybe (declined once typed)`).
+  - **Checks.** The 10 matrices in 6 modes (60 of 60), Method_KeywordRestJit1 under -X:JITResume,
+    IronRuby.Tests in full (Debug): PASSED, 1,424.
+
+- **perf/kwjit (/perf-step, 2026-11-28) - the method JIT takes a keyword method with `**rest`**
+  (gap 38; switch `IR_JIT_KWREST`, on unless `=0`). Built on fcbc67b (claude/happy-gauss-95wm2j)
+  with de51cf89 merged.
+  - **What changed.** JitKeywords.TryRecognize took a prologue only if its keyword Match refused
+    other keys, so a method with `**o` kept the prologue in its body and the screen rejected it
+    (`KeywordArgumentsTest`). It now takes `o = Rest(?kw?, names)` after the keyword reads as one
+    more keyword slot, the last; the Match accepts other keys (HasKeywords' acceptsRest), and a
+    signature with `**o` and no required keyword, which has no Match statement at all
+    (PrismAstBridge.BindKeywordsFrom has nothing to check), is recognized from its reads. The
+    entry binds the rest last, once every guard has passed: the call's own hash taken over as the
+    generic body takes it (RubyOps.MakeKeywordRest), unless the typed body can deopt - a failed
+    guard or a deopt runs the generic body, which binds from that hash again - when it is a copy.
+    The 1-3 keyword one-call reads and JitKeywordCall's direct entry (literal keywords bound at the
+    call site, no hash) leave a rest method out.
+  - **Census** (`-d` against `IR_JIT_KWREST=0`, Src/StdLib and Util/bench, 29,141 methods): JIT
+    compiles 3,529 -> 3,536 (+7), maybe 3,396 -> 3,399 (+3), never 22,216 -> 22,206 (-10); light
+    frames unchanged; nothing moved down. Up: Prism's four Desugar*Node#initialize and
+    LexCompat#initialize (compiles), Ripper::Lexer#parse, Net::IMAP's Plain and XOAuth2
+    authenticators' #initialize (maybe), and the bench shapes `krest`, `p_rest`.
+  - **Clock** (`ab.rb -r 8`, Release, ns; CRuby / `IR_JIT_KWREST=0` / on): `krest(k: 1)` into
+    `def krest(k:, **o) = k` 66.3 / 97.3 / 76.0 (0.78), with an extra key 80.9 / 115.1 / 90.7
+    (0.79), `onlyrest(**o) = 1` 73.0 / 87.3 / 71.3 (0.82); `krest_u` (`k + o.size`, a body that
+    can deopt, so the rest is a copy) 73.1 / 107.1 / 107.3. With the copy everywhere (the first
+    try) the JIT was slower than the generic body with the takeover (1.07-1.23): the copy costs
+    what the typed body saves.
+  - **Checks.** IronRuby.Tests Method_KeywordRestJit1 (CRuby 4.0's output, run hot: a String
+    where an Integer was, an overflow that deopts, a missing keyword after warm-up, varying and
+    no keywords, a positional Hash, a body that mutates o, the caller's `**h` untouched,
+    defaults). Util/kwsplat-forward-matrix.rb section 9 (the same and more; checked that its
+    methods are specialized, IR_JIT_VERBOSE). kwsplat-forward, keyword-light, keyword-rest-light,
+    kw-prologue, kwrest-call, splat-pass, jit, jit-calls, light-entry and hot-shapes: same as CRuby
+    in default, `IR_JIT_KWREST=0`, `IR_KWREST_TAKE=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` (60 of 60), and kwsplat-forward and the test's script under `-X:JITResume`.
+    Specs language/keyword_arguments, def, send, super, method, core/hash, core/method,
+    core/struct, core/kernel/send as on the base build. IronRuby.Tests in full (Debug): PASSED,
+    1,424.
+  - **Left.** The caller's keyword hash (about 40 ns of what remains over a positional call);
+    a body that can deopt still copies its rest.
+
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
   design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple

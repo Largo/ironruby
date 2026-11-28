@@ -354,7 +354,9 @@ namespace IronRuby.Runtime.Jit {
         // Whether a typed body exists for parameters that are all of one type, the receiver unknown.
         private bool Probe(MethodDeclaration/*!*/ ast, JitKeywords keywords, JT type, int typedCount, int perCountMandatory) {
             if (perCountMandatory < 0) {
-                return JitCompiler.TryCompile(ast, _context, Typing(type, typedCount), keywords, RefinementActivation.Empty) != null;
+                var code = JitCompiler.TryCompile(ast, _context, Typing(type, typedCount), keywords, RefinementActivation.Empty);
+                // a **rest whose body can deopt is declined once compiled (JitStub.TrySpecialize)
+                return code != null && !(keywords != null && keywords.HasRest && code.CanDeopt);
             }
             // a body for each number of optional arguments a call passes (JitStub.TrySpecializePerCount): one of them will do
             for (int k = 0; perCountMandatory + k <= typedCount; k++) {

@@ -480,6 +480,11 @@ namespace IronRuby.Runtime.Jit {
             return ((JitKeywords)keywords).Value(kw, index);
         }
 
+        /// <summary>The **rest of a method with keywords (JitKeywords.Rest).</summary>
+        public static object KeywordRest(object/*!*/ keywords, object kw, bool take) {
+            return ((JitKeywords)keywords).Rest(kw, take);
+        }
+
         // KeywordsMatch and KeywordValue in one call, for a method with up to three keywords.
 
         public static bool KeywordsRead1(object/*!*/ keywords, object kw, out object v0) {

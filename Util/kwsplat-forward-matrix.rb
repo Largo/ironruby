@@ -197,3 +197,37 @@ ruby2_keywords def r2k_fwd_mut(*a) = kt_mut(*a)
 t("o from ruby2_keywords") { |i| r = r2k_fwd_mut(k: 1, y: 2); r }
 t("o when no keywords given") { |i| [kt_mut, kt_keep[-1].tap { $kept = nil }] }
 t("o with non-Symbol keys") { |i| kt_mut(**{"s" => 1, k: 2}) }
+
+# ---------------------------------------------------------------- 9. keyword methods with **rest in the method JIT (JitKeywords.HasRest,
+# IR_JIT_KWREST): each probe runs hot, so the method is specialized; then a call the entry's guards refuse, or a body that deopts,
+# runs the generic body, which must bind from an intact hash
+def jr_req(k:, **o) = k + o.size
+def jr_opt(a, k: 1, **o) = [a + k, o]
+def jr_only(**o) = o
+def jr_keep(**o) = ($jr_kept ||= []) << o
+def jr_def(a, k: a * 2, j: (($jr_side ||= 0); $jr_side += 1; 5), **o) = [k, j, o]
+t("hot: required keyword and rest, then a String k") { |i| (jr_req(k: i == 2900 ? "s" : i % 3, z: 1) rescue [$!.class]) }
+t("hot: rest, then the positional's type changes") { |i| jr_opt(i == 2900 ? 1.5 : 1, k: 2, z: i % 2) }
+t("hot: overflow deopts the typed body") { |i| jr_req(k: i == 2900 ? 2**62 + 2**62 - 1 : 1, z: 1) }
+t("hot: missing required keyword after warm-up") { |i| (i == 2900 ? jr_req(z: 1) : jr_req(k: 1)) rescue [$!.class, $!.message] }
+t("hot: rest only, varying keys") { |i| jr_only(**(i.even? ? {a: 1} : {b: 2, c: 3})) }
+t("hot: rest only, no keywords, **nil, **{}") { |i| [jr_only, jr_only(**nil), jr_only(**{})] }
+t("hot: positional Hash to a rest-only method") { |i| (jr_only({a: 1}) rescue [$!.class, $!.message]) }
+t("hot: each call's o is its own, kept") { |i| $jr_kept = nil; a = jr_keep(a: 1)[-1]; b = jr_keep(a: 1)[-1]; a[:x] = 1; [a, b] }
+t("hot: caller's **h untouched") { |i| h = {k: 2, z: 3}; r = jr_opt(1, **h); r[1][:w] = 1; [r, h] }
+t("hot: defaults referencing a parameter, with side effects") { |i| $jr_side = 0; [jr_def(3), jr_def(3, k: 1, j: 2, z: 9), $jr_side] }
+t("hot: through send and method_missing") { |i| [send(:jr_opt, 1, k: 2, z: 3), MM.new.ghost(k: 1, z: 2)] }
+ruby2_keywords def r2k_into_rest(*a) = jr_opt(*a)
+t("hot: ruby2_keywords into a rest method") { |i| r2k_into_rest(1, k: 2, z: 3) }
+JR_SIDE = []
+def jr_ret(**o) = o
+def jr_mut(k: 0, **o) = (o[:added] = k; o)
+def jr_def2(a, k: a * 2, j: JR_SIDE.push(1).size, **o) = [k, j, o]
+t("hot (typed): o returned, each call's own") { |i| a = jr_ret(a: 1); b = jr_ret(a: 1); a[:x] = 1; [a, b, a.equal?(b)] }
+t("hot (typed): o mutated in the body") { |i| h = {k: 1, z: 2}; [jr_mut(**h), h, jr_mut(k: 2, y: 3)] }
+t("hot (typed): defaults referencing a parameter, with side effects") { |i| JR_SIDE.clear; [jr_def2(3), jr_def2(3, k: 1, j: 2, z: 9), JR_SIDE.size] }
+def jr_bump = JR_SIDE.push(1).size
+def jr_def3(a, k: a * 2, j: jr_bump, **o) = [k, j, o]
+t("hot (typed): a default calling a method, evaluated only when missing") { |i| JR_SIDE.clear; [jr_def3(3), jr_def3(3, k: 1, j: 2, z: 9), JR_SIDE.size] }
+def jr_def4(a, k: a * 2, j: 5, **o) = [k, j, o]
+t("hot (typed): a default referencing a parameter, with rest") { |i| [jr_def4(3), jr_def4(3, k: 1, z: i % 2), jr_def4(3, j: 0)] }

@@ -58,6 +58,7 @@ namespace IronRuby.Compiler.Ast {
         // What the method JIT (Runtime/Jit/JitKeywords.cs) needs to recognize a keyword prologue.
         internal bool IsMatch { get { return _kind == ReadKind.Match; } }
         internal bool IsValue { get { return _kind == ReadKind.Value; } }
+        internal bool IsRest { get { return _kind == ReadKind.Rest; } }
         internal string/*!*/[]/*!*/ Names { get { return _names; } }
         internal RubyEncoding/*!*/ Encoding { get { return _encoding; } }
         // Match: how many of the names are required; Value: where the keyword is declared

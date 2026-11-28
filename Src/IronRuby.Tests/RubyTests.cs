@@ -1203,6 +1203,7 @@ namespace IronRuby.Tests {
                 Method_Ruby2KeywordsExplicitSplat1,
                 Struct_Ruby2KeywordsHash1,
                 Method_KeywordRestTakeover1,
+                Method_KeywordRestJit1,
                 Method_KeywordPrologue1,
                 Method_LightFrameGlobal1,
                 Method_LightFrameLexical1,
