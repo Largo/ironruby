@@ -1058,6 +1058,7 @@ namespace IronRuby.Tests {
                 Backtrace_RedefinedSetBacktrace1,
                 Backtrace_ArityCalleeFrame1,
                 Backtrace_SendHidden1,
+                Backtrace_CallLine1,
                 Backtrace_RaiseInEnsure1,
                 Backtrace_CompiledLoopLine1,
                 Backtrace_CompiledLoopLineFrameReleased1,

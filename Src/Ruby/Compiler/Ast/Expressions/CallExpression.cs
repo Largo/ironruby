@@ -19,6 +19,16 @@ using System.Diagnostics;
 namespace IronRuby.Compiler.Ast {
 
     public abstract class CallExpression : Expression {
+        /// <summary>
+        /// The line of the method's name, where it is not the call's first line (`a\n  .b', `a.\n  b'): the line MRI
+        /// reports for the call (prism's message_loc). 0: the call's first line.
+        /// </summary>
+        internal int MessageLine;
+
+        internal int CallLine {
+            get { return MessageLine > 0 ? MessageLine : Location.Start.Line; }
+        }
+
         // null means no parameters, not even empty parenthesis 
         private readonly Arguments _args;
         private Block _block;
