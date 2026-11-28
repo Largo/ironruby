@@ -1994,6 +1994,26 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/kinteger (2026-11-28, on 33818f7 + 51f5637) - `Kernel#String` asks for #to_str as
+  rb_check_funcall does; `Integer("1234")` rejected, nothing to win** - not gated.
+  - Part 1 (correctness, from perf/kstring's leftovers): `__ir_check_to_str__` calls a private
+    or protected #to_str, tries a #method_missing of the object's own when there is none
+    (check_funcall_missing), takes any NoMethodError from it as "no conversion" unless the
+    object answers #to_str by then (check_funcall_failed), and asks a private #respond_to? of
+    the object's own; the #to_s step's rescue and respond_to? call likewise (its `e.receiver`
+    raised for a NoMethodError made without one). Ten lines of `Util/kernel-string-matrix.rb`
+    move to CRuby's output, none away, in five modes, with `IR_PLAIN_TO_S=0` and R2R; the two
+    left are Rational's/Complex's and main's #to_s encodings. IronRuby.Tests
+    `Kernel_StringCheckFuncall1` (new, CRuby's output); ruby/spec core/kernel and
+    core/string/to_i the same examples on both builds.
+  - Part 2, rejected before any code: the survey's `Integer()` at 3.5x CRuby was one round's
+    noise. Four rounds: `Integer("1234")` 71.8 ns against CRuby's 59.5 (1.21x), with `Array(@a)`
+    - a C# Kernel call that does next to nothing - at 67.5: the parse is about 4 ns over the
+    call. KernelOps.ToInteger(MutableString) already has its own overload, and TryParseRubyInteger
+    folds digits into a long; an ASCII decimal fast path has nothing left to take. What is left
+    of these rows is the cost of calling a Kernel method at all (`String("a")` 108 against 44,
+    `Array()` 68 against 40).
+
 - **perf/kstring (/perf-step, 2026-11-28, on 3faf3dc) - `Kernel#String` converts a plain object
   by its #to_s from C# (`__ir_plain_to_s__`, `IR_PLAIN_TO_S`)** - clock only, not gated. For a
   class with no #to_str (any visibility), the built-in respond_to?, respond_to_missing? and
@@ -2005,9 +2025,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - `Util/kernel-string-matrix.rb` (new): five lines to CRuby's, none away, in five modes, R2R
     and with the switch off; numeric-conversion, coerce, io-conversion, string-methods, caller,
     hot-shapes unchanged; ruby/spec core/kernel the same examples; 36 IronRuby.Tests pass.
-  - Left from CRuby (as before): a private #to_str and a #method_missing for to_str are not
-    called by __ir_string__ (MRI's rb_check_funcall calls both). `Integer()` (3.5x) is a
-    String parse, already C# with direct overloads - not this shape.
+  - A private #to_str and a #method_missing for to_str, left at first, are called since
+    perf/kinteger's first part, as MRI's rb_check_funcall calls them.
 
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,
