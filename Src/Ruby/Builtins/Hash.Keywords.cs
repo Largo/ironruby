@@ -225,6 +225,10 @@ namespace IronRuby.Builtins {
             result._liveCount = n;
             result._version++;
             result._stamp++;
+            // `f(**h)' gives the callee a dup of h (CRuby 4.0): its default and default proc come along, as they do to the
+            // **rest that is made of it (CopyWithoutKeywords)
+            result._defaultProc = _defaultProc;
+            result._defaultValue = DefaultValue;
             return result;
         }
 

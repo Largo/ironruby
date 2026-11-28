@@ -2550,9 +2550,14 @@ namespace IronRuby.Runtime {
             var source = dict as Hash;
             var copy = (source != null) ? source.TryCopyAsKeywordArguments(scope.RubyContext.EqualityComparer) : null;
             if (copy == null) {
-                copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
-                foreach (var entry in dict) {
-                    copy[entry.Key] = entry.Value;
+                if (source != null) {
+                    // a dup, as CRuby passes it: its comparer (compare_by_identity), default and default proc with it
+                    copy = new Hash(source);
+                } else {
+                    copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
+                    foreach (var entry in dict) {
+                        copy[entry.Key] = entry.Value;
+                    }
                 }
                 copy.IsKeywordArguments = true;
             }
