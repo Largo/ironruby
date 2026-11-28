@@ -1,3 +1,5 @@
+# encoding: us-ascii
+# The strings this file makes are US-ASCII, as the C ones are (nurat_to_s, f_format: rb_usascii_str_new).
 # Complex, ported from Ruby 4.0's complex.c, together with the methods complex.c defines
 # on Numeric, Float and String, and Kernel#Complex. Loaded by ruby4.rb as part of the
 # core prelude, after rational.rb.

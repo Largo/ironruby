@@ -6213,6 +6213,25 @@ step kw: [[1, 3, 5], [1, 3, 5]]
         }
 
         /// <summary>
+        /// Rational#to_s/inspect and Complex#to_s/inspect are US-ASCII, as MRI makes them (rb_usascii_str_new):
+        /// rational.rb and complex.rb are US-ASCII sources.
+        /// </summary>
+        public void Rational_StringEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+p Rational(1, 2).to_s.encoding, Rational(-1, 2).inspect.encoding, Complex(1, 2).to_s.encoding, Complex(1.5, -2r).inspect.encoding
+p Rational(1, 3), Complex(1.5, -2r)
+", @"
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+#<Encoding:US-ASCII>
+(1/3)
+(1.5-(2/1)*i)
+");
+        }
+
+        /// <summary>
         /// Rational as a C# type (RubyRational) with its arithmetic, comparison, #to_f and #hash in C#, and
         /// Kernel#Rational: Integer, Float, Rational and big operands, coercion, division by zero, NaN,
         /// Marshal, hash keys, the conversions and errors left to rational.rb. The expected output is CRuby's.

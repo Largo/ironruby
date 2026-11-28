@@ -1178,6 +1178,7 @@ namespace IronRuby.Tests {
                 Rational_CSharp1,
                 Complex_CSharp1,
                 Rational_ComplexConventions1,
+                Rational_StringEncoding1,
                 Method_LightFrame1,
                 Method_LightFrame2,
                 Block_RegisterLocals1,

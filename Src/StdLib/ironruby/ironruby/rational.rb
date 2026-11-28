@@ -1,3 +1,5 @@
+# encoding: us-ascii
+# The strings this file makes are US-ASCII, as the C ones are (nurat_to_s, f_format: rb_usascii_str_new).
 # Rational, ported from Ruby 4.0's rational.c, together with the methods rational.c
 # defines on Integer, Float, Numeric and String, Kernel#Rational, and the Rational
 # branches of numeric.c's Integer#** and Float#**.
