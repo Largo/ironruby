@@ -503,6 +503,39 @@ p q(1)
         }
 
         /// <summary>
+        /// A class or module body is a frame of its own when it is compiled too, as IronRuby.Tests compile
+        /// everything: the expression compiler compiles its call into the code around it, and the backtrace
+        /// reports its frame record there. It used to be left out, its lines going to the frame outside it.
+        /// </summary>
+        public void Backtrace_CompiledModuleBody1() {
+            TestOutput(@"
+def show(t) = p(t.map { |l| l[/:(\d+:in .*)/, 1] })
+def m1 = caller(0)
+module M
+  class A
+    show caller(0)
+    show m1
+    class << self
+      show caller(0)
+    end
+    begin
+      raise ""x""
+    rescue => e
+      show e.backtrace
+    end
+    [1].each { show caller(0) }
+  end
+end
+", @"
+[""6:in '<class:A>'"", ""5:in '<module:M>'"", ""4:in '<main>'""]
+[""3:in 'Object#m1'"", ""7:in '<class:A>'"", ""5:in '<module:M>'"", ""4:in '<main>'""]
+[""9:in 'singleton class'"", ""8:in '<class:A>'"", ""5:in '<module:M>'"", ""4:in '<main>'""]
+[""12:in '<class:A>'"", ""5:in '<module:M>'"", ""4:in '<main>'""]
+[""16:in 'block in <class:A>'"", ""16:in 'Array#each'"", ""16:in '<class:A>'"", ""5:in '<module:M>'"", ""4:in '<main>'""]
+");
+        }
+
+        /// <summary>
         /// The conversion of an interpolated local variable on a later line of a string (a heredoc's) reports that line, as
         /// MRI's does: the variable's node carries its declaration's span, so the part's line comes from StringConstructor.PartLines.
         /// </summary>

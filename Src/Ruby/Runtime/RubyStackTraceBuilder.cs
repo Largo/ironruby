@@ -37,6 +37,9 @@ namespace IronRuby.Runtime {
         // The lines of the compiled frames (see CompiledFrameExpression), outermost first; a compiled frame of the trace is
         // matched with the innermost one of its name not matched yet.
         private Precompiled.PrecompiledFrames.Frame[] _compiledFrames;
+
+        // The compiled class and module bodies the frame the walk is at runs in itself (see TakeCompiledFrameLine).
+        private List<Precompiled.PrecompiledFrames.Frame> _inlinedBodies;
         private int _compiledFrameIndex;
         // The lines of the interpreted frames that run a loop the interpreter has compiled, by depth (see PrecompiledFrames.SetLoopLine).
         private Precompiled.PrecompiledFrames.LoopLineInfo[] _loopLines;
@@ -507,6 +510,15 @@ namespace IronRuby.Runtime {
         private int TakeCompiledFrameLine(string/*!*/ encodedName) {
             for (int i = _compiledFrameIndex; i >= 0; i--) {
                 if (String.Equals(_compiledFrames[i].Name, encodedName, StringComparison.Ordinal)) {
+                    // A class or module body is called where it is written, and the expression compiler compiles that call
+                    // into the code around it: the body's frame record has no CLR frame of its own. The records of such
+                    // bodies between this frame's and the frame matched last are this frame's, innermost first (a record
+                    // left by any other kind of frame is not one this walk has a frame for).
+                    for (int j = _compiledFrameIndex; j > i; j--) {
+                        if (IsModuleBodyName(_compiledFrames[j].Name)) {
+                            (_inlinedBodies ??= new List<Precompiled.PrecompiledFrames.Frame>()).Add(_compiledFrames[j]);
+                        }
+                    }
                     _compiledFrameIndex = i - 1;
                     _previousInEnsure = _compiledFrames[i].InEnsure;
                     return _compiledFrames[i].Line;
@@ -740,45 +752,74 @@ namespace IronRuby.Runtime {
                         continue;
                     }
 
-                    if (!_keepInternalFrames && IsInternalFrameFile(file)) {
-                        // Above the first frame reported, the frames it drops still count for caller(n): a method of the prelude
-                        // skips its own frame that way (Kernel#caller_locations calls caller(n + 1)), and Thread#backtrace, which
-                        // calls caller_locations, dropped that frame - so its caller's went instead.
-                        int dropped = AddInternalFrame(methodName);
-                        if (_trace.Count == 0 && !skippedAny) {
-                            skipFrames = Math.Max(0, skipFrames - dropped);
+                    // the bodies of the classes and modules compiled into this frame (see TakeCompiledFrameLine) are frames
+                    // of their own, inside it
+                    if (_inlinedBodies != null && _inlinedBodies.Count > 0) {
+                        bool full = false;
+                        foreach (var body in _inlinedBodies) {
+                            string bodyName = body.Name, bodyFile = null;
+                            int bodyLine = body.Line;
+                            if (TryParseRubyMethodName(ref bodyName, ref bodyFile, ref bodyLine)) {
+                                Precompiled.PrecompiledCode.RebaseFrameFile(_previousMethod, ref bodyFile);
+                                if (AddFrame(bodyFile, bodyLine, bodyName, false, ref skipFrames, ref skippedAny)) {
+                                    full = true;
+                                    break;
+                                }
+                            }
                         }
-                        continue;
+                        _inlinedBodies.Clear();
+                        if (full) {
+                            break;
+                        }
                     }
 
-                    foreach (var deferred in _deferredMethodNames) {
-                        if (skipFrames == 0) {
-                            _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
-                        } else {
-                            skipFrames--;
-                            skippedAny = true;
-                        }
-                        // a library method's frame, reported where its caller is
-                        _rubyFrameEnd = _trace.Count;
-                    }
-                    _deferredMethodNames.Clear();
-                    _libraryRun = 0;
-
-                    if (skipFrames == 0) {
-                        _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
-                    } else {
-                        skipFrames--;
-                        skippedAny = true;
-                    }
-                    if (!isClrFrame) {
-                        _rubyFrameEnd = _trace.Count;
-                    }
-                    if (_rubyFrameEnd >= _maxFrames) {
-                        // the first _maxFrames frames are what the whole walk would have reported first
+                    if (AddFrame(file, line, methodName, isClrFrame, ref skipFrames, ref skippedAny)) {
                         break;
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Adds a frame the walk went by, after the library frames deferred to it, unless it is one of the internal frames left
+        /// out. True when the trace has all the frames it was asked for.
+        /// </summary>
+        private bool AddFrame(string file, int line, string methodName, bool isClrFrame, ref int skipFrames, ref bool skippedAny) {
+            if (!_keepInternalFrames && IsInternalFrameFile(file)) {
+                // Above the first frame reported, the frames it drops still count for caller(n): a method of the prelude
+                // skips its own frame that way (Kernel#caller_locations calls caller(n + 1)), and Thread#backtrace, which
+                // calls caller_locations, dropped that frame - so its caller's went instead.
+                int dropped = AddInternalFrame(methodName);
+                if (_trace.Count == 0 && !skippedAny) {
+                    skipFrames = Math.Max(0, skipFrames - dropped);
+                }
+                return false;
+            }
+
+            foreach (var deferred in _deferredMethodNames) {
+                if (skipFrames == 0) {
+                    _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
+                } else {
+                    skipFrames--;
+                    skippedAny = true;
+                }
+                // a library method's frame, reported where its caller is
+                _rubyFrameEnd = _trace.Count;
+            }
+            _deferredMethodNames.Clear();
+            _libraryRun = 0;
+
+            if (skipFrames == 0) {
+                _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
+            } else {
+                skipFrames--;
+                skippedAny = true;
+            }
+            if (!isClrFrame) {
+                _rubyFrameEnd = _trace.Count;
+            }
+            // the first _maxFrames frames are what the whole walk would have reported first
+            return _rubyFrameEnd >= _maxFrames;
         }
 
         /// <summary>
