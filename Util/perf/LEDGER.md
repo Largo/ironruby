@@ -8107,6 +8107,24 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/jiteqq (2026-11-28) - `C === x` (Module#===, a constant receiver) in a typed body; `respond_to?(:lit)`
+  counted: built, census-measured, nothing hot moved, not kept.** From the census of 33818f7 + 5b98b17, where
+  `MethodCall ===` refuses 304 methods first (426 at all, 170 alone). By receiver (prism over each refused method's
+  def): 141 methods call `===` on a constant, 152 on a call - almost all prism's generated `Node#===`, comparing
+  fields (`(name === other.name)`) - 16 on a local, 4 on a Range, 2 on a Regexp literal; `case ... when` adds
+  9 methods. The constant ones are the prelude's Complex and Rational helpers (`::Integer === x`, `::Float`,
+  `::Rational`), Socket's `Addrinfo === addr`, and `==` methods of the form `C === other && ...`. Built as
+  perf/jitbody's is_a? is (IR_JIT_MODULE_EQQ): JitScreen took `C === x` with C a constant, JitCompiler emitted
+  `JitRuntime.ModuleCaseCompare` - Module#=== is `IsKindOf(x, C)` (rb_obj_is_kind_of; x's is_a? is not asked)
+  under a KernelMethodSite on C's class resolving `===` to Module's, deopting otherwise, and declining with
+  refinements active. Census: 39 methods never -> maybe, none to compiles (most stop at "constant without a
+  scope", which only a run can fold). Nothing hot among them: AWFY 0 methods changed; app-shapes' run (`census
+  -u`) 0 of the 922 methods it called; a Complex arithmetic loop (`s + a * b - b`, 300,000 times) the same 52
+  screen rejections in both builds - Complex's operators do not reach the helpers that moved on their hot path.
+  `respond_to?(:lit)` was only counted: the first refusal of 361 methods and the only one of 72, none in AWFY,
+  7 among app-shapes' called methods - the same order, not built. Both are what the census can win and the
+  clock cannot see; worth doing only together with whatever lets the methods around them compile.
+
 - **perf/jiteach (2026-11-28) - a typed body that takes `recv.each { }`, `recv.map { }` and `n.times { }` as a
   loop: screened, not built.** Chosen from the census of 33818f7 + a22b068, where `MethodCall each` refuses 716
   methods first and `map` 402, with "alone" counts of 567 and 301. Those counts are the screen's first refusal:
