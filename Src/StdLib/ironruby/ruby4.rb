@@ -627,8 +627,8 @@ module Enumerable
     keys = []
     each do |*values|
       item = __enum_item__(values)
-      keys << (values.size == 1 ? block.call(item) : __enum_yield__(values, &block))
-      items << item
+      keys.__send__(:__list_push__, values.size == 1 ? block.call(item) : __enum_yield__(values, &block))
+      items.__send__(:__list_push__, item)
       # the block #each was given answers nil, as MRI's does, should #each keep it and call it
       nil
     end
@@ -646,8 +646,8 @@ module Enumerable
     items = []
     keys = []
     each do |item|
-      items << item
-      keys << yield(item)
+      items.__send__(:__list_push__, item)
+      keys.__send__(:__list_push__, yield(item))
     end
     i = -1
     items.__send__(:__list_sort_by__) { keys[i = i.succ] }
@@ -1362,6 +1362,10 @@ class Array
   # change when a program redefines Array#sort_by.
   alias :__list_sort_by__ :sort_by
   private :__list_sort_by__
+  # and Array#push, with which they gather the keys and elements: a program's own Array#<< is
+  # not called by MRI's sort_by
+  alias :__list_push__ :push
+  private :__list_push__
   # #dig indexes with an Integer and nothing else: unlike #[] it does not take a
   # Range or an arithmetic sequence, because there would be no way to keep
   # digging into the several elements that would answer.
@@ -9808,8 +9812,12 @@ unless defined?(Random)
   class Random
     # MRI's generator is MT19937 (see MersenneTwister.cs), seeded and consumed exactly as
     # random.c does, so a given seed produces the same numbers, bytes and marshal data here.
-    @__mt_class__ = System::Type.get_type("IronRuby.Builtins.MersenneTwister, IronRuby.Libraries").to_class
-    def self.__mt_class__ = @__mt_class__
+    # Found at the first Random made, not at every boot: through CLR interop it cost every
+    # process the reflection of System::Type and its Ruby class (~3 ms of `ir -e 1'). Two threads
+    # that race here find the same class.
+    def self.__mt_class__
+      @__mt_class__ ||= System::Type.get_type("IronRuby.Builtins.MersenneTwister, IronRuby.Libraries").to_class
+    end
     private_class_method :__mt_class__
 
     def initialize(seed = Random.new_seed)

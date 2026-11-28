@@ -256,7 +256,12 @@ namespace IronRuby.Compiler.Ast {
                         }
                         break;
                     case "rest":
-                        arguments.Add(new SplattedArgument(ReadLocal(parameter.Name, span)));
+                        // an anonymous `*' is read back from the hidden local the prologue binds it to, as a `super' in the
+                        // method itself reads it (PrismAstBridge.CanReadBackPositionals), which no longer keeps ?superargs?
+                        // for it
+                        arguments.Add(new SplattedArgument(ReadLocal(
+                            parameter.Name == "*" && gen.CompilerOptions.LocalNames != null &&
+                            gen.CompilerOptions.LocalNames.Contains(Symbols.RestArgsLocal) ? Symbols.RestArgsLocal : parameter.Name, span)));
                         break;
                     case "keyreq":
                     case "key":

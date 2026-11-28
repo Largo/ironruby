@@ -10,11 +10,16 @@
 # `IronRuby.Aot unsupported`, AotCompiler.UnsupportedFinder; it needs the compiler built, as build-startup.sh does). A file
 # is listed under the first command that loads it. The commands run with this tree's ir.sh, or IR_TREE's (IR_CONFIG as
 # set, else what ir.sh picks: the R2R host and the Release build load the same files).
+#
+# It also writes startup-evals.txt: the same commands run again with IR_EVAL_RECORD, which records every plain string eval
+# compiled without a warning (the source text and everything EvalCodeCache keys on), and the library compiles each one for
+# the first eval of exactly that text in exactly that context (PrecompiledCode.TryClaimEval). --check compares them too.
 require "open3"
 
 ROOT = File.expand_path("../..", __dir__)
 IR_SH = File.join(ENV["IR_TREE"] || ROOT, "ir.sh")
 LIST = File.join(__dir__, "startup-files.txt")
+EVALS = File.join(__dir__, "startup-evals.txt")
 STDLIB = File.join(ROOT, "Src/StdLib/")
 
 # [title, ir arguments, stdin]. TERM is set (xterm), so irb's reline loads its ANSI terminal code, as at a terminal.
@@ -55,6 +60,28 @@ def loaded_files(args, stdin)
   files.filter_map { |f| f.delete_prefix(stdlib) if f.start_with?(stdlib) }
 end
 
+# The string evals the commands run, recorded by the runtime (IR_EVAL_RECORD: PrecompiledCode.RecordEval), with the tree's
+# root as ${ROOT}: the library compiles each for the first eval of exactly that text in exactly that context. A second pass
+# after the files', so that RubyGems' caches are written and only what a usual run evaluates is recorded.
+require "json"
+require "tmpdir"
+def recorded_evals(args, stdin)
+  tree = File.dirname(IR_SH)
+  Dir.mktmpdir do |dir|
+    record = File.join(dir, "evals")
+    env = { "IR_STARTUP_DLL" => "none", "IR_EVAL_RECORD" => record, "TERM" => "xterm" }
+    cmd = [IR_SH, *args]
+    _, out, status = Open3.capture3(env, *cmd, stdin_data: stdin || "")
+    abort "startup-files.rb: #{cmd.join(" ")} failed:\n#{out}" unless status.success?
+    next [] unless File.exist?(record)
+    File.readlines(record, chomp: true).map do |l|
+      e = JSON.parse(l)
+      e["path"] = e["path"].gsub(tree + "/", "${ROOT}/")
+      JSON.generate(e)
+    end
+  end
+end
+
 sections = []
 seen = {}
 COMMANDS.each do |title, args, stdin|
@@ -62,6 +89,9 @@ COMMANDS.each do |title, args, stdin|
   files.each { |f| seen[f] = true }
   sections << [title, files]
 end
+evals = []
+COMMANDS.each { |_, args, stdin| evals.concat(recorded_evals(args, stdin)) }
+evals.uniq!
 LEFT_OUT = unsupported(seen.keys)
 LEFT_OUT.each_key { |f| seen.delete(f) }
 sections.each { |_, files| files.reject! { |f| LEFT_OUT.key?(f) } }
@@ -73,8 +103,12 @@ if ARGV.include?("--check")
   extra = listed - seen.keys
   extra.each { |f| puts "startup-files.txt lists #{f}, which none of the commands loads" }
   missing.each { |f| puts "startup-files.txt lacks #{f}, which the commands load" }
-  if missing.empty? && extra.empty?
-    puts "ok: startup-files.txt lists the #{listed.size} files the commands load"
+  listed_evals = File.exist?(EVALS) ? File.readlines(EVALS, chomp: true).reject { |l| l.empty? || l.start_with?("#") } : []
+  describe = ->(l) { e = JSON.parse(l); "#{e["path"]}:#{e["line"]} (#{e["code"].unpack1("m").bytesize} bytes)" }
+  (listed_evals - evals).each { |l| puts "startup-evals.txt has an eval none of the commands runs: #{describe[l]}" }
+  (evals - listed_evals).each { |l| puts "startup-evals.txt lacks an eval the commands run: #{describe[l]}" }
+  if missing.empty? && extra.empty? && listed_evals.sort == evals.sort
+    puts "ok: startup-files.txt lists the #{listed.size} files the commands load, startup-evals.txt their #{evals.size} evals"
     exit 0
   end
   puts "rewrite it with: ruby Util/aot/startup-files.rb"
@@ -92,3 +126,10 @@ File.open(LIST, "w") do |io|
   end
 end
 puts "wrote #{LIST}: #{seen.size} files"
+File.open(EVALS, "w") do |io|
+  io.puts "# Written by startup-files.rb with startup-files.txt: the string evals those commands run, one JSON object a line"
+  io.puts "# (PrecompiledCode.RecordEval), compiled into IronRuby.Startup.dll for the first eval of exactly that text in exactly"
+  io.puts "# that context. ${ROOT} is the IronRuby tree."
+  evals.each { |l| io.puts l }
+end
+puts "wrote #{EVALS}: #{evals.size} evals"

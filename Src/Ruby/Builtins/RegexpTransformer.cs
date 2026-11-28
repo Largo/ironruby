@@ -117,6 +117,8 @@ namespace IronRuby.Builtins {
             public bool AsciiCtype;
             // see Transform(..., latin1Ctype)
             public bool Latin1Ctype;
+            // see TransformForEscapedBytes
+            public bool EscapedBytes;
             // Whether /i or an inline (?i) may be in effect anywhere in the pattern (AsciiCtype only).
             public bool MayIgnoreCase;
             // Whether AsciiCtype made the translation differ from the plain one.
@@ -276,6 +278,22 @@ namespace IronRuby.Builtins {
             var result = transformer.Transform();
             hasGAnchor = transformer._hasGAnchor;
             asciiCtypeApplied = transformer._state.AsciiCtypeApplied;
+            return result;
+        }
+
+        /// <summary>
+        /// The astral-safe translation for a subject that holds undecodable bytes, which reach .NET as lone low
+        /// surrogates U+DC00-U+DCFF (EscapingEncoding): '.' takes such a byte as a character of its own, as Onigmo
+        /// does. Only StringScanner matches such a subject (the rest from a scan pointer inside a character of a
+        /// valid subject: RubyRegex.MatchWindow's allowBroken); any other match of a broken string raises first.
+        /// </summary>
+        internal static string TransformForEscapedBytes(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
+            RegexpTransformer transformer = new RegexpTransformer(rubyPattern);
+            transformer._clrOptions = RubyRegex.ToClrOptions(options);
+            transformer._state.AstralSafe = true;
+            transformer._state.EscapedBytes = true;
+            var result = transformer.Transform();
+            hasGAnchor = transformer._hasGAnchor;
             return result;
         }
 
@@ -711,7 +729,9 @@ namespace IronRuby.Builtins {
                 bool astralSafe = _state.AstralSafe;
                 bool asciiCtype = _state.AsciiCtype;
                 bool latin1Ctype = _state.Latin1Ctype;
+                bool escapedBytes = _state.EscapedBytes;
                 _state = new SharedState();
+                _state.EscapedBytes = escapedBytes;
                 _state.AstralSafe = astralSafe;
                 _state.AsciiCtype = asciiCtype;
                 _state.Latin1Ctype = latin1Ctype;
@@ -917,7 +937,9 @@ namespace IronRuby.Builtins {
                         lastWasQuantifier = false;
                         lastEntity = null;
                         bool topLevelPosixClass;
-                        AppendCharacterSet(ParseCharacterGroup(false, out topLevelPosixClass), true);
+                        // Onigmo takes an undecodable byte for a character a class negated at its top ([^l]) matches
+                        bool negatedGroup = Peek() == '^';
+                        AppendCharacterSet(ParseCharacterGroup(false, out topLevelPosixClass), true, negatedGroup);
                         break;
 
                     case '.':
@@ -1692,7 +1714,9 @@ namespace IronRuby.Builtins {
                         "(?>\\r\\n|\\uD83C[\\uDDE6-\\uDDFF]\\uD83C[\\uDDE6-\\uDDFF]|" +
                         "(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])" +
                         "(?:\\p{M}|[\\uFE00-\\uFE0F\\u200C]|\\uD83C[\\uDFFB-\\uDFFF]|\\uDB40[\\uDC20-\\uDC7F]|" +
-                        "\\u200D(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF]))*)"
+                        "\\u200D(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF]))*" +
+                        // an undecodable byte is a cluster of its own to Onigmo (TransformForEscapedBytes)
+                        (_state.EscapedBytes ? "|[\\uDC00-\\uDCFF])" : ")")
                     );
                     break;
 
@@ -1755,7 +1779,8 @@ namespace IronRuby.Builtins {
                         var latin1Word = CharacterSet.MakeSet(_latin1WordQuirk, null);
                         set = (escape == 'w') ? set.Union(latin1Word) : set.Subtract(latin1Word);
                     }
-                    AppendCharacterSet(set, false);
+                    // \S \D \W \H match an undecodable byte in Onigmo, as a negated class does
+                    AppendCharacterSet(set, false, escape == 'S' || escape == 'D' || escape == 'W' || escape == 'H');
                     break;
             }
         }
@@ -2281,6 +2306,10 @@ namespace IronRuby.Builtins {
             if (next == '*' || next == '+') {
                 Append('.');
                 _loopGuardPending = true;
+            } else if (_state.EscapedBytes) {
+                // an undecodable byte (a lone U+DC00-U+DCFF) is a character too
+                string other = (_dotAll == true) ? "[^\\ud800-\\udfff]" : (_dotAll == false) ? "[^\\n\\ud800-\\udfff]" : "(?![\\ud800-\\udfff]).";
+                _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|" + other + "|[\\udc00-\\udcff])");
             } else if (_dotAll == true) {
                 _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|[^\\ud800-\\udfff])");
             } else if (_dotAll == false) {
@@ -2294,7 +2323,18 @@ namespace IronRuby.Builtins {
         /// Emits a character set as a pattern entity. A set holding every non-BMP character that
         /// a * or + follows is emitted as one class (CharacterSet.AppendLoopBodyTo), for speed.
         /// </summary>
-        private void AppendCharacterSet(CharacterSet/*!*/ set, bool parenthesize) {
+        /// <param name="takesEscapedByte">
+        /// The set is a negated escape (\S) or a class negated at its top ([^x]), which Onigmo matches against an
+        /// undecodable byte (a positive class, [\S] included, does not): in the translation for such a subject
+        /// (TransformForEscapedBytes) it takes the lone U+DC00-U+DCFF the byte decodes to.
+        /// </param>
+        private void AppendCharacterSet(CharacterSet/*!*/ set, bool parenthesize, bool takesEscapedByte) {
+            if (takesEscapedByte && _state.EscapedBytes) {
+                _sb.Append("(?:");
+                set.AppendTo(_sb, true);
+                _sb.Append("|[\\udc00-\\udcff])");
+                return;
+            }
             if (_state.MayIgnoreCase) {
                 if (set.IsSingleCharacter && IsUnfoldedLatin1Letter(set.SingleCodepoint)) {
                     // \xE9: the letter itself, spelled as a literal one is

@@ -90,6 +90,13 @@ namespace IronRuby.Runtime.Calls {
         internal bool ScopeRead;
 
         /// <summary>
+        /// Set by RubyCallAction.BuildCall at a site with RubyCallFlags.HasMatchSink once the method is resolved and is one that
+        /// takes the scope only to store $~ (RubyCallAction.IsMatchSinkMethod): the scope argument is then the frame's sink
+        /// (RubyOps.TakeMatchSink), which the method is given, and reading it is not reading the frame's scope.
+        /// </summary>
+        internal bool MatchSink;
+
+        /// <summary>
         /// The scope argument's expression, for a helper that takes the scope only for its runtime (GetInstanceVariable,
         /// SetAttribute): the scope a light-scope site passes has the same runtime, so this does not count as reading it.
         /// </summary>
@@ -99,6 +106,10 @@ namespace IronRuby.Runtime.Calls {
 
         public DynamicMetaObject/*!*/ MetaScope {
             get {
+                if (MatchSink) {
+                    Debug.Assert(_scope != null && _signature.HasScope);
+                    return _scope;
+                }
                 if (_signature.HasLightScope) {
                     ScopeRead = true;
                 }

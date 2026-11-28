@@ -167,6 +167,11 @@ namespace IronRuby.Tests {
         }
 
         public static void Main(string[]/*!*/ arguments) {
+            // not a test: the block-cost harness of Docs/block-calling-convention.md, stage 0 (Perf/BlockCostHarness.cs)
+            if (arguments.Length > 0 && arguments[0] == "/blockcost") {
+                IronRuby.Tests.Perf.BlockCostHarness.Run(arguments);
+                return;
+            }
             string culture = Environment.GetEnvironmentVariable("IR_CULTURE");
             if (!String.IsNullOrEmpty(culture)) {
                 Thread.CurrentThread.CurrentCulture = new CultureInfo(culture, false);

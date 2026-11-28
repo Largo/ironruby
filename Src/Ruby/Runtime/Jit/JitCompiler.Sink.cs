@@ -85,8 +85,9 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private bool IsTopStatement(RExpr/*!*/ node) {
-            if (_ast == null || _ast.Body.Statements == null) { return false; }
-            foreach (var s in _ast.Body.Statements) { if (s == node) { return true; } }
+            var statements = MethodStatements;
+            if (statements == null) { return false; }
+            foreach (var s in statements) { if (s == node) { return true; } }
             return false;
         }
 
@@ -183,7 +184,7 @@ namespace IronRuby.Runtime.Jit {
 
             // the last statement's held-back write, whose value is the body's
             SunkIVar last = null;
-            var statements = _ast.Body.Statements;
+            var statements = MethodStatements;
             var lastWrite = (statements != null && statements.Count > 0) ? statements.Last as SimpleAssignmentExpression : null;
             var lastTarget = (lastWrite != null) ? lastWrite.Left as InstanceVariable : null;
             if (lastTarget != null) {

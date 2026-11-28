@@ -6477,6 +6477,78 @@ t(:caught) { begin; method(:binding).call; rescue RuntimeError => e; e.class.anc
         }
 
         /// <summary>
+        /// A Method made of a `public :m' (or `private :m') entry has that module as #owner, but MRI's #unbind resolves
+        /// the entry to the inherited body: the UnboundMethod's owner is the body's. An alias keeps its own owner.
+        /// </summary>
+        public void Method_UnbindForwarder1() {
+            TestOutput(@"
+class OwnerBase; def privm = 1; def pubm = 2; private :privm; end
+class OwnerSub < OwnerBase; public :privm; private :pubm; alias_method :al, :privm; end
+o = OwnerSub.new
+[:privm, :al].each do |n|
+  m = o.method(n); u = m.unbind
+  p [n, m.owner, m.name, m.original_name, u.owner, u.name, u.original_name, u.bind(o).call]
+end
+p OwnerSub.instance_method(:pubm).owner, OwnerSub.instance_method(:pubm).bind_call(o), OwnerSub.new.public_method(:privm).unbind.owner
+p OwnerSub.private_instance_methods(false), OwnerSub.public_instance_methods(false).sort
+", @"
+[:privm, OwnerSub, :privm, :privm, OwnerBase, :privm, :privm, 1]
+[:al, OwnerSub, :al, :privm, OwnerSub, :al, :privm, 1]
+OwnerSub
+2
+OwnerBase
+[:pubm]
+[:al, :privm]
+");
+        }
+
+        /// <summary>
+        /// Method#to_proc's lambda is located where Method#source_location says the method is: nowhere for a core
+        /// method that is C in MRI, though the prelude writes it in Ruby.
+        /// </summary>
+        public void Method_ToProcSourceLocation1() {
+            TestOutput(@"
+require 'ruby4'
+def mine = 1
+define_method(:dm) { 2 }
+p method(:puts).to_proc.source_location, method(:then).to_proc.source_location == method(:then).source_location
+p method(:mine).to_proc.source_location == method(:mine).source_location, method(:dm).to_proc.source_location == method(:dm).source_location
+p [1].method(:each_slice).to_proc.source_location, 1.method(:+).to_proc.source_location, :upcase.to_proc.source_location
+", @"
+nil
+true
+true
+true
+nil
+nil
+nil
+");
+        }
+
+        /// <summary>
+        /// A core method CRuby writes in Ruby is located where CRuby's is, file and line, whether IronRuby writes it in
+        /// its prelude (Kernel#then) or in C# (Integer#times).
+        /// </summary>
+        public void Method_InternalSourceLine1() {
+            TestOutput(@"
+require 'ruby4'
+p method(:then).source_location, method(:tap).source_location, 3.method(:times).source_location, Kernel.instance_method(:frozen?).source_location
+p method(:then).to_proc.source_location, Integer.instance_method(:times).source_location, [].method(:each).source_location
+p 3.method(:times).inspect, Kernel.instance_method(:then).inspect
+", @"
+[""<internal:kernel>"", 121]
+[""<internal:kernel>"", 89]
+[""<internal:numeric>"", 255]
+[""<internal:kernel>"", 67]
+[""<internal:kernel>"", 121]
+[""<internal:numeric>"", 255]
+nil
+""#<Method: Integer#times() <internal:numeric>:255>""
+""#<UnboundMethod: Kernel#then() <internal:kernel>:121>""
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
@@ -8178,6 +8250,70 @@ false
         }
 
         /// <summary>
+        /// IR_LIGHT_MATCH_SINK: a light frame whose regex literals go to String and Regexp methods that store $~, in a method
+        /// that reads no $~ of its own (MethodDefinition.IsMatchSink): the caller's $~ is left as it was, in its thread too; a
+        /// method that reads its $~ ($~, Regexp.last_match, binding) sees its match.
+        /// </summary>
+        public void Method_LightFrameMatchSink1() {
+            TestOutput(@"
+require 'ruby4'
+def g(s) = s.gsub(/b/, ""x"")
+def sp(s) = s.split(/,/)
+def k(s)
+  case s
+  when /z/ then 1
+  when /b/ then 2
+  end
+end
+def e(s) = (s =~ /c/) || -1
+def t(s); s =~ /b+/; $~[0]; end
+def l(s); s.sub(/a/, """"); Regexp.last_match(0); end
+def b(s); s.index(/c/); binding.eval(""$~[0]""); end
+def caller_sees(s)
+  ""zz"" =~ /z/
+  r = [g(s), sp(s), k(s), e(s)]
+  [r, $~[0]]
+end
+p caller_sees(""abc,b""), 40.times.map { caller_sees(""ab"") }.uniq
+p t(""abbc""), l(""abc""), b(""abc"")
+$~ = nil
+p [g(""b""), e(""c""), $~]
+th = Thread.new { ""q"" =~ /q/; 30.times { g(""bb""); k(""b"") }; $~[0] }
+p th.value
+", @"
+[[""axc,x"", [""abc"", ""b""], 2, 2], ""z""]
+[[[""ax"", [""ab""], 2, -1], ""z""]]
+""bb""
+""a""
+""c""
+[""x"", 0, nil]
+""q""
+");
+        }
+
+        /// <summary>
+        /// IR_LIGHT_MATCH_SINK: the match a light frame's String call stores is the frame's alone (RubyOps.TakeMatchSink): once
+        /// the frame has returned nothing keeps it, or the String it matched in - its sink is cleared as it is given back.
+        /// </summary>
+        public void Method_LightFrameMatchSinkRetention1() {
+            TestOutput(@"
+def sink(s) = s.gsub(/b/, ""x"").size + (s =~ /b+/)
+def make
+  Array.new(8) do
+    s = ""b"" * 1000
+    sink(s)
+    System::WeakReference.new(s)
+  end
+end
+refs = make
+3.times { System::GC.Collect; System::GC.WaitForPendingFinalizers }
+puts refs.count { |r| r.IsAlive }
+", @"
+0
+");
+        }
+
+        /// <summary>
         /// `recv.m op= v' in a light frame (IR_LIGHT_MEMBER_OPASSIGN): the read of m, the operator and the write of m= are calls of
         /// the frame's light sites; the value is the right-hand side whatever m= returns; a private accessor on self; `&.'; binding.
         /// </summary>
@@ -9222,6 +9358,147 @@ begin; 1 < nil; rescue => x; puts x.message; end
 comparison of Float with Labeled failed
 comparison of Integer with Labeled failed
 comparison of Integer with nil failed
+");
+        }
+
+        /// <summary>
+        /// attr_reader and attr_writer methods are C methods to CRuby's TracePoint: :c_call and :c_return, through
+        /// every kind of call, in a method the JIT compiled before the TracePoint was enabled too, and nothing once it is off.
+        /// </summary>
+        public void TracePoint_AttrAccessorCCall1() {
+            TestOutput(@"
+require 'ruby4'
+class C; attr_accessor :x; attr_reader :r; attr_writer :w; def initialize; @r = 1; end; end
+c = C.new
+ev = []
+tp = TracePoint.new(:c_call, :c_return, :call, :return) { |t| ev << [t.event, t.method_id, t.defined_class, (t.return_value if t.event.to_s.end_with?(""return""))] if t.defined_class == C }
+tp.enable { c.x = 5; c.x; c.r; c.w = 2; c.send(:x); c.public_send(:x=, 3); c.method(:x).call }
+ev.each { |e| p e }
+class D; attr_accessor :x; def initialize; @x = 0; end; def bump; self.x = x + 1; end; def loop_read(n) = (s = 0; i = 0; while i < n; s += x; i += 1; end; s); end
+c = D.new
+5000.times { c.bump; c.loop_read(3) }
+ev2 = []
+tp2 = TracePoint.new(:c_call, :c_return) { |t| ev2 << [t.event, t.method_id] if t.defined_class == D }
+tp2.enable { c.bump; c.loop_read(2) }
+p ev2
+ev2.clear
+3000.times { c.bump; c.loop_read(3) }
+p ev2, c.x
+", @"
+[:c_call, :x=, C, nil]
+[:c_return, :x=, C, 5]
+[:c_call, :x, C, nil]
+[:c_return, :x, C, 5]
+[:c_call, :r, C, nil]
+[:c_return, :r, C, 1]
+[:c_call, :w=, C, nil]
+[:c_return, :w=, C, 2]
+[:c_call, :x, C, nil]
+[:c_return, :x, C, 5]
+[:c_call, :x=, C, nil]
+[:c_return, :x=, C, 3]
+[:c_call, :x, C, nil]
+[:c_return, :x, C, 3]
+[[:c_call, :x], [:c_return, :x], [:c_call, :x=], [:c_return, :x=], [:c_call, :x], [:c_return, :x], [:c_call, :x], [:c_return, :x]]
+[]
+8001
+");
+        }
+
+        /// <summary>
+        /// A Float that does not fit an integer is named as C's "%-.10g" prints it, as MRI's rb_out_of_long does:
+        /// "float Inf out of range of integer", "1e+30", "NaN".
+        /// </summary>
+        public void Float_OutOfRangeMessage1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  p [l, yield]
+rescue => e
+  p [l, e.class, e.message]
+end
+t(:take_inf) { [1].take(Float::INFINITY) }
+t(:take_ninf) { [1].take(-Float::INFINITY) }
+t(:first_nan) { [1].first(Float::NAN) }
+t(:big) { [1].take(1e30) }
+t(:ary_new) { Array.new(Float::INFINITY) }
+t(:str_mul) { ""a"" * Float::INFINITY }
+t(:at) { [1][1e19] }
+t(:idx) { [1][Float::NAN] }
+t(:mul) { [1] * 1e20 }
+t(:fmt) { ""%c"" % 1e30 }
+t(:fmt2) { ""%*d"" % [1e20, 1] }
+t(:small) { [1].take(-9.5e18) }
+", @"
+[:take_inf, RangeError, ""float Inf out of range of integer""]
+[:take_ninf, RangeError, ""float -Inf out of range of integer""]
+[:first_nan, RangeError, ""float NaN out of range of integer""]
+[:big, RangeError, ""float 1e+30 out of range of integer""]
+[:ary_new, RangeError, ""float Inf out of range of integer""]
+[:str_mul, RangeError, ""float Inf out of range of integer""]
+[:at, RangeError, ""float 1e+19 out of range of integer""]
+[:idx, RangeError, ""float NaN out of range of integer""]
+[:mul, RangeError, ""float 1e+20 out of range of integer""]
+[:fmt, RangeError, ""float 1e+30 out of range of integer""]
+[:fmt2, RangeError, ""float 1e+20 out of range of integer""]
+[:small, RangeError, ""float -9.5e+18 out of range of integer""]
+");
+        }
+
+        /// <summary>
+        /// round, floor, ceil and truncate convert Float digits as MRI's rb_num2int does: to a long first (NaN and huge
+        /// values: "float ... out of range of integer"), then to an int ("integer 3000000000 too big to convert to 'int'").
+        /// </summary>
+        public void Float_RoundDigitsRange1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  p [l, yield]
+rescue => e
+  p [l, e.class, e.message]
+end
+t(:f_big) { 1.5.round(1e30) }
+t(:f_neg) { 1.5.round(-3e9) }
+t(:f_nan) { 1.5.round(0.0 / 0) }
+t(:i_big) { 1.round(3e9) }
+t(:floor) { 1.5.floor(3e9) }
+t(:ceil) { 1.5.ceil(-2147483649.5) }
+t(:ok) { 1.25.round(1.9) }
+t(:trunc) { 12.5.truncate(-1.5) }
+t(:rational) { Rational(3, 2).round(3e9) }
+", @"
+[:f_big, RangeError, ""float 1e+30 out of range of integer""]
+[:f_neg, RangeError, ""integer -3000000000 too small to convert to 'int'""]
+[:f_nan, RangeError, ""float NaN out of range of integer""]
+[:i_big, RangeError, ""integer 3000000000 too big to convert to 'int'""]
+[:floor, RangeError, ""integer 3000000000 too big to convert to 'int'""]
+[:ceil, RangeError, ""integer -2147483649 too small to convert to 'int'""]
+[:ok, 1.3]
+[:trunc, 10]
+[:rational, TypeError, ""not an integer""]
+");
+        }
+
+        /// <summary>
+        /// sort_by and min_by(n) gather the keys without calling a program's own Array#<<, as MRI's do.
+        /// </summary>
+        public void Enumerable_SortByOwnPush1() {
+            TestOutput(@"
+require 'ruby4'
+H = { a: 3, b: 1, c: 2, d: 1 }
+class Array; alias __saved_push__ <<; remove_method :<<; def <<(x) = raise(""no""); end
+begin
+  p H.sort_by { |k, v| v }, [3, 1, 2].sort_by { -_1 }, H.min_by(2) { |k, v| v }, (1..4).sort_by { -_1 }
+ensure
+  class Array; remove_method :<<; alias << __saved_push__; end
+end
+p [1] << 2
+", @"
+[[:b, 1], [:d, 1], [:c, 2], [:a, 3]]
+[3, 2, 1]
+[[:b, 1], [:d, 1]]
+[4, 3, 2, 1]
+[1, 2]
 ");
         }
 

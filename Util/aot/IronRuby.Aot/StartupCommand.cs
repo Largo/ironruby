@@ -15,7 +15,7 @@ using IronRuby.Runtime.Precompiled;
 namespace IronRuby.Aot {
     /// <summary>
     ///   IronRuby.Aot startup -o dir [--tfm net10.0|net11.0] [--r2r] [--host dir] [--rid rid] [--root dir]
-    ///                        [--crossgen2 path] [--cache dir] (file.rb | @list)...
+    ///                        [--crossgen2 path] [--cache dir] [--evals file] (file.rb | @list)...
     ///
     /// Compiles the Ruby code `ir` runs at startup - the core prelude (ruby4.rb), rbconfig, rubygems
     /// and the rest - into dir/IronRuby.Startup.dll, a library IronRuby's loader picks up when it
@@ -37,13 +37,45 @@ namespace IronRuby.Aot {
     /// copy of the whole tree elsewhere (an unpacked release) uses it too: paths compiled into the code are moved
     /// to wherever the tree is at run time.
     ///
+    /// --evals names the string evals the startup commands run (Util/aot/startup-evals.txt): each is compiled in too, for
+    /// the first eval of exactly that text in exactly that context (PrecompiledCode.TryClaimEval).
+    ///
     /// --cache keeps the last library made in a directory, with a key of everything it was made from - the compiler,
     /// the host's assemblies, the files' contents, the options - and copies it out instead of compiling when the key
     /// is the same: an unchanged rebuild costs a second, not twenty.
     /// </summary>
     internal static class StartupCommand {
+        /// <summary>The marker startup-evals.txt has for the tree's root in a path: the tree the library is compiled for replaces it.</summary>
+        private const string EvalRootMarker = "${ROOT}";
+
+        // one JSON object a line, as PrecompiledCode.RecordEval writes them
+        private static List<AotCompiler.EvalUnit> ReadEvals(string file, string root) {
+            var result = new List<AotCompiler.EvalUnit>();
+            foreach (var line in File.ReadAllLines(file)) {
+                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                var o = System.Text.Json.Nodes.JsonNode.Parse(line).AsObject();
+                string[] Names(string name) => o[name] is System.Text.Json.Nodes.JsonArray a ? a.Select(n => (string)n).ToArray() : null;
+                result.Add(new AotCompiler.EvalUnit {
+                    Code = Convert.FromBase64String((string)o["code"]),
+                    Encoding = (string)o["encoding"],
+                    Path = ((string)o["path"]).Replace(EvalRootMarker, root),
+                    Line = (int)o["line"],
+                    Verbosity = (int)o["verbosity"],
+                    InMethod = (bool)o["inMethod"],
+                    BaseLabel = (string)o["baseLabel"],
+                    BlockLevels = (int)o["blockLevels"],
+                    MethodName = (string)o["methodName"],
+                    ParameterNames = Names("parameterNames"),
+                    HasUnsplat = (bool)o["hasUnsplat"],
+                    LocalNames = Names("localNames"),
+                    ModuleNames = Names("moduleNames"),
+                });
+            }
+            return result;
+        }
+
         public static int Run(string[] args) {
-            string outDir = null, tfm = "net10.0", host = null, rid = null, root = null, crossgen = null, cache = null;
+            string outDir = null, tfm = "net10.0", host = null, rid = null, root = null, crossgen = null, cache = null, evalsFile = null;
             bool r2r = false;
             var listed = new List<string>();
             for (int i = 0; i < args.Length; i++) {
@@ -56,6 +88,8 @@ namespace IronRuby.Aot {
                     case "--root": root = args[++i]; break;
                     case "--crossgen2": crossgen = args[++i]; break;
                     case "--cache": cache = args[++i]; break;
+                    // the string evals the startup commands run (Util/aot/startup-evals.txt, written by startup-files.rb)
+                    case "--evals": evalsFile = args[++i]; break;
                     default:
                         if (args[i].StartsWith("@", StringComparison.Ordinal)) {
                             string list = args[i].Substring(1), baseDir = Path.GetDirectoryName(Path.GetFullPath(list));
@@ -72,7 +106,7 @@ namespace IronRuby.Aot {
             }
             if (outDir == null || listed.Count == 0) {
                 Console.Error.WriteLine("usage: IronRuby.Aot startup -o dir [--tfm net10.0|net11.0] [--r2r] [--host dir] [--rid rid] [--root dir] " +
-                    "[--crossgen2 path] [--cache dir] (file.rb | @list)...");
+                    "[--crossgen2 path] [--cache dir] [--evals file] (file.rb | @list)...");
                 return 2;
             }
             var tfmMatch = System.Text.RegularExpressions.Regex.Match(tfm, @"\Anet(\d+)\.0\z");
@@ -153,6 +187,7 @@ namespace IronRuby.Aot {
                 }
                 if (r2r) k.Append(crossgen).Append('=').Append(new FileInfo(crossgen).Length).Append('\n').Append(framework ?? "self-contained").Append('\n');
                 foreach (var f in files) k.Append(f).Append('=').Append(PrecompiledCode.HashFile(f)).Append('\n');
+                if (evalsFile != null && File.Exists(evalsFile)) k.Append("evals=").Append(PrecompiledCode.HashFile(evalsFile)).Append('\n');
                 key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(k.ToString())));
                 string keyFile = Path.Combine(cache, "key");
                 if (File.Exists(keyFile) && File.ReadAllText(keyFile).Trim() == key) {
@@ -189,6 +224,9 @@ namespace IronRuby.Aot {
                     _ => r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) ? SplitNodes : 0
                 }
             };
+            if (evalsFile != null && File.Exists(evalsFile)) {
+                compiler.Evals = ReadEvals(evalsFile, root);
+            }
             compiler.Compile(null, files, dll);
             Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count - compiler.LeftOut.Count} files) in {sw.ElapsedMilliseconds} ms");
             foreach (var kv in compiler.Stats.OrderBy(kv => kv.Key)) {

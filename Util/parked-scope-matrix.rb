@@ -149,4 +149,63 @@ class P2 < P1; def run; [0].each { |z| z }; super; end; end
 class P3; def run; [0].each { |z| z }; yield 2; end; end
 t('super hands the block on, kept, break called later') { |i| P2.new.run { |x| break x }; P2.new.run { }; begin; $kb.call; rescue LocalJumpError => e; e.reason; end }
 t('a kept caller block after another call of the body') { |i| pr = nil; P3.new.run { |x| pr = proc { break x } }; P3.new.run { }; begin; pr.call; rescue LocalJumpError => e; e.reason; end }
+
+# ---------------------------------------------------------------- 7. downto, and recursion deeper than one parked scope
+# (perf/permute) Integer#downto only yields ([BlockNotKept]), so a method calling it with a literal is parked; and a
+# recursive method parks one scope per level (ParkedScopeSlot.Deeper, IR_PARKED_DEPTH) instead of one in all. Every row
+# below is a way a scope of one level could be seen by another, or a scope that must not be parked could be.
+
+class PsPerm
+  attr_reader :count, :v
+  def initialize; @count = 0; @v = Array.new(6) { |k| k }; end
+  def permute(n)
+    @count += 1
+    if n != 0
+      n1 = n - 1
+      permute(n1)
+      n1.downto(0) do |i|
+        swap(n1, i)
+        permute(n1)
+        swap(n1, i)
+      end
+    end
+  end
+  def swap(i, j); tmp = @v[i]; @v[i] = @v[j]; @v[j] = tmp; end
+end
+t('Permute: count and the array after permute(5)') { |i| o = PsPerm.new; o.permute(5); [o.count, o.v] }
+
+class PsDeep
+  def r(n, acc)
+    x = n * 10
+    n.downto(1) { |i| acc << [x, i] if i == n || i == 1; r(n - 1, acc) if i == n }
+    acc
+  end
+  def boom(n, at)
+    x = n
+    n.downto(1) { |i| raise "at #{x}" if n == at; boom(n - 1, at) if i == n }
+    x
+  end
+end
+pd = PsDeep.new
+t('each level sees its own locals, 4 deep') { |i| pd.r(4, []) }
+t('each level sees its own locals, 12 deep (past the slots)') { |i| pd.r(12, []).size }
+t('an exception 3 levels down, then a normal call') { |i| e = (pd.boom(6, 3) rescue $!.message); [e, pd.boom(5, -1)] }
+
+class PsDownto
+  def keep_binding(n); y = n; n.downto(0) { |i| $ps_b = binding if i == 0 }; y; end
+  def keep_proc(n); n.downto(0) { |i| $ps_p = proc { [n, i] } if i == 0 }; n; end
+  def brk(n) = n.downto(0) { |i| break i * 100 if i == 2 }
+  def nxt(n); s = 0; n.downto(0) { |i| next if i.odd?; s += i }; s; end
+  def float(n); s = []; n.downto(1.5) { |i| s << i }; s; end
+  def big(n); s = 0; (2**64 + n).downto(2**64) { |i| s += 1 }; s; end
+end
+pdt = PsDownto.new
+t('a binding kept from a downto block, then another call') { |i| pdt.keep_binding(i % 5); b = $ps_b; pdt.keep_binding(7); b.local_variable_get(:y) == i % 5 }
+t('a Proc made in a downto block, then another call') { |i| pdt.keep_proc(i % 4); pr = $ps_p; pdt.keep_proc(9); pr.call == [i % 4, 0] }
+t('break out of downto') { |i| pdt.brk(5) }
+t('next in downto') { |i| pdt.nxt(9) }
+t('downto a Float') { |i| pdt.float(4) }
+t('downto over Bignums') { |i| pdt.big(3) }
+t('two threads recurse in the same method') { |i| a = PsPerm.new; b = PsPerm.new; [Thread.new { a.permute(4); a.count }, Thread.new { b.permute(4); b.count }].map(&:value) }
+t('downto without a block') { |i| 3.downto(1).to_a }
 puts 'end'
