@@ -491,16 +491,23 @@ namespace IronRuby.Compiler.Ast {
         };
 
         // Array#find, #detect, #find_index, #index, #any?, #all? and #none? only yield ([BlockNotKept]); IR_PARKED_FIND=0 counts
-        // them never parked again, as they were while an Array's find and any? were Enumerable's. (Integer#upto and #downto
-        // only yield too, but parking a method around them costs more instructions than the bytes it saves: Util/perf/LEDGER.md,
-        // gap 13, perf/iter2.)
+        // them never parked again, as they were while an Array's find and any? were Enumerable's. (Integer#upto only yields too,
+        // but parking a method around it cost more instructions than the bytes it saved: Util/perf/LEDGER.md, gap 13,
+        // perf/iter2. #downto is parked since perf/permute, whose deeper slots serve a recursion's levels: below.)
         private static readonly bool ParkedFindEnabled = Environment.GetEnvironmentVariable("IR_PARKED_FIND") != "0";
 
         internal static bool IsNeverParkedIterator(string/*!*/ name) {
+            // Integer#downto only yields ([BlockNotKept], as #times): a method that calls it with a literal (Permute's recursive
+            // `permute') may park its scope. IR_PARK_DOWNTO=0 counts it among the iterators above, as before.
+            if (name == "downto" && ParkDownTo) {
+                return false;
+            }
             return NeverParkedIterators.Contains(name) ||
                 !ParkedFindEnabled && (name == "find" || name == "detect" || name == "find_index" || name == "index" ||
                     name == "any?" || name == "all?" || name == "none?");
         }
+
+        private static readonly bool ParkDownTo = Environment.GetEnvironmentVariable("IR_PARK_DOWNTO") != "0";
 
         /// <summary>
         /// IR_LIGHT_BLOCK_GIVEN=0 makes `block_given?' in a light-frame method the call it was before: the frame makes its

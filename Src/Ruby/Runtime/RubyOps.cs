@@ -247,7 +247,7 @@ namespace IronRuby.Runtime {
         public static ParkedProcs TakeParkedScope(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule) {
             var parked = slot.Parked;
             if (parked == null) {
-                return null;
+                return (slot.Deeper == null) ? null : TakeDeeperParkedScope(slot, parentScope, declaringModule);
             }
             return TakeParkedScopeSlow(slot, parked, parentScope, declaringModule);
         }
@@ -258,6 +258,23 @@ namespace IronRuby.Runtime {
             if (Interlocked.CompareExchange(ref slot.Parked, null, parked) != parked) {
                 return null;
             }
+            return CheckTakenParkedScope(slot, parked, parentScope, declaringModule);
+        }
+
+        // A recursive call, whose caller took Parked: one of the scopes its own recursive calls parked (ParkedScopeSlot.Deeper).
+        private static ParkedProcs TakeDeeperParkedScope(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule) {
+            var deeper = slot.Deeper;
+            for (int i = 0; i < deeper.Length; i++) {
+                var parked = deeper[i];
+                if (parked != null && Interlocked.CompareExchange(ref deeper[i], null, parked) == parked) {
+                    return CheckTakenParkedScope(slot, parked, parentScope, declaringModule);
+                }
+            }
+            return null;
+        }
+
+        private static ParkedProcs CheckTakenParkedScope(ParkedScopeSlot/*!*/ slot, ParkedProcs/*!*/ parked, RubyScope/*!*/ parentScope,
+            RubyModule/*!*/ declaringModule) {
             // the same body may be defined in more than one module or runtime: a scope is only reused for the definition it was
             // made for (one parked for another goes back, or is dropped if a call parked meanwhile)
             var scope = parked.Scope;
@@ -414,10 +431,18 @@ namespace IronRuby.Runtime {
                     // taker that read it before this write fails its exchange and makes a scope of its own - and cannot come
                     // back, since only a parker publishes, and only an object it holds alone (taken by exchange, from Spare by
                     // exchange, or new). The take stays an exchange: it is what keeps one parked scope out of two frames.
-                    Volatile.Write(ref slot.Parked, parked);
-                    return;
-                }
-                if (Interlocked.CompareExchange(ref slot.Parked, parked, null) == null) {
+                    // A slot that holds a scope already - the caller's level of a recursion, or another thread's - is left to
+                    // it, and this call parks into a free entry of Deeper by exchange (perf/permute), or keeps its ParkedProcs
+                    // as Spare when there is none, as the exchange did; two calls that both read the slot empty both write,
+                    // and the first one's scope is dropped, as above.
+                    if (Volatile.Read(ref slot.Parked) == null) {
+                        Volatile.Write(ref slot.Parked, parked);
+                        return;
+                    }
+                    if (TryParkDeeper(slot, parked)) {
+                        return;
+                    }
+                } else if (Interlocked.CompareExchange(ref slot.Parked, parked, null) == null || TryParkDeeper(slot, parked)) {
                     return;
                 }
             } else {
@@ -425,6 +450,24 @@ namespace IronRuby.Runtime {
             }
             parked.Clear();
             Volatile.Write(ref slot.Spare, parked);
+        }
+
+        // Parked is full - this call's caller, or another thread, parked first: a free entry of Deeper.
+        private static bool TryParkDeeper(ParkedScopeSlot/*!*/ slot, ParkedProcs/*!*/ parked) {
+            if (ParkedScopeSlot.Depth <= 1) {
+                return false;
+            }
+            var deeper = slot.Deeper;
+            if (deeper == null) {
+                Interlocked.CompareExchange(ref slot.Deeper, new ParkedProcs[ParkedScopeSlot.Depth - 1], null);
+                deeper = slot.Deeper;
+            }
+            for (int i = 0; i < deeper.Length; i++) {
+                if (deeper[i] == null && Interlocked.CompareExchange(ref deeper[i], parked, null) == null) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         #endregion
