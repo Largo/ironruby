@@ -502,9 +502,14 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static RuntimeFlowControl/*!*/ EnterLightMethodNamingBlock(Proc blockParameter) {
             RubyUtils.SafePoint();
-            if (blockParameter != null && blockParameter.Kind == ProcKind.Block) {
-                blockParameter.ConvertAsMethodFrame();
-                return blockParameter;
+            if (blockParameter != null) {
+                if (blockParameter.Kind == ProcKind.Block) {
+                    blockParameter.ConvertAsMethodFrame();
+                    return blockParameter;
+                }
+                // a block another method passed on (Proc.PassHeldFlag): this method may keep it - or pass it on, by `super' too, to
+                // a receiver that confirms the pass, which must not make it reusable again
+                blockParameter.ClearReusable();
             }
             return InactiveRfc;
         }

@@ -149,3 +149,40 @@ t('threads: kept blocks while others pass') {
   ths.each(&:join)
   s.saved.map { |b| b.call[0] }.sort
 }
+
+# A receiver that keeps the block and then hands it on to one that only yields (Richards' TaskControlBlock#initialize
+# stores it and calls `super()', which passes it too): the keeping must win over the later receiver's confirmation.
+class KBase
+  def initialize; end
+end
+class KKeep < KBase
+  attr_reader :fn
+  def initialize(tag, &fn); super(); @tag = tag; @fn = fn; end
+end
+class KStore
+  def initialize; @items = [1]; @saved = []; end
+  attr_reader :saved
+  def each_yield; @items.each { |x| yield x }; end
+  def keep_then_yield(&b); @saved << b; each_yield(&b); end
+end
+class KPass
+  def initialize(s); @s = s; end
+  def make(tag, &b) = KKeep.new(tag, &b)
+  def keep_yield(&b) = @s.keep_then_yield(&b)
+end
+class KCaller
+  def initialize(kp); @kp = kp; end
+  def make(n); data = n; @kp.make(:a) { |x| [data, x] }; end
+  def keep_yield(n); c = 0; @kp.keep_yield { |x| c += x; [n, c] }; c; end
+end
+t('kept by a receiver that calls super with it') {
+  kc = KCaller.new(KPass.new(KStore.new))
+  ks = Array.new(N) { |n| kc.make(n) }
+  ks.values_at(0, 1, 1500, -1).map { |k| k.fn.call(:x) }
+}
+t('kept by a receiver that passes it on to one that only yields') {
+  s = KStore.new
+  kc = KCaller.new(KPass.new(s))
+  N.times { |n| kc.keep_yield(n) }
+  s.saved.values_at(0, 1, 1500, -1).map { |b| b.call(5) }
+}
