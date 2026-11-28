@@ -13573,8 +13573,8 @@ module Kernel
   def __ir_string__(object)
     # a BasicObject has neither respond_to? nor to_s: only its #to_s (through method_missing) can help
     basic = !(::Kernel === object)
-    if !basic && object.respond_to?(:to_str)
-      converted = object.to_str
+    unless basic
+      converted = __ir_check_to_str__(object)
       return converted if converted.is_a?(::String)
       # rb_check_string_type: nil means "no conversion" and #to_s is tried; anything else is wrong
       unless converted.nil?
@@ -13587,14 +13587,15 @@ module Kernel
     class_name = basic ? (class << object; self; end).superclass : (object.nil? ? 'nil' : object.class)
     no_conversion = "can't convert #{class_name} into String"
     custom_respond_to = !basic && !object.method(:respond_to?).owner.equal?(::Kernel)
-    ::Kernel.raise(::TypeError, no_conversion) if custom_respond_to && !object.respond_to?(:to_s, true)
+    ::Kernel.raise(::TypeError, no_conversion) if custom_respond_to && !object.__send__(:respond_to?, :to_s, true)
     if !basic && ::Kernel.instance_method(:respond_to?).bind_call(object, :to_s, true)
       converted = object.__send__(:to_s)
     else
       begin
         converted = object.__send__(:to_s)
-      rescue ::NoMethodError => e
-        ::Kernel.raise if e.name != :to_s || !e.receiver.equal?(object)
+      rescue ::NoMethodError
+        # check_funcall_failed: any NoMethodError means "cannot", unless the object answers #to_s by now
+        ::Kernel.raise if ::Kernel.instance_method(:respond_to?).bind_call(object, :to_s)
         ::Kernel.raise(::TypeError, no_conversion)
       end
     end
@@ -13606,6 +13607,28 @@ module Kernel
     converted
   end
   private :__ir_string__
+
+  # #to_str as MRI's rb_check_string_type asks for it (rb_check_funcall): a #respond_to? of the
+  # object's own is asked, private methods included, and vetoes the call; otherwise #to_str in any
+  # visibility is called, a private one too; otherwise a #method_missing of the object's own is
+  # tried (check_funcall_missing), and a NoMethodError from it means "no conversion".
+  # nil for no conversion, as for a #to_str that answers nil.
+  def __ir_check_to_str__(object)
+    unless object.method(:respond_to?).owner.equal?(::Kernel)
+      return object.__send__(:respond_to?, :to_str, true) ? object.__send__(:to_str) : nil
+    end
+    return object.__send__(:to_str) if __ir_responds_to__(object, :to_str)
+    return nil unless __ir_conversion_callable__(object, :to_str)
+    begin
+      object.__send__(:to_str)
+    rescue ::NoMethodError
+      # check_funcall_failed: any NoMethodError means "no conversion", unless the object answers
+      # #to_str by now
+      ::Kernel.raise if object.respond_to?(:to_str)
+      nil
+    end
+  end
+  private :__ir_check_to_str__
 
   # rb_f_puts forwards to $stdout.puts, so a redefined or mocked #puts on $stdout is what
   # runs (Kernel#print and #p write to it directly instead). It forwards with rb_funcallv,

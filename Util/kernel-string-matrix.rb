@@ -210,3 +210,25 @@ t('TrueClass#to_s redefined to an Integer') do
     class TrueClass; alias to_s __saved_to_s__; remove_method :__saved_to_s__; end
   end
 end
+
+# ---------------------------------------------------------------- 7. rb_check_funcall for to_str: a private one, method_missing
+class MissingRaises; def method_missing(m, *a) = m == :to_str ? raise(NoMethodError.new("no", :to_str)) : super; def to_s = "after mm"; end
+class MissingOther; def method_missing(m, *a) = m == :to_str ? raise(NoMethodError.new("other", :other)) : super; end
+class MissingArg; def method_missing(m, *a) = m == :to_str ? raise(ArgumentError, "from mm") : super; end
+class MissingNil; def method_missing(m, *a) = m == :to_str ? nil : super; def to_s = "mm nil then to_s"; end
+class MissingInt; def method_missing(m, *a) = m == :to_str ? 3 : super; end
+class PrivRespond; private def respond_to?(m, priv = false) = m == :to_str; def method_missing(m, *a) = m == :to_str ? "pr" : super; end
+class ProtToStr; protected def to_str = "protected to_str"; end
+t('method_missing raises NoMethodError for to_str') { String(MissingRaises.new) }
+t('method_missing raises NoMethodError for another') { String(MissingOther.new) }
+t('method_missing raises ArgumentError') { String(MissingArg.new) }
+t('method_missing answers nil') { String(MissingNil.new) }
+t('method_missing answers an Integer') { String(MissingInt.new) }
+t('a private respond_to?') { String(PrivRespond.new) }
+t('a protected to_str') { String(ProtToStr.new) }
+class NoToSMissingRaises < BasicObject; def method_missing(m, *a) = m == :to_s ? ::Kernel.raise(::NoMethodError.new("x", :to_s)) : super; end
+class NoToSMissingOther; undef_method :to_s; def method_missing(m, *a) = m == :to_s ? raise(NoMethodError.new("y", :other)) : super; end
+class PrivRespondToS; undef_method :to_s; private def respond_to?(m, priv = false) = false; end
+t('BasicObject, method_missing raises for to_s') { String(NoToSMissingRaises.new) }
+t('no to_s, method_missing raises for another') { String(NoToSMissingOther.new) }
+t('no to_s, a private respond_to? says no') { String(PrivRespondToS.new) }

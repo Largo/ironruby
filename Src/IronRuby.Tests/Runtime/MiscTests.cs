@@ -4468,6 +4468,43 @@ Integer
         }
 
         /// <summary>
+        /// Kernel#String asks for #to_str as MRI's rb_check_funcall does: a private or protected #to_str is called, a
+        /// #method_missing of the object's own is tried when there is none, and any NoMethodError from it means "no
+        /// conversion" (check_funcall_failed); a private #respond_to? of the object's own is asked too.
+        /// </summary>
+        public void Kernel_StringCheckFuncall1() {
+            TestOutput(@"
+require 'ruby4'
+class PrivToStr; private def to_str = ""private to_str""; end
+class ProtToStr; protected def to_str = ""protected to_str""; end
+class MmOnly; def method_missing(m, *a) = m == :to_str ? ""mm to_str"" : super; end
+class MmNil; def method_missing(m, *a) = m == :to_str ? nil : super; def to_s = ""to_s after nil""; end
+class MmInt; def method_missing(m, *a) = m == :to_str ? 3 : super; end
+class MmNoMethod; def method_missing(m, *a) = m == :to_str ? raise(NoMethodError.new(""x"", :other)) : super; def to_s = ""to_s after NoMethodError""; end
+class MmArg; def method_missing(m, *a) = m == :to_str ? raise(ArgumentError, ""from method_missing"") : super; end
+class PrivRespond; private def respond_to?(m, priv = false) = m == :to_str; def method_missing(m, *a) = m == :to_str ? ""asked privately"" : super; end
+class NoToS; undef_method :to_s; def method_missing(m, *a) = m == :to_s ? raise(NoMethodError.new(""y"", :other)) : super; end
+[PrivToStr, ProtToStr, MmOnly, MmNil, MmInt, MmNoMethod, MmArg, PrivRespond, NoToS].each do |c|
+  begin
+    puts String(c.new)
+  rescue => e
+    puts ""#{e.class}: #{e.message}""
+  end
+end
+", @"
+private to_str
+protected to_str
+mm to_str
+to_s after nil
+TypeError: can't convert MmInt to String (MmInt#to_str gives Integer)
+to_s after NoMethodError
+ArgumentError: from method_missing
+asked privately
+TypeError: can't convert NoToS into String
+");
+        }
+
+        /// <summary>
         /// The state the Ruby-written core keeps in @__name__ ivars is not the object's state to Ruby, as
         /// MRI keeps it in C: a Rational's numerator, a Complex's parts, the errno tables and Process.argv0
         /// are not instance variables or constants (MRI has no Errno::ERRNO_TABLE, Process::ORIGINAL_ARGV0),
