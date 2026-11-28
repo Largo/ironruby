@@ -208,4 +208,30 @@ t('downto a Float') { |i| pdt.float(4) }
 t('downto over Bignums') { |i| pdt.big(3) }
 t('two threads recurse in the same method') { |i| a = PsPerm.new; b = PsPerm.new; [Thread.new { a.permute(4); a.count }, Thread.new { b.permute(4); b.count }].map(&:value) }
 t('downto without a block') { |i| 3.downto(1).to_a }
+
+# a caller whose literal goes through a method that only passes it on (IR_PASSED_BLOCKS), on two threads at once
+class PsPassVec
+  def initialize(n); @a = Array.new(n) { |k| k + 1 }; end
+  def each = @a.each { |x| yield x }
+end
+class PsPassSet
+  def initialize(n); @v = PsPassVec.new(n); end
+  def each(&b) = @v.each(&b)
+end
+class PsPassCaller
+  def initialize(s, tag); @s = s; @tag = tag; @kept = []; end
+  attr_reader :kept
+  def sum(k); c = 0; @s.each { |x| c += x * k }; c; end
+  def keep(k); @s.each { |x| @kept << proc { [@tag, k, x] } if x == 1 }; @kept.size; end
+end
+t('two threads pass literals through one passing method') { |i|
+  s = PsPassSet.new(4)
+  [Thread.new { c = PsPassCaller.new(s, :a); (1..500).sum { |k| c.sum(k) } }, Thread.new { c = PsPassCaller.new(s, :b); (1..500).sum { |k| c.sum(k + 1) } }].map(&:value)
+}
+t('two threads, Procs kept inside the passed literal') { |i|
+  s = PsPassSet.new(3)
+  cs = [PsPassCaller.new(s, :a), PsPassCaller.new(s, :b)]
+  cs.each_with_index.map { |c, ti| Thread.new { 300.times { |k| c.keep(k * 2 + ti) } } }.each(&:join)
+  cs.map { |c| [c.kept.size, c.kept.first.call, c.kept.last.call] }
+}
 puts 'end'
