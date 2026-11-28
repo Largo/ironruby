@@ -806,7 +806,13 @@ namespace IronRuby.Prism {
                 case Pm.InterpolatedMatchLastLineNode interpMatchLast:
                     return new RegularExpression(RegexParts(interpMatchLast.Parts, RegexOptions(interpMatchLast)), RegexOptions(interpMatchLast), true, span);
 
-                case Pm.CallNode call: return Call(call, span);
+                case Pm.CallNode call: {
+                        var result = Call(call, span);
+                        if (call.MessageLoc.HasValue && result is CallExpression callExpression && callExpression.Location == span) {
+                            callExpression.MessageLine = Span(call.MessageLoc.Value).Start.Line;
+                        }
+                        return result;
+                    }
 
                 case Pm.LocalVariableReadNode read:
                     return CurrentScope.ResolveOrAddVariable(read.Name, span);
@@ -1834,7 +1840,9 @@ namespace IronRuby.Prism {
                 HasFlag(node, Pm.CallNodeFlags.AttributeWrite)
                     ? AttributeWrite(node, temp, node.Name, span)
                     : new MethodCall(temp, node.Name,
-                        node.Arguments != null ? BuildArguments(node.Arguments) : null, OptionalBlock(node.Block), span),
+                        node.Arguments != null ? BuildArguments(node.Arguments) : null, OptionalBlock(node.Block), span) {
+                        MessageLine = node.MessageLoc.HasValue ? Span(node.MessageLoc.Value).Start.Line : 0
+                    },
                 span);
         }
 

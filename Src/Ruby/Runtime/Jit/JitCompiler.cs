@@ -602,6 +602,7 @@ namespace IronRuby.Runtime.Jit {
             // such a body failed to compile and was declined where it used to be specialized.
             bool sinkStores = !HasWhileLoop(ast) && keywords == null && ast.Parameters.Optional.Length == 0;
             HashSet<string> sinkWide = null;
+            HashSet<string> sinkBoxed = null;
             bool initialIVarsOff = false;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
@@ -616,6 +617,7 @@ namespace IronRuby.Runtime.Jit {
                 c._noUnloggedEarlyWrites = !unloggedEarlyWrites;
                 c._sinkStores = sinkStores;
                 c._sinkWide = sinkWide;
+                c._sinkBoxed = sinkBoxed;
                 c._noInitialIVars = initialIVarsOff;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
@@ -664,6 +666,17 @@ namespace IronRuby.Runtime.Jit {
                         sinkWide.UnionWith(c._sinkWiden);
                         round--;
                         continue;
+                    }
+                    // a variable written as an object and as a boolean: another round holding it as an object
+                    if (c._sinkBox != null) {
+                        if (sinkBoxed == null) { sinkBoxed = new HashSet<string>(); }
+                        int known = sinkBoxed.Count;
+                        sinkBoxed.UnionWith(c._sinkBox);
+                        if (sinkBoxed.Count > known) {
+                            if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] held as an object in {0}: {1}, written as an Obj and as a Bool", ast.Name, String.Join(" ", c._sinkBox)); }
+                            round--;
+                            continue;
+                        }
                     }
                     if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] stores not held back in {0}: {1}", ast.Name, c._sinkObstacle); }
                     sinkStores = false;
@@ -1759,6 +1772,66 @@ namespace IronRuby.Runtime.Jit {
             return EmitAndOr(node.Left, node, node.Operation == "&&", out type);
         }
 
+        /// <summary>
+        /// With IR_LOOP_IVAR_WRITES=1, outlined `while' loops store into self's instance variables (`@x = v', `@x op= v').
+        /// Off by default: the loops get faster (a counter 0.57-0.80), but once one has run, the process's other code
+        /// ran up to 2x slower in the measurements (a generic `n.times { @n += 1 }' afterwards, diagnosed no further
+        /// than the logged stores; Util/perf/LEDGER.md, perf/loopivar). A block loop (BlockLoopSite: `n.times { @n += 1 }', `a.each { |x| @last = x }')
+        /// still refuses them: there the logged store cost as much as the generic block call it replaced, or more
+        /// (`each { |x| @last = x }' 1.25x), and its last statement is followed by the loop's counter step, so it
+        /// cannot go unlogged either (Util/perf/LEDGER.md, perf/loopivar).
+        /// </summary>
+        internal static readonly bool LoopIVarWrites = Environment.GetEnvironmentVariable("IR_LOOP_IVAR_WRITES") == "1";
+
+        /// <summary>
+        /// `@x = v' / `@x op= v' in an outlined loop: the store `o.x = v' makes there (EmitAttributeWrite), into self's
+        /// variable (JitRuntime.WriteSelfIVar). It logs the value it replaces, so that a deopt later in the iteration
+        /// takes it back and the iteration restarts in the generic code as if it had not been made (the loop's
+        /// snapshot; JitUndoLog); what the store cannot make without raising or changing self's shape - a frozen self,
+        /// a variable self does not have yet, self not a plain Ruby object - deopts before it, and the generic code
+        /// makes the write, or raises, in the iteration the source does. The value is v.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitLoopIVarWrite(InstanceVariable/*!*/ target, string op, RExpr/*!*/ right, out JT type) {
+            JT vt;
+            MSA.Expression v;
+            if (op != null) {
+                // `@x op= v'  ->  `@x = @x op v', the read and the operator first, as in a method
+                JT ct;
+                var current = NumericIVar(target, Emit(target, out ct), ref ct);
+                var operand = Emit(right, out vt);
+                operand = NumericIVar(right, operand, ref vt);
+                if (IsNumeric(ct) && IsNumeric(vt)) {
+                    v = EmitBinary(op, current, ct, operand, vt, out vt);
+                } else if ((ct == JT.Obj && IsNumeric(vt)) || (IsNumeric(ct) && vt == JT.Obj)) {
+                    v = EmitSpeculatedBinary(op, current, ct, target, operand, vt, right, out vt);
+                } else {
+                    throw Bail("instance variable op-assign on " + ct + ", " + vt);
+                }
+            } else {
+                v = Emit(right, out vt);
+            }
+            if (vt == JT.Never || vt == JT.None) { throw Bail("instance variable write of a value that jumps away"); }
+            _canDeopt = true;
+            _hashWrite = true;
+            if (_undoLog == null) {
+                // in loop mode the entry sets both up
+                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            }
+            var site = Ast.Constant(new InstanceVariableSite(target.Name));
+            var value = Ast.Variable(ClrType(vt), "#value");
+            type = vt;
+            // A Float is stored boxed, not raw as typed method bodies store one (WriteSelfAttrDouble): a raw store
+            // over a Float promotes the object, and its class's later instances are born raw, which makes every
+            // generic read and write of their variables slower (`n.times { @n += 1 }' 2x, after a loop of the same
+            // class stored a Float raw), for a loop no faster than the generic one (Util/perf/LEDGER.md, perf/loopivar).
+            return Ast.Block(ClrType(vt), new[] { value },
+                Ast.Assign(value, v),
+                Ast.Call(JitRuntime.M("WriteSelfIVar"), _self, BoxForStore(value, vt), site, _undoLog),
+                value
+            );
+        }
+
         private MSA.Expression/*!*/ EmitAssignment(SimpleAssignmentExpression/*!*/ node, string op, bool conditional, out JT type) {
 
             var element = node.Left as ArrayItemAccess;
@@ -1767,8 +1840,12 @@ namespace IronRuby.Runtime.Jit {
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {
                 // A write can raise (FrozenError), and an exception leaving an outlined loop
-                // part way through would leave the scope's locals as they were on entry.
-                if (_loop != null) { throw Bail("instance variable write in an outlined loop"); }
+                // part way through would leave the scope's locals as they were on entry: in a loop
+                // the write is a logged store that deopts instead (EmitLoopIVarWrite).
+                if (_loop != null) {
+                    if (!LoopIVarWrites || _loop.IsBlockLoop) { throw Bail("instance variable write in an outlined loop"); }
+                    return EmitLoopIVarWrite(ivarTarget, op, node.Right, out type);
+                }
                 JT vt;
                 MSA.Expression v;
                 if (op != null) {
@@ -2425,6 +2502,11 @@ namespace IronRuby.Runtime.Jit {
                 RequireBuiltin(JT.Bool, "!");
                 if (!IsPublicBuiltin(_context.NilClass, "!")) { throw Bail("operator ! on nil is not the built-in one"); }
                 _canDeopt = true;
+                if (ObjectOps && _refinements.IsEmpty) {
+                    // any other object: BasicObject#!, false, while its class resolves `!' to it (JitRuntime.NotObject)
+                    var site = new JitRuntime.KernelMethodSite("!", LibraryMethods("!", _context.BasicObjectClass));
+                    return Ast.Call(JitRuntime.M("NotObject"), Ast.Constant(_context), value, Ast.Constant(site));
+                }
                 return Ast.Call(JitRuntime.M("NotBoolean"), value);
             }
             RequireBuiltin(operandType, "!");
@@ -2500,6 +2582,13 @@ namespace IronRuby.Runtime.Jit {
             type = JT.Bool;
             return Ast.Constant(false);
         }
+
+        // IR_JIT_OBJECT_OPS=0 leaves `x.to_i', `x.empty?' and `!x' of an object that is no number, Array, Hash, true, false or nil
+        // to the generic call, and IR_JIT_SCREEN_CALL=0 lets the screen take `x.call' for an attribute read, as they used to
+        internal static readonly bool ObjectOps = Environment.GetEnvironmentVariable("IR_JIT_OBJECT_OPS") != "0";
+        // IR_JIT_SINK_BOXED=0: a variable written as an object and as a boolean is not held back (JitCompiler.Sink.cs)
+        internal static readonly bool SinkBoxedBooleans = Environment.GetEnvironmentVariable("IR_JIT_SINK_BOXED") != "0";
+        internal static readonly bool ScreenRefusesCall = Environment.GetEnvironmentVariable("IR_JIT_SCREEN_CALL") != "0";
 
         // IR_JIT_TYPE_TEST=0 turns EmitTypeTest off
         internal static readonly bool TypeTests = Environment.GetEnvironmentVariable("IR_JIT_TYPE_TEST") != "0";
@@ -2716,6 +2805,13 @@ namespace IronRuby.Runtime.Jit {
                     _canDeopt = true;
                     type = JT.Lng;
                     return Ast.Call(JitRuntime.M("FloatToLong"), t);
+                }
+                // an object: Integer#to_i, String#to_i of a plain decimal String, NilClass#to_i (JitRuntime.ToIntegerObject)
+                if (tt == JT.Obj && _refinements.IsEmpty && ObjectOps) {
+                    var site = new JitRuntime.KernelMethodSite("to_i", LibraryMethods("to_i", _context.IntegerClass, KindClass(JitRuntime.KindString), _context.NilClass));
+                    _canDeopt = true;
+                    type = JT.Obj;
+                    return Ast.Call(JitRuntime.M("ToIntegerObject"), Ast.Constant(_context), t, Ast.Constant(site));
                 }
                 throw Bail("to_i on " + tt);
             }
@@ -4308,6 +4404,10 @@ namespace IronRuby.Runtime.Jit {
                 !(args.Expressions[0] is SplattedArgument) && !IsElementRead(node.Target) && !IsElementRead(args.Expressions[0]))) {
                 return Walk(node.Target) && (argc == 0 || Walk(args.Expressions[0]));
             }
+
+            // `x.call' (a Proc's, a Method's): no attribute reader is named so, and the call runs Ruby code, which a typed body
+            // does not; taken for a read, it made a method wrapped only to be declined (Enumerator::Lazy#size's `n.call').
+            if (argc == 0 && node.Target != null && node.MethodName == "call" && JitCompiler.ScreenRefusesCall) { return No(node); }
 
             if (argc == 0 && (node.Target == null || node.Target is SelfReference || node.Target is InstanceVariable ||
                 node.Target is LocalVariable) && !(node.Target == null && node.MethodName == _methodName && _arity == 0)) {

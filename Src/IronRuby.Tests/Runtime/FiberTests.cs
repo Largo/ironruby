@@ -83,6 +83,53 @@ end
             }
         }
 
+        /// <summary>
+        /// A fiber's block keeps its own $~ and $_ (MRI's ec->root_svar), as a thread's does, rather than sharing the frame
+        /// it was written in; its arguments, a lambda's arity and break/return behave as Proc#call's.
+        /// </summary>
+        public void Fiber_OwnSpecialVariables1() {
+            TestOutput(@"
+require 'ruby4'
+f = ->(s) { Fiber.new { s =~ /(\w)/; Fiber.yield; $~[1] } }
+a, b = f.(""x""), f.(""y""); a.resume; b.resume
+p [a.resume, b.resume]
+q = Queue.new
+ts = %w[p q].map { |s| Thread.new { s =~ /(\w)/; q.pop; $~[1] } }
+sleep 0.2; 2.times { q << 1 }
+p ts.map(&:value)
+""m"" =~ /(\w)/
+p Thread.new { $~ }.value, Fiber.new { $~ }.resume, $~[1]
+def meth = Fiber.new { ""k"" =~ /k/; $~ }.resume.to_s + ($~ ? ""set"" : ""nil"")
+p meth
+p Fiber.new(&->(a) { a }).resume([1, 2]), Fiber.new { |a, b| [a, b] }.resume([1, 2]), Fiber.new { |*a| a }.resume(1, 2, 3, 4, 5)
+p((Fiber.new(&->(a, b) { a }).resume(1) rescue $!.class))
+e = Enumerator.new { |y| ""a"" =~ /(a)/; y << $1; y << $~[1] }
+p e.next, e.next
+""z"" =~ /z/
+p [1, 2].each_slice(1).next, $~[0]
+f = Fiber.new { r = (return 5 rescue $!.class); r }
+p f.resume
+p Fiber.new { break 3 }.resume rescue p $!.class
+", @"
+[""x"", ""y""]
+[""p"", ""q""]
+nil
+nil
+""m""
+""knil""
+[1, 2]
+[1, 2]
+[1, 2, 3, 4, 5]
+ArgumentError
+""a""
+""a""
+[1]
+""z""
+LocalJumpError
+LocalJumpError
+");
+        }
+
         public void Fiber_ReclamationClrBoundary1() {
             FiberReclaimInterop.Reset();
             Context.ObjectClass.SetConstant("FiberReclaimInterop", Context.GetClass(typeof(FiberReclaimInterop)));

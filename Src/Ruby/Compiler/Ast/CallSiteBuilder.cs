@@ -38,6 +38,10 @@ namespace IronRuby.Compiler.Ast {
         public bool SplattedArgumentIsFresh { get; set; }
         public MSA.Expression RhsArgument { get; set; }
 
+        // A `**' among the arguments: the site's splat does not make a ruby2_keywords hash keywords (RubyCallFlags.
+        // HasRuby2KeywordsSplat).
+        public bool HasExplicitKeywords { get; set; }
+
         internal CallSiteBuilder(AstGenerator/*!*/ gen, MSA.Expression/*!*/ instance, MSA.Expression block) {
             Assert.NotNull(gen, instance);
             _hasBlock = block != null;
@@ -69,6 +73,10 @@ namespace IronRuby.Compiler.Ast {
 
             if (RhsArgument != null) {
                 flags |= RubyCallFlags.HasRhsArgument;
+            }
+
+            if (SplattedArgument != null && !HasExplicitKeywords) {
+                flags |= RubyCallFlags.HasRuby2KeywordsSplat;
             }
 
             return flags;

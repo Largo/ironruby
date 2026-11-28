@@ -76,6 +76,11 @@ namespace IronRuby.Runtime.Jit {
         // since each adds a name; a body that can never hold its writes may still spend one on a name first.
         internal HashSet<string> _sinkWide;
         internal List<string> _sinkWiden;
+        // Variables written as an object and as true or false (CSV::Parser#prepare_variable's `@backslash_quote =
+        // liberal_parsing[:backslash_quote]' and `= false'): held as an object, the boolean boxed as the generic body's
+        // SetIVar stores it, on another round (TryCompile), as _sinkWide holds an Integer as a long.
+        internal HashSet<string> _sinkBoxed;
+        internal List<string> _sinkBox;
 
         private SunkIVar FindSunk(string/*!*/ name) {
             if (_sunk != null) {
@@ -109,6 +114,11 @@ namespace IronRuby.Runtime.Jit {
                 vt = JT.Lng;
                 type = JT.Lng;
             }
+            if (vt == JT.Bool && _sinkBoxed != null && _sinkBoxed.Contains(name)) {
+                v = Coerce(v, JT.Bool, JT.Obj);
+                vt = JT.Obj;
+                type = JT.Obj;
+            }
             var sunk = FindSunk(name);
             if (sunk == null) {
                 sunk = new SunkIVar {
@@ -132,6 +142,11 @@ namespace IronRuby.Runtime.Jit {
                         _sinkObstacle = "writes of " + name + " as " + sunk.Type + " and " + vt;
                     }
                     return null;
+                }
+                if ((sunk.Type == JT.Obj && vt == JT.Bool || sunk.Type == JT.Bool && vt == JT.Obj) && JitCompiler.SinkBoxedBooleans &&
+                    (_sinkBoxed == null || !_sinkBoxed.Contains(name))) {
+                    if (_sinkBox == null) { _sinkBox = new List<string>(); }
+                    if (!_sinkBox.Contains(name)) { _sinkBox.Add(name); }
                 }
                 _sinkObstacle = "writes of " + name + " as " + sunk.Type + " and " + vt;
                 return null;
@@ -289,6 +304,11 @@ namespace IronRuby.Runtime.Jit {
             // an Array's or a Hash's count, a deopt on anything else (JitRuntime.SizeOf): no Ruby code and no instance
             // variable read; its receiver, read from self, is GetIVar's or a held write's
             "SizeOf",
+            // An Array's or a Hash's element (a key whose hash or eql? could be Ruby code, a default proc, a subclass
+            // deopt), a type or identity test (a class that resolves the method to anything but the library's deopts) and
+            // `x.to_i' of an Integer, nil or a plain decimal String: no Ruby code, no instance variable, nothing but a deopt
+            "IndexInt", "IndexLong", "IndexObj", "IndexIntChecked", "IndexLongChecked", "IndexObjChecked", "HashKeyInt",
+            "IsKindOf", "IsIdentical", "IsNil", "CollectionEqualsNil", "ToIntegerObject", "StringEmpty", "NotObject", "IsEmpty", "IsEmptyOrString",
         };
 
         // Integer#abs of an Int32 (widened, so it cannot overflow) and Float#abs (JitCompiler.EmitCall)

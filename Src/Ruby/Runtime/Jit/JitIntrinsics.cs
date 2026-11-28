@@ -438,6 +438,39 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// `x.to_i' of an x the body holds as an object (JitCompiler, the `to_i' case): once the site found x's class (its
+        /// singleton class included) to resolve to_i to Integer's, String's or NilClass's library method, an Integer is
+        /// itself, nil is 0 and a String of class String in an ASCII-compatible encoding that is 1 to 18 ASCII digits is
+        /// their decimal value, as String#to_i makes it. Every other String (a sign, blanks, underscores, a long one, one
+        /// String#to_i raises for) and every other receiver deopt, to the generic call. A String another thread changes
+        /// while it is read deopts as well: nothing but a deopt leaves this helper.
+        /// </summary>
+        public static object ToIntegerObject(RubyContext/*!*/ context, object value, KernelMethodSite/*!*/ site) {
+            if (!site.Resolves(ClassOf(context, value))) { throw Deopt(); }
+            if (value is int || value is long || value is BigInteger) { return value; }
+            if (value == null) { return ScriptingRuntimeHelpers.Int32ToObject(0); }
+            if (value.GetType() == typeof(MutableString)) {
+                long result = 0;
+                try {
+                    var str = (MutableString)value;
+                    if (str.Encoding.IsAsciiIdentity) {
+                        int count = str.GetCharCount();
+                        if (count >= 1 && count <= 18) {
+                            for (int i = 0; i < count; i++) {
+                                char c = str.GetChar(i);
+                                if (c < '0' || c > '9') { result = -1; break; }
+                                result = result * 10 + (c - '0');
+                            }
+                            if (result >= 0) { return NarrowLong(result); }
+                        }
+                    }
+                } catch (Exception e) when (!(e is JitDeoptException)) {
+                }
+            }
+            throw Deopt();
+        }
+
+        /// <summary>
         /// Which receiver classes resolve a name to one of the library methods given (KernelMethodSite.Resolves), each under the
         /// global method version it was found at, for a few classes at once: a type test (`x.is_a?(C)') sees receivers of
         /// several classes far more often than an identity test does. The entries are immutable and replaced whole, so a
@@ -762,6 +795,18 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         public static int StringLength(object recv) {
             if (recv != null && recv.GetType() == typeof(MutableString)) { return ((MutableString)recv).GetCharacterCount(); }
+            throw Deopt();
+        }
+
+        /// <summary>Array#empty?, Hash#empty?, and String#empty? of a String whose class is String itself; anything else deopts.</summary>
+        public static bool IsEmptyOrString(object recv, bool arrays, bool hashes) {
+            if (recv != null && recv.GetType() == typeof(MutableString)) { return ((MutableString)recv).IsEmpty; }
+            return SizeOf(recv, arrays, hashes) == 0;
+        }
+
+        /// <summary>String#empty? of a String whose class is String itself, under StringLength's conditions; anything else deopts.</summary>
+        public static bool StringEmpty(object recv) {
+            if (recv != null && recv.GetType() == typeof(MutableString)) { return ((MutableString)recv).IsEmpty; }
             throw Deopt();
         }
 

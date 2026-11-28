@@ -218,6 +218,20 @@ namespace IronRuby.Builtins {
 
         #region call, [],  ===, yield
 
+        /// <summary>The prelude's Fiber runs its block through this: see Proc.CallAsRoot.</summary>
+        [RubyMethod("__ir_call_as_root__", RubyMethodAttributes.PrivateInstance)]
+        [RubyStackTraceHidden]
+        [ReceivesKeywords]
+        public static object CallAsRoot(Proc/*!*/ self, params object[]/*!*/ args) {
+            // a lambda's arity, as #call checks it
+            if (args.Length == 0) {
+                RubyOps.RequireLambdaArity(self, 0);
+            } else {
+                RubyOps.RequireLambdaArity(self, args.Length, args[args.Length - 1]);
+            }
+            return self.CallAsRoot(args);
+        }
+
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
         public static object Call(BlockParam block, Proc/*!*/ self) {
