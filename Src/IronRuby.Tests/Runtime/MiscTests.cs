@@ -93,6 +93,27 @@ p proc {}.inspect.encoding, Thread::Mutex.new.inspect.encoding, binding.inspect.
         }
 
         /// <summary>
+        /// Dir, File, File::Stat, MatchData and Exception#inspect are BINARY in MRI while they are ASCII; an
+        /// exception with a message that is not gives UTF-8, and one with an empty message gives its class's
+        /// name, US-ASCII.
+        /// </summary>
+        public void Scenario_DescriptionEncoding2() {
+            TestOutput(@"
+p Dir.new(""."").inspect.encoding, File.open(IO::NULL).inspect.encoding, File::Stat.new(""."").inspect.encoding
+p(/(.)/.match(""a"").inspect.encoding)
+p RuntimeError.new(""x"").inspect.encoding, RuntimeError.new(""é"").inspect.encoding, RuntimeError.new("""").inspect.encoding
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:US-ASCII>
+");
+        }
+
+        /// <summary>
         /// Kernel#inspect of an object met again inside its own inspect: MRI's "#&lt;Foo:0x... ...&gt;".
         /// </summary>
         public void Scenario_InspectRecursive1() {

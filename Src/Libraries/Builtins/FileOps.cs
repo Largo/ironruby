@@ -1989,7 +1989,7 @@ namespace IronRuby.Builtins {
             } else {
                 result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
             }
-            return result.Append('>');
+            return RubyUtils.BinaryIfAscii(result.Append('>'));
         }
 
         [RubyMethod("path")]
@@ -2741,9 +2741,10 @@ namespace IronRuby.Builtins {
             public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, FileSystemInfo/*!*/ self) {
                var si = self as StatInfo;
                if (si != null && !si.IsInitialized) {
-                   return MutableString.CreateAscii("#<" + context.GetClassName(self) + ": uninitialized>");
+                   return MutableString.Create("#<" + context.GetClassName(self) + ": uninitialized>", RubyEncoding.Binary);
                }
-               return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture,
+               // BINARY, as rb_str_buf_new makes it in MRI's rb_stat_inspect
+               return MutableString.Create(String.Format(CultureInfo.InvariantCulture,
                     "#<File::Stat dev={0}, ino={1}, mode={2}, nlink={3}, uid={4}, gid={5}, rdev={6}, size={7}, blksize={8}, blocks={9}, atime={10}, mtime={11}, ctime={12}>",
                     FormatDev(DeviceId(self)),
                     context.Inspect(Inode(self)),
@@ -2758,7 +2759,7 @@ namespace IronRuby.Builtins {
                     context.Inspect(AccessTime(self)),
                     context.Inspect(ModifiedTime(self)),
                     context.Inspect(CreateTime(self))
-                ));
+                ), RubyEncoding.Binary);
             }
 
             private static string FormatDev(object dev) {

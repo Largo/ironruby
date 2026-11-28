@@ -700,7 +700,7 @@ namespace IronRuby.Builtins {
                 result.Append(self._dirName);
             }
             result.Append('>');
-            return result;
+            return RubyUtils.BinaryIfAscii(result);
         }
 
         [RubyMethod("pos")]

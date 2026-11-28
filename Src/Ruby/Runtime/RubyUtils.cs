@@ -352,6 +352,18 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// A description MRI builds with rb_sprintf or rb_str_buf_new - IO, File, Dir, MatchData, Exception#inspect - is BINARY
+        /// while all of it is ASCII; a part that is not (a path, a message, a matched string) gives it that part's encoding,
+        /// which <paramref name="description"/> already has then.
+        /// </summary>
+        public static MutableString/*!*/ BinaryIfAscii(MutableString/*!*/ description) {
+            if (description.IsAscii()) {
+                description.ForceEncoding(RubyEncoding.Binary);
+            }
+            return description;
+        }
+
         public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
             MutableString str = CreateObjectDescription(context, className);
             str.Append("#<");

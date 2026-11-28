@@ -1631,7 +1631,7 @@ namespace IronRuby.Builtins {
                 RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(self.Context, self));
             }
             result.Append('>');
-            return result;
+            return RubyUtils.BinaryIfAscii(result);
         }
 
         #endregion

@@ -298,7 +298,7 @@ namespace IronRuby.Builtins {
                 result.Append(context.Inspect(self.GetGroupValue(i)));
             }
             result.Append('>');
-            return result;
+            return RubyUtils.BinaryIfAscii(result);
         }
 
         [RubyMethod("to_s")]

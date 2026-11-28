@@ -240,7 +240,12 @@ namespace IronRuby.Builtins {
 
             var messageString = message as MutableString;
             if (message == null || (messageString != null && messageString.IsEmpty)) {
-                // MRI drops the "#<...>" wrapper entirely when #to_s is empty
+                // MRI drops the "#<...>" wrapper entirely when #to_s is empty, and returns the class's name
+                // (rb_class_name), which is US-ASCII when it is ASCII
+                if (className.IsAscii()) {
+                    className = className.Clone();
+                    className.ForceEncoding(RubyEncoding.Ascii);
+                }
                 return className;
             }
 
@@ -258,7 +263,7 @@ namespace IronRuby.Builtins {
                 result.Append(KernelOps.Inspect(inspectStorage, tosConversion, message));
             }
             result.Append('>');
-            return result;
+            return RubyUtils.BinaryIfAscii(result);
         }
 
         #endregion        

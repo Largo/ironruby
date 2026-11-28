@@ -443,14 +443,16 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("to_s")]
             public static MutableString/*!*/ ToStr(Status/*!*/ self) {
-                return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture, "pid {0} {1}",
-                    self._pid, Describe(self)));
+                // BINARY, as rb_sprintf makes it in MRI's pst_to_s
+                return MutableString.Create(String.Format(CultureInfo.InvariantCulture, "pid {0} {1}",
+                    self._pid, Describe(self)), RubyEncoding.Binary);
             }
 
             [RubyMethod("inspect")]
             public static MutableString/*!*/ Inspect(Status/*!*/ self) {
-                return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture, "#<Process::Status: pid {0} {1}>",
-                    self._pid, Describe(self)));
+                // BINARY, as rb_sprintf makes it in MRI's pst_inspect
+                return MutableString.Create(String.Format(CultureInfo.InvariantCulture, "#<Process::Status: pid {0} {1}>",
+                    self._pid, Describe(self)), RubyEncoding.Binary);
             }
         }
 
