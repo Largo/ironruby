@@ -1852,7 +1852,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     90K and 65K an object - some thirty fills per object, each walking the ancestors and copying
     the singleton class's whole cache table to file one name, because each definition empties
     it. `os_new` 0.77 of its instructions, `os_app` 0.84.
-    Left, measured but not taken: (1) a shared rule is one per (method, receiver type, delegate
+    Left, measured but not taken (the first taken in round forty-one, perf/sharedargs, see Landed):
+    (1) a shared rule is one per (method, receiver type, delegate
     type), so two sites calling one method with arguments of different types share it, and the
     second gets a rule of its own built for each object (~200 us, `IR_BIND_TRACE` "shared-new"):
     OpenStruct's `define_singleton_method!(name, ...)` (a Symbol) and `("#{name}=", ...)` (a
@@ -2198,6 +2199,29 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Util/ivar-stress.rb OK three times on, once off; spec language/while, until, loop, variables,
     core/kernel instance_variable_set/get, remove_instance_variable, core/integer/times,
     core/array/each as on the base; IronRuby.Tests (Debug) PASSED.
+
+- **perf/sharedargs (round forty-one, 2026-11-28) - a call of another shape gets a shared rule of its
+  own (gap 32)** - not gated. A shared rule is one per method, receiver type and delegate type; OpenStruct's
+  `define_singleton_method!(name, ...)` (a Symbol) and `("#{name}=", ...)` (a String) share the key, and
+  the second shape's call, failing the first's argument test, got a rule of its own, which tests one
+  class version: built and compiled again for each object's singleton class (~200 us), 207-209 times in
+  a process's first 300 OpenStructs. `BindShared` now takes the first rule of the method that does not
+  hold the call's version yet, and when every one holds it and the call got a rule of its own, the next
+  call of its kind on another class version builds a shared rule for its shape, up to four per method.
+  `IR_SHARED_SHAPES=0` turns it off.
+  `warm.rb` (the first N OpenStructs of a process: new, a writer, two readers; 8 alternating processes,
+  ms): 300 - base mean 237.3 (206.5-261.4), new 145.7 (133.4-193.4); 3000 - 724.4 (572.4-829.9) /
+  631.8 (579.5-729.4). Binds of `define_singleton_method!` in the first 300 (`IR_BIND_TRACE`): 230 / 20,
+  "shared-new" 207 / 5; round thirty-seven's `r2.rb` 124-132 / 5. Steady state (`ostr36-shapes.rb`,
+  count.sh, N=200): os_new 1.004, os_app 1.002, dsm_blk_call 1.001, dsm_tbl_call 1.000.
+  `Util/sdef-matrix.rb` section 13 (new): one method from several sites with a Symbol, a String, more
+  arguments, keywords; define_singleton_method by Symbol, String and Method; the method redefined after
+  the rules are shared; singleton overrides on some objects; three threads. `gate-matrices.rb` on
+  hot-shapes, sdef, shared-rule-light, jit-calls, jit, respond-to, dmeth, struct, extend, delegate,
+  forwardable and refinement in eight modes (the gate's six, `IR_SHARED_SHAPES=0`,
+  `IR_SINGLETON_LOOKUP=0`): PASS, 96 same. ruby/spec library/openstruct, kernel define_singleton_method,
+  respond_to, public_send, send, basicobject method_missing: no failures; language/send and
+  module/define_method one error each on both builds (the known `into`/`to` messages).
 
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
