@@ -84,7 +84,9 @@ m.unlock
 # 3. The main thread, read from a child.
 q3 = Queue.new
 main = Thread.current
-t3 = Thread.new { q3 << main.backtrace }
+# The child waits until main is blocked in q3.pop: read while main was still on the line
+# before, the backtrace raced (round 9's gate saw it in 2 of 3 runs under -X:NoJITCalls).
+t3 = Thread.new { Thread.pass until main.status == "sleep"; q3 << main.backtrace }
 puts "main, seen by child: #{q3.pop.inspect}"
 t3.join
 
