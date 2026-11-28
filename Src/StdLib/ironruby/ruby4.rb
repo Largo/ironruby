@@ -237,9 +237,10 @@ module Enumerable
     result = []
     # Like #map, the yielded values reach the block as they were yielded:
     # `yield 1, 2` is 1 to a one-parameter block, not [1, 2].
-    # An Array whose #each is the built-in one yields one value per element: the block
-    # takes it as it is, without the `|*values|` Array and the splat back (2.1x MRI).
-    if __plain_list__?
+    # An Array or a Hash whose #each is the built-in one yields one value per element (a
+    # Hash's is the [key, value] pair): the block takes it as it is, without the `|*values|`
+    # Array and the splat back (2.1x MRI; __plain_each__?).
+    if __plain_each__?
       each { |item| v = yield(item); result << v if v }
     else
       each { |*values| v = block.call(*values); result << v if v }
@@ -476,6 +477,12 @@ module Enumerable
     # an Array is grouped in C#, see Enumerable.ListGroupBy
     return __list_group_by__(&block) if __plain_list__?
     result = {}
+    # a Hash whose #each is the built-in one yields one value, the [key, value] pair, per entry
+    # (__plain_each__?): the block takes it as it is, without the `|*values|` Array
+    if __plain_each__?
+      each { |item| (result[yield(item)] ||= []) << item }
+      return result
+    end
     each do |*values|
       item = __enum_item__(values)
       key = values.size == 1 ? block.call(item) : __enum_yield__(values, &block)
@@ -486,7 +493,12 @@ module Enumerable
 
   def each_with_object(memo)
     return to_enum(:each_with_object, memo) unless block_given?
-    each { |*values| yield(__enum_item__(values), memo) }
+    # see group_by: a Hash's built-in #each yields one value per entry (an Array has its own, in C#)
+    if __plain_each__?
+      each { |item| yield(item, memo) }
+    else
+      each { |*values| yield(__enum_item__(values), memo) }
+    end
     memo
   end unless method_defined?(:each_with_object)
   ::Enumerator.__iter_cursor_method__(self, :each_with_object)
@@ -503,7 +515,7 @@ module Enumerable
       return no_n ? to_enum(:min_by) { size if respond_to?(:size) } : to_enum(:min_by, n) { size if respond_to?(:size) }
     end
     if n.nil?
-      return __list_extreme_by__(-1, &block) if __plain_list__?
+      return __list_extreme_by__(-1, &block) if __plain_each__?
       return __extreme_by__(-1, &block)
     end
     # The count is checked before the block runs: MRI raises on a negative one, and answers
@@ -539,8 +551,8 @@ module Enumerable
   end
   private :__extreme_by__
 
-  # __extreme_by__ over an Array whose #each is the built-in one (__plain_list__?): that
-  # #each yields one value per element, so the block takes it as it is - no `|*values|`
+  # __extreme_by__ over an Array or a Hash whose #each is the built-in one (__plain_each__?):
+  # that #each yields one value per element (a Hash's is the [key, value] pair), so the block takes it as it is - no `|*values|`
   # Array and no __enum_item__ per element. It still goes through #each, as MRI's
   # Enumerable#min_by does: a backtrace from the block shows Array#each under min_by.
   def __list_extreme_by__(direction)
@@ -581,7 +593,7 @@ module Enumerable
       return no_n ? to_enum(:max_by) { size if respond_to?(:size) } : to_enum(:max_by, n) { size if respond_to?(:size) }
     end
     if n.nil?
-      return __list_extreme_by__(1, &block) if __plain_list__?
+      return __list_extreme_by__(1, &block) if __plain_each__?
       return __extreme_by__(1, &block)
     end
     count = __count_arg__(n)
@@ -603,14 +615,14 @@ module Enumerable
   #
   # Every receiver is sorted by the C# Array#sort_by, taken under a private name when the
   # prelude loads (a program's own Array#sort_by does not change min_by): it is a stable merge
-  # sort, so equal keys keep their input order. An Array whose #each is the built-in one is
-  # walked with a one-value block (__list_sort_by_key__); anything else - a Hash, a Range, an
-  # Enumerator - with the generic `|*values|` block, and the elements it gathered go to the
+  # sort, so equal keys keep their input order. An Array or a Hash whose #each is the
+  # built-in one is walked with a one-value block (__list_sort_by_key__, __plain_each__?);
+  # anything else - a Range, an Enumerator - with the generic `|*values|` block, and the elements it gathered go to the
   # same sort, which takes their keys by position. Sorting [key, index, element] triples with
   # a Ruby comparison block and taking the elements out again was more than half of
   # {a: 1, b: 2, c: 3, d: 4}.sort_by { |k, v| -v }.
   def __sort_by_key__(block)
-    return __list_sort_by_key__(&block) if __plain_list__?
+    return __list_sort_by_key__(&block) if __plain_each__?
     items = []
     keys = []
     each do |*values|
@@ -650,14 +662,14 @@ module Enumerable
   # flat_map and collect_concat are one C function in MRI, which a backtrace names by
   # the method called - so each is a method here, not an alias.
   #
-  # An Array whose #each is the built-in one yields one value per element, so the block
-  # takes it as it is, and the block's answer goes through Array.try_convert, which is the
+  # An Array or a Hash whose #each is the built-in one (__plain_each__?) yields one value per
+  # element, so the block takes it as it is, and the block's answer goes through Array.try_convert, which is the
   # rb_check_array_type MRI's flat_map_i calls: the `|*values|` block, the splat back into
   # yield and the two type tests per element made [4 elements].flat_map { } 2.4x MRI.
   def __enum_flat_map__(name)
     return to_enum(name) { size if respond_to?(:size) } unless block_given?
     result = []
-    if __plain_list__?
+    if __plain_each__?
       each do |item|
         mapped = yield(item)
         array = ::Array === mapped ? mapped : ::Array.try_convert(mapped)
@@ -705,6 +717,16 @@ module Enumerable
   def uniq(&block)
     seen = {}
     result = []
+    # see group_by: a Hash's built-in #each yields one value per entry (an Array has its own, in C#)
+    if __plain_each__?
+      each do |item|
+        key = block ? yield(item) : item
+        next if seen.key?(key)
+        seen[key] = true
+        result << item
+      end
+      return result
+    end
     each do |*values|
       item = __enum_item__(values)
       # MRI's uniq_iter yields the values as they came (rb_yield_values2), not the packed item

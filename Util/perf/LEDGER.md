@@ -2234,6 +2234,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   and hot-shapes in the same five modes: the same as the base (forward-rest's six bind_call-of-binding rows
   differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
   base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
+- **perf/hashany (/perf-step, 2026-11-28, on 540bdb0 + e9a8a9e) - `Hash#any?` is Hash's own
+  (rb_hash_any_p); `group_by`, `uniq`, `each_with_object` walk a plain Hash with a one-value
+  block** - clock only, not gated. `Hash#any? { |k, v| }` 695 -> 403 ns (CRuby 228; 0.58),
+  `group_by` 1334 -> 976 (0.73; CRuby 968), `each_with_object` 1208 -> 906 (0.75; 964),
+  `uniq { }` 1284 -> 924 (0.72; 837); Array rows within the noise. `Hash#any?` now matches CRuby
+  on owner, frames and a prepended, singleton or redefined #each (never called). Enumerable's
+  all?/any?/none? forwarders are NoInlining: R2R dropped their frame (already so before).
+  - `Util/hash-walk-matrix.rb` extended (any?/all?/none?, group_by, uniq, each_with_object):
+    CRuby's output but for two old tie orders, in five modes and R2R; IR_HASH_WALK=0 gives the
+    unchanged build's but for Hash#any? (not behind the switch). ruby/spec core/hash and
+    core/enumerable the same examples on both builds; 61 IronRuby.Tests pass.
+  - Left: `Hash#sum` (2.7x): the one-value walk would take a third off (the fold alone 1052 ->
+    694 ns), but its compensated-sum body is written once against `|*values|`, so a prologue
+    means a second copy of it. `Hash#any?` itself is still 1.8x CRuby: the block call per entry.
+
+- **perf/hashwalk (/perf-core, 2026-11-27, on 52f4f22) - the prelude's Enumerable methods
+  walk a plain Hash with a one-value block (`__plain_each__?`, `IR_HASH_WALK`)** - clock only,
+  not gated. The lever perf/hsortby named: filter_map, min_by, max_by, sort_by, min_by(n),
+  max_by(n), flat_map and collect_concat walked a Hash with `|*values|` and __enum_item__,
+  though Hash#each yields one [key, value] pair per entry to that block and to `|item|` alike.
+  A Hash whose #each resolves to the built-in one now takes the Array's one-value walk.
+  - Clock (`ab.rb`, four rounds, ns, unchanged / this; the switch off equal to unchanged):
+    Hash `min_by` 1348 -> 999 (0.74; CRuby 650), `max_by` 0.73, `filter_map` 962 -> 772
+    (0.80), `flat_map` 1544 -> 1276 (0.83), `sort_by` 1905 -> 1678 (0.88), `min_by(2)` 2075 ->
+    1792 (0.86); the Array rows within the noise.
+  - `Util/hash-walk-matrix.rb` (new) prints the unchanged build's output (CRuby's but for two
+    tie orders of `min_by(2)`/`max_by(2)`, as before) in five modes, with the switch off and
+    R2R; sort-by, enum, enumerable2, the hash matrices, callable-parameters, caller and
+    hot-shapes unchanged; ruby/spec core/hash, core/enumerable the same examples.
+  - Left: Hash#sum (2.7x CRuby) and #each_with_object, #group_by, #uniq, #inject keep the
+    generic walk: their bodies are long and written once against `|*values|`; a second body
+    per method is the price of the same trick there. Hash#any? (3.8x) is C#, /perf-step's.
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
