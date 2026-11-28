@@ -1,8 +1,8 @@
 # Differential matrix for instance variable writes inside loops (perf/loopivar): `@x = v' and
-# `@x op= v' in a `while' loop, which the OSR tier outlines and compiles to a logged store into self's
-# variable (JitCompiler.EmitLoopIVarWrite, JitRuntime.WriteSelfIVar) when IR_LOOP_IVAR_WRITES=1 (off
-# by default; run it both ways). A block loop (`times', `each') still refuses them; its rows are here for when it
-# does not. Run under CRuby and under ./ir.sh and diff:
+# `@x op= v' in a `while' loop and in a block loop (`times', `each'), which the loop tiers outline and
+# compile to a logged store into self's variable (JitCompiler.EmitLoopIVarWrite, JitRuntime.WriteSelfIVar);
+# IR_LOOP_IVAR_WRITES=0 refuses them, as before (run it both ways). Run under CRuby and under ./ir.sh
+# and diff:
 #
 #   ruby Util/loop-ivar-matrix.rb > /tmp/mri.txt
 #   ./ir.sh Util/loop-ivar-matrix.rb > /tmp/ir.txt

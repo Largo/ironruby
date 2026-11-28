@@ -1,13 +1,15 @@
-# Instance variable writes inside loops (perf/loopivar): `while' loops that write self's variables, which the
-# OSR tier outlines with IR_LOOP_IVAR_WRITES=1 (JitCompiler.EmitLoopIVarWrite; off by default), and
-# block loops that do, which it still does not (times_count, each_last: controls with while_plain). Format of
-# Util/perf/ab.rb: `<shape> <ns> ns <checksum>` per shape, ns per iteration of the loop; shape names as
-# arguments, N from the environment. BYTES=1 (IronRuby only): bytes allocated per
-# iteration instead. INSTR=1 (ab.rb -i): instructions per iteration as well.
+# Instance variable writes inside loops (perf/loopivar): `while' loops and block loops that write self's
+# variables, which the loop tiers outline (JitCompiler.EmitLoopIVarWrite; IR_LOOP_IVAR_WRITES=0 refuses
+# them, as before); while_plain is the control. Format of Util/perf/ab.rb: `<shape> <ns> ns <checksum>` per
+# shape, ns per iteration of the loop; shape names as arguments, N from the environment. BYTES=1 (IronRuby
+# only): bytes allocated per iteration instead. INSTR=1 (ab.rb -i): instructions per iteration as well.
 #
-#   ruby Util/perf/ab.rb -r 5 Util/bench/loopivar-shapes.rb cruby=ruby \
-#        "base=env IR_CONFIG=Release ../base/ir.sh" "off=env IR_CONFIG=Release ./ir.sh" \
-#        "new=env IR_LOOP_IVAR_WRITES=1 IR_CONFIG=Release ./ir.sh"
+# Time ONE shape per process (`-- shape'): a loop that allocates less moves the process's first gen-1
+# collection after start-up (about 75 ms here) into the next shape's runs, which then look 2x slower
+# (perf/loopivar2); the GC.start before each run does not settle it.
+#
+#   for s in while_count times_count ...; do ruby Util/perf/ab.rb -r 6 Util/bench/loopivar-shapes.rb \
+#        "off=env IR_LOOP_IVAR_WRITES=0 IR_CONFIG=Release ./ir.sh" "on=env IR_CONFIG=Release ./ir.sh" -- $s; done
 #
 #   while_count   `@n += 1' past the small-integer cache in a `while'
 #   while_small   `@n = (@n + 1) & 511' (cached boxes)
@@ -46,6 +48,8 @@ def run_shape(name)
   3.times { run_once(L.new, name) }
   6.times do
     o = L.new
+    # a full collection first, so that a run starts with nothing young left over from the last one
+    GC.start
     c0 = INSTR && INSTR.read
     t = BYTES ? System::GC.get_total_allocated_bytes(true) : Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID)
     r = run_once(o, name)

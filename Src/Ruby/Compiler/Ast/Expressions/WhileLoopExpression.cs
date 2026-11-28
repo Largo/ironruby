@@ -42,11 +42,6 @@ namespace IronRuby.Compiler.Ast {
         private readonly bool _isWhileLoop; // while or until
         private readonly bool _isPostTest;  // do-while or while-do 
 
-        // A loop BlockLoopSite made of a block and its iterator (`n.times { ... }', `a.each { ... }'), not one
-        // the source wrote: the method JIT's loop tier refuses an instance variable write in it
-        // (JitCompiler.EmitLoopIVarWrite).
-        internal bool IsBlockLoop;
-
         public Expression Condition {
             get { return _condition; }
         }
