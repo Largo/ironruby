@@ -1582,29 +1582,36 @@ namespace IronRuby.Runtime {
             string precompiledKey = null;
             string[] moduleNames = null;
             int verbosity = 0;
-            if (module == null && bytes.Length <= EvalCodeCache.MaxCodeLength && options.TopLevelParameterSignature == null &&
+            string evalModule = null;
+            if (bytes.Length <= EvalCodeCache.MaxCodeLength && options.TopLevelParameterSignature == null &&
                 options.IsolatedLocalNames == null && context.Coverage == null) {
 
                 object verbose = context.Verbose;
                 verbosity = verbose == null ? 0 : (RubyOps.IsTrue(verbose) ? 2 : 1);
                 object[] constantModules = EvalCodeCache.ConstantModules(targetScope);
-                cacheKey = new EvalCodeCache.Key(bytes, code.Encoding, sourcePath, line,
-                    verbosity, methodScope != null,
-                    options.EvalFrameBaseLabel, options.EvalFrameBlockLevels, options.TopLevelMethodName, options.TopLevelParameterNames,
-                    options.TopLevelHasUnsplatParameter, options.LocalNames, constantModules);
-                var cache = context.EvalCodeCache;
-                if (cache != null) {
-                    compiled = (EvalEntryPointDelegate)cache.TryGet(cacheKey);
+                if (module == null) {
+                    cacheKey = new EvalCodeCache.Key(bytes, code.Encoding, sourcePath, line,
+                        verbosity, methodScope != null,
+                        options.EvalFrameBaseLabel, options.EvalFrameBlockLevels, options.TopLevelMethodName, options.TopLevelParameterNames,
+                        options.TopLevelHasUnsplatParameter, options.LocalNames, constantModules);
+                    var cache = context.EvalCodeCache;
+                    if (cache != null) {
+                        compiled = (EvalEntryPointDelegate)cache.TryGet(cacheKey);
+                    }
+                    options.CheckEvalCodeShareable = true;
                 }
-                options.CheckEvalCodeShareable = true;
 
                 // The startup library's code of this text in this context, if it has it and no eval has run it yet
                 // (IronRuby.Runtime.Precompiled.PrecompiledCode.TryClaimEval), or a record of the eval for the library (IR_EVAL_RECORD).
-                if (compiled == null && (IronRuby.Runtime.Precompiled.PrecompiledCode.HasEvals || IronRuby.Runtime.Precompiled.PrecompiledCode.EvalRecordPath != null)) {
+                // A module_eval is one too when its module has a name, which the frame labels of its defs are compiled with
+                // (FileUtils::Verbose's 30-odd `module_eval <<-EOS def #{name}...'): not an instance_eval, whose module is a
+                // singleton class, nor a module_eval of an anonymous module.
+                if (compiled == null && (IronRuby.Runtime.Precompiled.PrecompiledCode.HasEvals || IronRuby.Runtime.Precompiled.PrecompiledCode.EvalRecordPath != null) &&
+                    (module == null || !module.IsSingletonClass && (evalModule = module.GetName(context)) != null)) {
                     moduleNames = IronRuby.Runtime.Precompiled.PrecompiledCode.ModuleNames(context, constantModules);
                     precompiledKey = IronRuby.Runtime.Precompiled.PrecompiledCode.EvalKey(code.Encoding.Name, sourcePath, line, verbosity, methodScope != null,
                         options.EvalFrameBaseLabel, options.EvalFrameBlockLevels, options.TopLevelMethodName, options.TopLevelParameterNames,
-                        options.TopLevelHasUnsplatParameter, options.LocalNames, moduleNames);
+                        options.TopLevelHasUnsplatParameter, options.LocalNames, moduleNames, evalModule);
                     compiled = IronRuby.Runtime.Precompiled.PrecompiledCode.TryClaimEval(context, bytes, precompiledKey);
                 }
             }
@@ -1615,7 +1622,7 @@ namespace IronRuby.Runtime {
                 if (precompiledKey != null && IronRuby.Runtime.Precompiled.PrecompiledCode.EvalRecordPath != null && context.RuntimeErrorSink.WarningCount == warnings) {
                     IronRuby.Runtime.Precompiled.PrecompiledCode.RecordEval(bytes, code.Encoding.Name, sourcePath, line, verbosity, methodScope != null,
                         options.EvalFrameBaseLabel, options.EvalFrameBlockLevels, options.TopLevelMethodName, options.TopLevelParameterNames,
-                        options.TopLevelHasUnsplatParameter, options.LocalNames, moduleNames);
+                        options.TopLevelHasUnsplatParameter, options.LocalNames, moduleNames, evalModule);
                 }
             }
 

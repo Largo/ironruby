@@ -554,6 +554,8 @@ namespace IronRuby.Aot {
         public sealed class EvalUnit {
             public byte[] Code;
             public string Encoding, Path, BaseLabel, MethodName;
+            // a module_eval's module (its name), null for a plain eval
+            public string Module;
             public int Line, Verbosity, BlockLevels;
             public bool InMethod, HasUnsplat;
             public string[] ParameterNames, LocalNames, ModuleNames;
@@ -584,7 +586,7 @@ namespace IronRuby.Aot {
                     IsEval = true,
                     EvalFrameBaseLabel = e.BaseLabel,
                     EvalFrameBlockLevels = e.BlockLevels,
-                    FactoryKind = TopScopeFactoryKind.None,
+                    FactoryKind = e.Module != null ? TopScopeFactoryKind.ModuleEval : TopScopeFactoryKind.None,
                     LocalNames = e.LocalNames != null ? new List<string>(e.LocalNames) : null,
                     TopLevelMethodName = e.InMethod ? e.MethodName : null,
                     TopLevelParameterNames = e.InMethod ? e.ParameterNames : null,
@@ -600,7 +602,10 @@ namespace IronRuby.Aot {
                     if (ast == null) throw new InvalidOperationException("syntax error");
                     if (UnsupportedFinder.Find(ast) is string why) throw new InvalidOperationException(why);
                     new ExtendWalker(extended).Walk(ast);
-                    new FrameLabelWalker(_frameOwners, _context, extended).Walk(ast);
+                    // a module_eval's defs are the module's methods, as a module body's are
+                    var labels = new FrameLabelWalker(_frameOwners, _context, extended);
+                    if (e.Module != null) labels.EnterModule(e.Module);
+                    labels.Walk(ast);
                     lambda = _context.TransformTree<Func<RubyScope, object, RubyModule, Proc, object>>(ast, unit, options);
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"left out eval at {e.Path}:{e.Line}: {ex.Message}");
@@ -621,7 +626,7 @@ namespace IronRuby.Aot {
                 // PrecompiledCode.Rooted replaces by the tree the library runs from
                 string path = RootPrefix != null ? e.Path.Replace(RootPrefix, PrecompiledCode.RootMarker.ToString()) : e.Path;
                 _evalKeys.Add(PrecompiledCode.EvalKey(e.Encoding, path, e.Line, e.Verbosity, e.InMethod, e.BaseLabel, e.BlockLevels,
-                    e.MethodName, e.ParameterNames, e.HasUnsplat, e.LocalNames, e.ModuleNames));
+                    e.MethodName, e.ParameterNames, e.HasUnsplat, e.LocalNames, e.ModuleNames, e.Module));
                 _evalCodes.Add(PrecompiledCode.HashEvalCode(e.Code));
                 Count("evals compiled");
                 Console.Error.WriteLine($"compiled eval at {e.Path}:{e.Line} ({e.Code.Length} bytes)");
@@ -1490,6 +1495,11 @@ namespace IronRuby.Aot {
             }
 
             private Frame Top => _frames.Count == 0 ? null : _frames[_frames.Count - 1];
+
+            /// <summary>Walks what follows as if in the body of the module of that full name (a module_eval's code).</summary>
+            public void EnterModule(string path) {
+                _frames.Add(new Frame { Path = path });
+            }
             private string Enclosing => Top?.Path;
 
             private static List<string> Segments(ConstantVariable c, out bool global) {

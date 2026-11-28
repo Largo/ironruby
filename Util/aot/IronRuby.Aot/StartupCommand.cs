@@ -69,6 +69,7 @@ namespace IronRuby.Aot {
                     HasUnsplat = (bool)o["hasUnsplat"],
                     LocalNames = Names("localNames"),
                     ModuleNames = Names("moduleNames"),
+                    Module = (string)o["module"],
                 });
             }
             return result;
