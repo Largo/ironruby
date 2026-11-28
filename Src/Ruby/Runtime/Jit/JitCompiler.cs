@@ -1773,15 +1773,13 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// With IR_LOOP_IVAR_WRITES=1, outlined `while' loops store into self's instance variables (`@x = v', `@x op= v').
-        /// Off by default: the loops get faster (a counter 0.57-0.80), but once one has run, the process's other code
-        /// ran up to 2x slower in the measurements (a generic `n.times { @n += 1 }' afterwards, diagnosed no further
-        /// than the logged stores; Util/perf/LEDGER.md, perf/loopivar). A block loop (BlockLoopSite: `n.times { @n += 1 }', `a.each { |x| @last = x }')
-        /// still refuses them: there the logged store cost as much as the generic block call it replaced, or more
-        /// (`each { |x| @last = x }' 1.25x), and its last statement is followed by the loop's counter step, so it
-        /// cannot go unlogged either (Util/perf/LEDGER.md, perf/loopivar).
+        /// Outlined loops - a `while' and a block loop (BlockLoopSite: `n.times { @n += 1 }', `a.each { |x| @last = x }') -
+        /// store into self's instance variables (`@x = v', `@x op= v'); IR_LOOP_IVAR_WRITES=0 refuses them, as before.
+        /// (Off at first: a later generic loop in the same process measured 2x slower after one had run. That was the
+        /// process's first gen-1 collection after start-up, which a loop that allocates less moves into the next timed
+        /// run; an ordinary compiled loop moves it the same way. Util/perf/LEDGER.md, perf/loopivar2.)
         /// </summary>
-        internal static readonly bool LoopIVarWrites = Environment.GetEnvironmentVariable("IR_LOOP_IVAR_WRITES") == "1";
+        internal static readonly bool LoopIVarWrites = Environment.GetEnvironmentVariable("IR_LOOP_IVAR_WRITES") != "0";
 
         /// <summary>
         /// `@x = v' / `@x op= v' in an outlined loop: the store `o.x = v' makes there (EmitAttributeWrite), into self's
@@ -1843,7 +1841,7 @@ namespace IronRuby.Runtime.Jit {
                 // part way through would leave the scope's locals as they were on entry: in a loop
                 // the write is a logged store that deopts instead (EmitLoopIVarWrite).
                 if (_loop != null) {
-                    if (!LoopIVarWrites || _loop.IsBlockLoop) { throw Bail("instance variable write in an outlined loop"); }
+                    if (!LoopIVarWrites) { throw Bail("instance variable write in an outlined loop"); }
                     return EmitLoopIVarWrite(ivarTarget, op, node.Right, out type);
                 }
                 JT vt;

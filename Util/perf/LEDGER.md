@@ -2025,6 +2025,43 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/loopivar2 (/perf-step, 2026-11-28, not gated) - outlined loops write self's instance
+  variables by default (`IR_LOOP_IVAR_WRITES=0` refuses them), block loops included: the 2x
+  "slowdown" that kept perf/loopivar off was the GC, not the stores** (on fcbc67b).
+  - **The cause.** In Util/bench/loopivar-shapes.rb, `times_count` timed after `while_count` in one
+    process ran 54-71 ns against 29 with the switch on, every time; alone it was the same both ways.
+    Per run, GC.CollectionCount and GC.GetTotalPauseDuration: the slow runs are exactly the ones with
+    a gen-1 or gen-2 collection in them (43-51 ms each, about 50 ns an iteration of a million), and
+    the switch-off runs had only gen-0 ones (about 1 ms). What happens is that the process owes the GC
+    its first gen-1 collection after start-up (about 1.4 MB promoted, 75-100 ms here). With the switch
+    off, `while_count' allocates a box per iteration and pays it there; compiled, it allocates less, and
+    the collection falls into the next thing that allocates. The control settles it: with the switch
+    off and `while_plain' (a loop the base already compiles, which allocates nothing) first, the
+    `times_count' phase pays the same collection (87-100 ms, 1,440 KB promoted) as with the switch on
+    and `while_count' first (77-79 ms, 1,434 KB). Clearing the undo log's references on every Commit
+    changed nothing (the guess in perf/loopivar), nor did a full GC.start before each run. So the
+    measurement was wrong: shape files that run several shapes in one process carry this debt from
+    one shape to the next. loopivar-shapes.rb now says to time one shape per process.
+  - **Measured right** (one shape per process, ab.rb, 6 rounds, least, switch off -> on): while_count
+    1.01, while_small 0.56, while_float 0.99, while_two 0.92, times_count 0.75 (block loops admitted),
+    each_last 0.97, the control 1.00 - all overlapping but while_small. So perf/loopivar's exclusion
+    of block loops (from `each_last' 1.25, the same artifact) is undone: WhileLoopExpression.IsBlockLoop
+    is gone again. The hold-back to the end of the iteration is not needed for speed; it is still what
+    would answer the racing reader (a thread that reads the variable during a deopt can see it go back
+    one write and forward again, as for the loop tiers' logged Array, Hash and `o.x = v' stores).
+  - **Census** (Util/perf/census.rb over AWFY, Src/StdLib and app-shapes.rb): 0 methods changed, up or
+    down; it sees the method JIT and light frames, and this is the loop tiers only.
+  - **Numbers**: alloc.rb off -> on: Richards 801 -> 666 KB per iteration, Towers 70 -> 124 KB (its
+    small figure moved 102-206 KB between identical builds before), the rest flat. AWFY by clock,
+    10 alternating rounds, medians off -> on: DeltaBlue 1.006, Richards 0.983, Bounce 1.018, Towers
+    1.010, all overlapping (no AWFY loop stops first at an ivar write: perf/loopivar's count).
+  - **Checks**: Util/loop-ivar-matrix.rb CRuby's output with the switch on (24 loops outlined, 21 deopts
+    taken back) and off; gate-matrices (loop-ivar, ivar, loop-exit, osr-array, block-loop, jit,
+    hot-shapes, jit-scan, marshal, parked-scope) in every mode and with the switch off: PASS;
+    Util/ivar-stress.rb OK three times on, once off; spec language/while, until, loop, variables,
+    core/kernel instance_variable_set/get, remove_instance_variable, core/integer/times,
+    core/array/each as on the base; IronRuby.Tests (Debug) PASSED.
+
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
   design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple
@@ -2354,6 +2391,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - **Next**: find what slows the rest of the process (a longer run with the GC's event counters on
     the two orders), then hold the stores back to the end of the iteration (Sink.cs's scheme per
     iteration) so that they need no log at all, which also answers the racing reader.
+  - **Later** (perf/loopivar2): the slowdown was where a GC collection fell, not the stores; on by
+    default since, block loops included.
 
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,

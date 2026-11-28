@@ -347,8 +347,8 @@ THREADS.times do |t|
   record.("final @f#{t}/x of body #{t} #{got.inspect}, owner last read #{flast[t].inspect}") unless got == flast[t]
 end
 
-# Loops that write instance variables (perf/loopivar: with IR_LOOP_IVAR_WRITES=1 the OSR tier outlines a `while' one, each store logged
-# and taken back by a deopt later in its iteration). Thread t runs a `while' loop and a block loop that count
+# Loops that write instance variables (perf/loopivar: the loop tiers outline them, each store logged and
+# taken back by a deopt later in its iteration; IR_LOOP_IVAR_WRITES=0 refuses them). Thread t runs a `while' loop and a block loop that count
 # into its own @l<t> of one shared object, while the others add and remove variables of that object (its
 # slots move under the stores) and read every @l<u>: a value read is an Integer no greater than its owner
 # has counted to, and each owner's final count is exactly the number of iterations it ran.
