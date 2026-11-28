@@ -893,6 +893,7 @@ namespace IronRuby.Tests {
                 DefineMethodVisibility1,
                 DefineMethodVisibility2B,
                 AliasedMethodVisibility1,
+                AliasVisibilityKeepsAlias1,
                 AttributeAccessorsVisibility1,
                 AttributeAccessorsVisibility2,
                 ModuleFunctionVisibility1,

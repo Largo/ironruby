@@ -1404,6 +1404,37 @@ p M.singleton_methods.sort
         }
 
         /// <summary>
+        /// private/protected change the visibility of an alias in place, as MRI does: the entry stays the alias
+        /// (#original_name), and the method it aliased stays aliased, so neither name warns when it is redefined
+        /// or aliased again (ostruct.rb's alias_method of table! warned under -w).
+        /// </summary>
+        public void AliasVisibilityKeepsAlias1() {
+            TestOutput(@"
+$w = []
+def Warning.warn(m, **) = $w << m[/:(\d+: warning: .*)/, 1]
+class D
+  def a; end
+  alias b a
+  private :b
+  p instance_method(:b).original_name, instance_method(:b).owner
+  def u; end
+  alias v u
+  private :u
+  def u; end
+  def t; end
+  alias t! t
+  protected :t!
+  alias_method ""t!"", :t
+end
+p $w
+", @"
+:a
+D
+[]
+");
+        }
+
+        /// <summary>
         /// alias, alias_method ignore the current scope visibility flags and copy methods with their visibility unmodified.
         /// </summary>
         public void AliasedMethodVisibility1() {

@@ -2485,7 +2485,17 @@ namespace IronRuby.Builtins {
                 // CLR members: Detaches the member from its underlying type (by creating a copy).
                 // MRI changes the visibility of an own entry in place: not a new entry, so not "redefining".
                 Mutate();
-                SetMethodNoMutateNoEventNoLock(callerContext, name, redefined.Copy((RubyMemberFlags)visibility, this), !own);
+                var copy = redefined.Copy((RubyMemberFlags)visibility, this);
+                if (own) {
+                    // The entry MRI changes in place stays the alias it was, or the method that was aliased:
+                    // #owner and #original_name keep reporting the alias, and redefining either name later
+                    // is not warned about (`alias table! table; protected :table!; alias_method "table!", :table'
+                    // in ostruct.rb warned under -w).
+                    copy.AliasOwner = existing.AliasOwner;
+                    copy.OriginalName = existing.OriginalName;
+                    copy.IsAliased = existing.IsAliased;
+                }
+                SetMethodNoMutateNoEventNoLock(callerContext, name, copy, !own);
             } else {
                 SetMethodNoEventNoLock(callerContext, name, new SuperForwarderInfo((RubyMemberFlags)visibility, method.DeclaringModule, name));
             }
