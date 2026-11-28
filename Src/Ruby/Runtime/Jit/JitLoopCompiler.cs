@@ -92,7 +92,8 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex,
-            out JitLoopGuard loopGuard, bool longRuns = false, bool lightFrame = false, ICollection<LocalVariable> deadAtExit = null) {
+            out JitLoopGuard loopGuard, bool longRuns = false, bool lightFrame = false, ICollection<LocalVariable> deadAtExit = null,
+            int blockArgIndex = -1) {
 
             loopGuard = null;
 
@@ -228,8 +229,10 @@ namespace IronRuby.Runtime.Jit {
                 hints.Self = (args[selfArgIndex] == null) ? typeof(void) : args[selfArgIndex].GetType();
                 hints.LoopSelf = args[selfArgIndex];
             }
+            // the method's block, which a yield in the loop's body yields to (OsrLoopSite.BlockArgIndex)
+            MSA.ParameterExpression yieldBlock = (blockArgIndex >= 0 && blockArgIndex < args.Length) ? Ast.Parameter(typeof(Proc), "#block") : null;
             MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, scope, hints,
-                refinements, out slots, out canDeopt, out facts, epoch);
+                refinements, out slots, out canDeopt, out facts, epoch, yieldBlock);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;
@@ -251,6 +254,11 @@ namespace IronRuby.Runtime.Jit {
             if (facts.UndoLog != null) {
                 locals.Add(facts.UndoLog);
                 locals.Add(facts.UndoMark);
+            }
+            if (facts.YieldExit != null) {
+                locals.Add(yieldBlock);
+                locals.Add(facts.YieldOutcome);
+                locals.Add(facts.YieldBfc);
             }
 
             // The scope this loop belongs to always makes tuples of the same shape, but nothing
@@ -380,6 +388,20 @@ namespace IronRuby.Runtime.Jit {
             MSA.Expression run = Ast.Block(typeof(object),
                 body, Ast.Block(storeCurrent.ToArray()), Ast.Constant(null, typeof(object))
             );
+            if (facts.YieldExit != null) {
+                // A loop with a yield (JitCompiler.EmitYieldLoopBody) leaves after its yield with an OsrYieldOutcome for the generic
+                // loop to finish the iteration, its locals at home; an exception through the yield - the block's raise or throw,
+                // a `return' from it, Thread#kill - takes them home too, for the method's rescue and ensure to read.
+                prologue.Add(Ast.Assign(yieldBlock, Ast.TypeAs(Ast.ArrayIndex(argsParameter, Ast.Constant(blockArgIndex)), typeof(Proc))));
+                prologue.Add(Ast.Assign(facts.YieldOutcome, Ast.Constant(null, typeof(OsrYieldOutcome))));
+                prologue.Add(Ast.Assign(facts.YieldBfc, Ast.Constant(null, typeof(BlockParam))));
+                MSA.Expression goHome = (storeCurrent.Count > 0) ? (MSA.Expression)Ast.Block(typeof(void), storeCurrent.ToArray()) : Ast.Empty();
+                run = Ast.Block(typeof(object),
+                    Ast.TryFault(Ast.Block(typeof(void), body, Ast.Label(facts.YieldExit)), goHome),
+                    goHome,
+                    Ast.Convert(facts.YieldOutcome, typeof(object))
+                );
+            }
 
             if (canDeopt) {
                 if (facts.UndoLog != null) {

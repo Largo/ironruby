@@ -2025,6 +2025,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/yieldloop (2026-11-28) - a `while` loop with a yield in its body runs in its compiled copy (gap 18, stage
+  3a of `Docs/jit-resume-deopt.md`)** - not gated. The OSR copy gave up at the YieldCall (`[osr] emitter: node:
+  YieldCall`), so `def each; i = 0; while i < @a.size; yield @a[i]; i += 1; end; end` ran its loop generic: about 22 ns
+  an element of loop around the yield (`loop100` 29.8 generic, 8.0 typed).
+  - The copy now takes a loop of the shape `while C; S...; yield E...; T...; end` with one yield in statement position
+    directly in its body (`WhileLoopExpression.GetYieldIndex`; a method's own body; plain arguments; a tail `T` with no
+    block, definition, loop, jump or rescue). Before the yield, the iteration's rule is the old one: a deopt restores the
+    snapshot and the generic loop runs the iteration again. The yield goes through the method's block (a new copy input)
+    and a BlockParam the copy reuses, as the generic yield does. After it, if the block jumped, or the code epoch moved,
+    or a TracePoint is on, or a tail statement deopts (the locals put back as they were after the yield), the copy writes
+    its locals home and answers an `OsrYieldOutcome`. The generic loop then makes the post-yield test (`break` returns
+    from the method, its ensure and the light frame's finally running as for the generic yield), runs its own second
+    transformation of the tail, and goes on at its head (`MakeYieldHandBack`). An exception through the yield writes the
+    locals home first (a fault handler), so a rescue or ensure of the method reads the loop's counter. Switch:
+    `IR_OSR_YIELD=0`.
+  - Time (`Util/bench/yield-shapes.rb`, `ab.rb -r 10`, ns per element, CRuby / base / new): `ueach100e` 29.0 / 45.9 /
+    27.6 (0.60, below CRuby), `ueach100` 35.3 / 59.9 / 42.1 (0.70), `ueach4n` 45.0 / 78.6 / 56.7 (0.72), `ueach4` and
+    `ueach1` 0.88-0.91 (overlapping), the C# `cyield4` 1.01. The prelude's `take_while`, `sum_blk`, `uniq_blk`,
+    `to_h_blk` are not touched (their yields are not statements, and their loops stop at `__ary_size__` first): every
+    one overlapped in a run of seven rounds; a run of ten under a load spike had `take_while` at 1.35 with a 103% spread.
+    AWFY has no such loop (SOM's `Vector#each` is `Range#each` with a block).
+  - Census: 0 methods changed (it counts methods, not loop copies). Seen while taking it: on fcbc67b light frames are
+    23,460 (82.7%) against 27,313 three rounds before - 2eda4af ("a body that evaluates a literal block on every
+    call is not a light frame") on purpose; the same on base and branch.
+  - Checks: `Util/yield-loop-matrix.rb` with its iterators warmed up so that its rows run in the copies (`IR_OSR_VERBOSE=1`:
+    10 loops specialized, `yield-jumps=6`, `yield-tails=3`, one of them a deopt in the tail) and two rows more (`big
+    counter hot`, `int overflow hot`), with block-loop, osr-array, jit, jit-calls, parked-iterator, hot-shapes and
+    loop-ivar: CRuby's output in the six gate modes and with the switch off, on both trees (55 same; block-loop under
+    R2R as on base). ruby/spec language yield, break, while, until, next, redo: 183 examples, none failing, on both.
+    IronRuby.Tests (Debug): the new OsrYieldLoop1 and 110 tests named for loops, yield, blocks, iterators, break,
+    next, redo pass with the switch on and off; the whole suite was not run.
+
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
   design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple

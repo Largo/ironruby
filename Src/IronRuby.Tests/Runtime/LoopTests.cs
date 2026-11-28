@@ -354,6 +354,61 @@ TypeError
         }
 
         /// <summary>
+        /// IR_OSR_YIELD (stage 3a of Docs/jit-resume-deopt.md): a `while' loop with a yield in its body runs in its compiled
+        /// copy once hot, and what the generic loop does after the yield is kept - the block's `break' returns from the method,
+        /// a raise leaves the loop's counter for the method's rescue, and a counter that outgrows Int32 in the statements
+        /// after the yield goes on in the generic loop from the locals as they were right after the yield.
+        /// </summary>
+        public void OsrYieldLoop1() {
+            TestOutput(@"
+class Y
+  def initialize(a) = (@a = a)
+  def each
+    i = 0
+    while i < @a.size
+      yield @a[i]
+      i += 1
+    end
+    i
+  end
+  def each_rescue
+    i = 0
+    begin
+      while i < @a.size
+        yield @a[i]
+        i += 1
+      end
+    rescue => e
+      [e.message, i]
+    end
+  end
+  def each_step(lim, step)
+    i = 0
+    while i < lim
+      yield i
+      i += step
+    end
+    i
+  end
+end
+y = Y.new((1..100).to_a)
+s = 0
+300.times { y.each { |x| s += x }; y.each_rescue { } }
+p s
+p y.each { |x| break x * 2 if x == 77 }
+p y.each_rescue { |x| raise ""at #{x}"" if x == 42 }
+n = 0
+p y.each_step(17179869184, 1048576) { n += 1 }, n
+", @"
+1515000
+154
+[""at 42"", 41]
+17179869184
+16384
+");
+        }
+
+        /// <summary>
         /// A block loop whose block holds another core iterator with a literal block runs the inner loop in place
         /// (JitCompiler.Nest.cs): a Float crossing the inner block, a bound of another type on a late outer
         /// iteration, and the backtrace of an error raised in the inner block.
