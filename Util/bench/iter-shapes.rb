@@ -9,12 +9,14 @@
 # nb0, nbp, nbl: a light method that ignores its block called with none, with a stored Proc (`&P') and with a literal
 # `{ }'; eachp, eachl: Array#each over one element with `&P' and with `{ }'. A literal costs its caller what a stored
 # Proc does not: the method's scope made (or taken parked) and the Proc made over it (round thirty-seven, perf/iter3).
+# e1, ep, ept: `a.each { |x| }', `a.each(&PX)', and ep with a literal in a branch never taken (perf/stagea, perf/literalcode).
 # nbx, nby, nbz: a body that has a literal (never evaluated here) calling with a stored Proc, without a block, and not at
 # all: in such a body a call with a block takes the full site with the scope made on demand (perf/lazyproc,
 # Docs/light-frame-literal-blocks.md).
 $stdout.sync = true
 
 P = proc { }
+PX = proc { |x| }
 class O
   def nb; 1; end
   def ny; yield; end
@@ -32,6 +34,9 @@ class O
   def map(a) = a.map { |x| x + 1 }.size
   def empty(a); a.each { }; 1; end
   def call(a); s = 0; s += a[0]; s; end
+  def e1(a); a.each { |x| }; 1; end
+  def ep(a); a.each(&PX); 1; end
+  def ept(a); return a.each { |y| } if a.nil?; a.each(&PX); 1; end
 end
 
 def cpu
@@ -89,4 +94,7 @@ t("eachl", N)  { |n| i = 0; s = 0; while i < n; s += o.eachl(a1); i += 1; end; s
 t("nbx", N)    { |n| i = 0; s = 0; while i < n; s += o.nbx(a1); i += 1; end; s }
 t("nby", N)    { |n| i = 0; s = 0; while i < n; s += o.nby(a1); i += 1; end; s }
 t("nbz", N)    { |n| i = 0; s = 0; while i < n; s += o.nbz(a1); i += 1; end; s }
+t("e1", N)     { |n| i = 0; s = 0; while i < n; s += o.e1(a1); i += 1; end; s }
+t("ep", N)     { |n| i = 0; s = 0; while i < n; s += o.ep(a1); i += 1; end; s }
+t("ept", N)    { |n| i = 0; s = 0; while i < n; s += o.ept(a1); i += 1; end; s }
 t("nyl", N)    { |n| i = 0; s = 0; while i < n; s += o.nyl(a1); i += 1; end; s }
