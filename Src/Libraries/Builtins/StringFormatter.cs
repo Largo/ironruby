@@ -1505,13 +1505,7 @@ namespace IronRuby.Builtins {
 
         // MRI's rb_out_of_range prints the float with "%-.10g".
         private static string/*!*/ FormatFloatG10(double d) {
-            if (Double.IsNaN(d)) {
-                return "NaN";
-            }
-            if (Double.IsInfinity(d)) {
-                return d > 0 ? "Inf" : "-Inf";
-            }
-            return d.ToString("0.#########e+00", System.Globalization.CultureInfo.InvariantCulture);
+            return RubyUtils.FormatFloatG10(d);
         }
 
         /// <summary>

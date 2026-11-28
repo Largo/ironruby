@@ -616,7 +616,11 @@ namespace IronRuby.Runtime.Jit {
                 var resolved = Resolve(cls, name, publicOnly);
                 if (!resolved.Found) { return null; }
                 var reader = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo;
-                return (reader != null) ? reader.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, false);
+                if (reader != null) {
+                    // an attr_reader is a C method to TracePoint's :c_call, which a read of the variable would not report
+                    return TracePoint.CCallTracing ? null : reader.InstanceVariableName;
+                }
+                return TrivialAccessorVariable(cls, resolved.Info, false);
             }
 
             /// <summary>
@@ -627,7 +631,10 @@ namespace IronRuby.Runtime.Jit {
                 var resolved = Resolve(cls, name, publicOnly);
                 if (!resolved.Found) { return null; }
                 var writer = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeWriterInfo;
-                return (writer != null) ? writer.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, true);
+                if (writer != null) {
+                    return TracePoint.CCallTracing ? null : writer.InstanceVariableName;
+                }
+                return TrivialAccessorVariable(cls, resolved.Info, true);
             }
 
             /// <summary>
@@ -1365,6 +1372,24 @@ namespace IronRuby.Runtime.Jit {
             }
             if (context.IsAutoloadInProgress) { return false; }
             System.Threading.Volatile.Write(ref ConstantVersion, version);
+            return true;
+        }
+
+        /// <summary>
+        /// An outlined copy was handed back at its safe point, or failed its entry guard: if the method version is still the
+        /// one it was compiled under and each constant it folded resolves as it did (or the constant version has not moved),
+        /// the copy is current, and its safe points compare with the epoch read before these checks from now on. False
+        /// if anything it was built on changed.
+        /// </summary>
+        internal bool TryKeep() {
+            long epoch = RubyUtils.CodeEpoch;
+            if (RubyModule.GlobalMethodVersion != Version) { return false; }
+            var context = ConstantsOf;
+            if (context != null && System.Threading.Volatile.Read(ref context.ConstantAccessVersion) != System.Threading.Volatile.Read(ref ConstantVersion) &&
+                !ConstantsStillHold()) {
+                return false;
+            }
+            System.Threading.Volatile.Write(ref Epoch, epoch);
             return true;
         }
 

@@ -134,6 +134,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source_location")]
         public static RubyArray GetSourceLocation(Proc/*!*/ self) {
+            // Method#to_proc's lambda is located where the method is, by the same rules: a core method that is C in
+            // MRI has no location even though the prelude writes it in Ruby
+            RubyMethod wrapped = self.Dispatcher.WrapsMethod ? self.Dispatcher.WrappedMethod : null;
+            if (wrapped != null) {
+                return MethodOps.GetSourceLocation(wrapped);
+            }
             // a proc that no Ruby source produced - Symbol#to_proc, Method#to_proc, a curried
             // proc - has no location to report
             if (self.Dispatcher.SourcePath == null) {

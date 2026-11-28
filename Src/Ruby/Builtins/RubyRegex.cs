@@ -48,6 +48,8 @@ namespace IronRuby.Builtins {
         // pairs - nearly all of them - never pays for that and matches with _cachedRegex.
         private Regex _cachedAstralRegex;
         private TimeSpan _cachedAstralTimeout;
+        // the translation for a subject with undecodable bytes (StringScanner's allowBroken only)
+        private Tuple<TimeSpan, Regex> _cachedEscapedBytes;
 
         // The same pattern translated for a match Onigmo makes with its ASCII-8BIT or US-ASCII
         // ctype table (UsesAsciiCtype) - above all a BINARY subject with bytes above 0x7F, which
@@ -176,6 +178,7 @@ namespace IronRuby.Builtins {
             _options = options & ~RubyRegexOptions.Once;
             _cachedRegex = null;
             _cachedAstralRegex = null;
+            _cachedEscapedBytes = null;
             _cachedBinary = null;
             _binaryIsPlain = false;
             _nonAsciiEscape = -1;
@@ -442,6 +445,10 @@ namespace IronRuby.Builtins {
             astral = input.HasSurrogatePairs();
 
             RubyRegex target = RecompiledFor(input);
+            if (allowBroken && input.ContainsInvalidCharacters()) {
+                astral = true;
+                return target.TransformEscapedBytesPattern();
+            }
             if (astral) {
                 return target.TransformAstralPattern();
             }
@@ -528,6 +535,30 @@ namespace IronRuby.Builtins {
             }
 
             _cachedLatin1 = Tuple.Create(timeout, result);
+            return result;
+        }
+
+        /// <summary>
+        /// The astral-safe translation in which an undecodable byte is a character ('.' matches it), for the one
+        /// caller that matches a broken subject (RegexpTransformer.TransformForEscapedBytes).
+        /// </summary>
+        private Regex/*!*/ TransformEscapedBytesPattern() {
+            TimeSpan timeout = EffectiveTimeout;
+            var cached = _cachedEscapedBytes;
+            if (cached != null && cached.Item1 == timeout) {
+                return cached.Item2;
+            }
+
+            Regex astral = TransformAstralPattern();
+            Regex result;
+            try {
+                bool hasGAnchor;
+                result = new Regex(RegexpTransformer.TransformForEscapedBytes(GetClrPatternSource(), _options, out hasGAnchor), astral.Options, timeout);
+            } catch (Exception) {
+                result = astral;
+            }
+
+            _cachedEscapedBytes = Tuple.Create(timeout, result);
             return result;
         }
 

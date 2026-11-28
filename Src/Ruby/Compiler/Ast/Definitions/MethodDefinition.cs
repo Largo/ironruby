@@ -341,7 +341,7 @@ namespace IronRuby.Compiler.Ast {
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  
                 // leave frame:
-                (light != null) ? Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
+                (light != null) ? LeaveLightFrame(light, scopeVariable) : Methods.LeaveMethodFrame.OpCall(scopeVariable),
                 Ast.Empty(),
                 profileEnd
             );
@@ -491,16 +491,23 @@ namespace IronRuby.Compiler.Ast {
         };
 
         // Array#find, #detect, #find_index, #index, #any?, #all? and #none? only yield ([BlockNotKept]); IR_PARKED_FIND=0 counts
-        // them never parked again, as they were while an Array's find and any? were Enumerable's. (Integer#upto and #downto
-        // only yield too, but parking a method around them costs more instructions than the bytes it saves: Util/perf/LEDGER.md,
-        // gap 13, perf/iter2.)
+        // them never parked again, as they were while an Array's find and any? were Enumerable's. (Integer#upto only yields too,
+        // but parking a method around it cost more instructions than the bytes it saved: Util/perf/LEDGER.md, gap 13,
+        // perf/iter2. #downto is parked since perf/permute, whose deeper slots serve a recursion's levels: below.)
         private static readonly bool ParkedFindEnabled = Environment.GetEnvironmentVariable("IR_PARKED_FIND") != "0";
 
         internal static bool IsNeverParkedIterator(string/*!*/ name) {
+            // Integer#downto only yields ([BlockNotKept], as #times): a method that calls it with a literal (Permute's recursive
+            // `permute') may park its scope. IR_PARK_DOWNTO=0 counts it among the iterators above, as before.
+            if (name == "downto" && ParkDownTo) {
+                return false;
+            }
             return NeverParkedIterators.Contains(name) ||
                 !ParkedFindEnabled && (name == "find" || name == "detect" || name == "find_index" || name == "index" ||
                     name == "any?" || name == "all?" || name == "none?");
         }
+
+        private static readonly bool ParkDownTo = Environment.GetEnvironmentVariable("IR_PARK_DOWNTO") != "0";
 
         /// <summary>
         /// IR_LIGHT_BLOCK_GIVEN=0 makes `block_given?' in a light-frame method the call it was before: the frame makes its
@@ -518,6 +525,12 @@ namespace IronRuby.Compiler.Ast {
         /// (see IsScopeFree and LightFrameRewriter.LightScopeCall).
         /// </summary>
         internal static readonly bool LightBlockPassEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCK_PASS") != "0";
+
+        /// <summary>
+        /// IR_LIGHT_LITERAL_CALLS=0 sends every call with a block in a light frame whose body has literal blocks through the full
+        /// site with the scope made on demand, as before round thirty-seven (see NarrowLiterals, LightFrameRewriter.LiteralCalls).
+        /// </summary>
+        internal static readonly bool LightLiteralCallsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_LITERAL_CALLS") != "0";
 
         /// <summary>
         /// IR_LIGHT_SPLAT=0 keeps every method that splats a value (`inner(*args)', `[*a]', `yield(*a)') out of light frames
@@ -634,6 +647,71 @@ namespace IronRuby.Compiler.Ast {
             "byterindex", "[]", "[]=", "slice", "slice!", "start_with?", "partition", "rpartition", "grep", "grep_v",
         };
 
+        /// <summary>
+        /// IR_LIGHT_MATCH_SINK=0 keeps a method whose regex literal goes to a method that stores $~ out of light frames, as before
+        /// (see IsMatchSink).
+        /// </summary>
+        internal static readonly bool LightMatchSinkEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MATCH_SINK") != "0";
+
+        // The names of RegexScopeMethods that String, Symbol and Regexp define (RubyCallAction.IsMatchSinkMethod): a light site
+        // of one in a method that is a match sink stores $~ in the frame's sink (RubyCallFlags.HasMatchSink).
+        private static readonly HashSet<string>/*!*/ MatchSinkMethods = new HashSet<string> {
+            "=~", "===", "match", "gsub", "gsub!", "sub", "sub!", "scan", "split", "index", "rindex", "byteindex",
+            "byterindex", "[]", "[]=", "slice", "slice!", "start_with?", "partition", "rpartition",
+        };
+
+        // Set while the body of a method that is a match sink is checked (IsBodyScopeFree): a regex literal given to one of
+        // MatchSinkMethods, or in a when clause, does not then keep it out of light frames.
+        [ThreadStatic]
+        private static bool t_matchSink;
+
+        // The names of the methods through which a frame's $~ is read other than by `$~', `$1'... and Regexp.last_match: a
+        // binding or a string eval in the frame, a call made by name (send, method), and a TracePoint the frame enables itself.
+        private static readonly HashSet<string>/*!*/ MatchObserverMethods = new HashSet<string> {
+            "binding", "eval", "instance_eval", "class_eval", "module_eval", "send", "__send__", "public_send", "method",
+            "public_method", "singleton_method", "last_match", "enable", "set_trace_func", "trace",
+        };
+
+        // The globals a match sink may read or write: none of them is the frame's $~ or an alias of it.
+        private static readonly HashSet<string>/*!*/ MatchSinkGlobals = new HashSet<string> {
+            "stdout", "stderr", "stdin", "VERBOSE", "DEBUG", "0", "PROGRAM_NAME", "LOAD_PATH", "LOADED_FEATURES", ":", "\"",
+            ";", ",", "/", "\\", "!", "@", "$", "*", "FILENAME", "-w", "-v", "-d", "-0", "-F", "-i", "-l", "-p", "-a", "-I",
+        };
+
+        /// <summary>
+        /// Whether nothing reads the $~ of a frame of the method (CRuby: $~ is frame-local, and a block's is its method's): no
+        /// `$~', `$&', `$1', Regexp.last_match or other reference to it, no block or lambda (whose binding a callee may be given),
+        /// no binding, string eval or call made by name (MatchObserverMethods), no global but the runtime's own
+        /// (MatchSinkGlobals: `alias $m $~' makes `$m' the frame's $~). Such a method's light frame lets the String, Symbol and
+        /// Regexp methods it calls store $~ in a sink of the frame's own, a scope that holds nothing else, taken from the thread's
+        /// free ones at the first such call and given back as the frame returns (RubyCallFlags.HasMatchSink, RubyOps.TakeMatchSink),
+        /// where the frame would otherwise make its scope for them on every call and call them again (gap 16 of
+        /// Util/perf/LEDGER.md). A scope the frame makes later gets that $~, for a TracePoint's binding; $~ after the method
+        /// returns is its caller's, as in CRuby.
+        /// </summary>
+        private bool IsMatchSink() {
+            if (!LightMatchSinkEnabled || !LightRegexEnabled) {
+                return false;
+            }
+            var finder = new MatchObserverFinder();
+            foreach (var optional in _parameters.Optional) {
+                optional.Walk(finder);
+            }
+            Body.Walk(finder);
+            return !finder.Found;
+        }
+
+        private sealed class MatchObserverFinder : Walker {
+            internal bool Found;
+
+            public override bool Enter(RegexMatchReference/*!*/ node) { Found = true; return false; }
+            public override bool Enter(GlobalVariable/*!*/ node) { Found |= !MatchSinkGlobals.Contains(node.Name); return !Found; }
+            public override bool Enter(BlockDefinition/*!*/ node) { Found = true; return false; }
+            public override bool Enter(LambdaDefinition/*!*/ node) { Found = true; return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { return false; }
+            public override bool Enter(MethodCall/*!*/ node) { Found |= MatchObserverMethods.Contains(node.MethodName); return !Found; }
+        }
+
         private static bool HasRegexLiteral(Expression target, Arguments arguments) {
             if (target is RegularExpression) {
                 return true;
@@ -663,6 +741,8 @@ namespace IronRuby.Compiler.Ast {
             internal MSA.Expression/*!*/ MakeScope;
             internal Func<MSA.Expression, MSA.Expression>/*!*/ MakeScopeIfTraced;
             internal MSA.Expression/*!*/ Name;
+            // The frame's sink (RubyOps.TakeMatchSink) if it is a match sink, given back as it returns.
+            internal MSA.ParameterExpression MatchSink;
 
             /// <summary>
             /// Replaces CreateMethodScope: the locals, the safe point and the call's flow-control frame, the alias
@@ -788,7 +868,13 @@ namespace IronRuby.Compiler.Ast {
 
         // The body's statements and its rescue, else and ensure clauses are scope-free (blockLiterals: with literal blocks).
         private bool IsBodyScopeFree(bool blockLiterals) {
-            return FirstNotScopeFree(blockLiterals) == null && AreClausesScopeFree(Body, blockLiterals, null);
+            bool saved = t_matchSink;
+            t_matchSink = !blockLiterals && IsMatchSink();
+            try {
+                return FirstNotScopeFree(blockLiterals) == null && AreClausesScopeFree(Body, blockLiterals, null);
+            } finally {
+                t_matchSink = saved;
+            }
         }
 
         // The most calls a body with a multiple assignment may make and still be a light frame. A light frame's lambda grows
@@ -993,6 +1079,72 @@ namespace IronRuby.Compiler.Ast {
             return !IsBodyScopeFree(false);
         }
 
+        /// <summary>
+        /// Every literal block of the body is of the narrow shape (Docs/light-frame-literal-blocks.md): it reads and writes no
+        /// local of an enclosing scope, has no return, yield, super, nested literal or lambda, and calls none of the Kernel
+        /// methods that reach for the frame (binding, eval, local_variables, __method__, __callee__, block_given?, iterator?).
+        /// Its Proc is still made over the frame's scope, made on demand, so a callee that keeps it, a binding taken through
+        /// send and a TracePoint find the method's scope as before; what the shape keeps out is a literal whose own code would
+        /// reach the frame through the scope its call no longer makes.
+        /// </summary>
+        private bool HasOnlyNarrowLiterals() {
+            var checker = new NarrowLiteralChecker();
+            checker.Walk(Body);
+            return checker.Literals > 0 && !checker.Wide;
+        }
+
+        private sealed class NarrowLiteralChecker : Walker {
+            internal bool Wide;
+            internal int Literals;
+            private int _inBlock;
+            private int _blockDepth;
+
+            private static readonly System.Collections.Generic.HashSet<string> FrameMethods = new System.Collections.Generic.HashSet<string> {
+                "binding", "eval", "local_variables", "__method__", "__callee__", "block_given?", "iterator?",
+            };
+
+            public override bool Enter(BlockDefinition/*!*/ node) {
+                Literals++;
+                if (_inBlock > 0) {
+                    Wide = true;
+                    return false;
+                }
+                _inBlock++;
+                _blockDepth = node.DefinedScope.Depth;
+                return true;
+            }
+
+            public override void Exit(BlockDefinition/*!*/ node) {
+                _inBlock--;
+            }
+
+            public override bool Enter(LambdaDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(ClassDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(ModuleDefinition/*!*/ node) { Wide = true; return false; }
+            public override bool Enter(SingletonDefinition/*!*/ node) { Wide = true; return false; }
+
+            public override bool Enter(LocalVariable/*!*/ node) {
+                if (_inBlock > 0 && node.DefinitionLexicalDepth < _blockDepth) { Wide = true; }
+                return true;
+            }
+
+            public override bool Enter(ReturnStatement/*!*/ node) { if (_inBlock > 0) { Wide = true; } return true; }
+            public override bool Enter(YieldCall/*!*/ node) { if (_inBlock > 0) { Wide = true; } return true; }
+            // (the walker does not visit a call's block: Walker.Walk(MethodCall) leaves it to whoever asks)
+            public override bool Enter(SuperCall/*!*/ node) {
+                if (_inBlock > 0) { Wide = true; }
+                if (node.Block != null) { node.Block.Walk(this); }
+                return true;
+            }
+
+            public override bool Enter(MethodCall/*!*/ node) {
+                if (_inBlock > 0 && node.Target == null && FrameMethods.Contains(node.MethodName)) { Wide = true; }
+                if (node.Block != null) { node.Block.Walk(this); }
+                return true;
+            }
+        }
+
         // Declares keyword parameters, a `**rest' or `**nil'. Not `...', whose signature says `**' but whose lowering is a
         // rest and a block parameter and no keyword prologue (Parameters.ForwardsArguments): what a light frame takes as
         // `def m(*a, &b)'. The keyword hash a call passes is bound into the rest by the method's RubyMethodInfo, whatever
@@ -1042,7 +1194,13 @@ namespace IronRuby.Compiler.Ast {
         // A statement of a block's body (BlockDefinition.IsLightCallBody): not one with exception handling, which the rewriter
         // takes only in a method's frame (LightFrameRewriter.Handling).
         internal static bool IsScopeFree(Expression/*!*/ node) {
-            return IsScopeFree(node, false, null) && !HandlingFinder.Has(node);
+            bool saved = t_matchSink;
+            t_matchSink = false;
+            try {
+                return IsScopeFree(node, false, null) && !HandlingFinder.Has(node);
+            } finally {
+                t_matchSink = saved;
+            }
         }
 
         // Finds a `begin' with rescue, else or ensure, a rescue modifier or a `retry' in a node, outside its blocks and definitions.
@@ -1187,8 +1345,8 @@ namespace IronRuby.Compiler.Ast {
                     return why != null && Refuse(why, item == null ? "assignment to " + assignment.Left.GetType().Name :
                         LightCallsEnabled ? "assignment to an element with a block" : "assignment to an element (IR_LIGHT_CALLS=0)");
                 }
-                // `s[/x/] = v' is String#[]=, which stores $~ (RegexScopeMethods)
-                if (!LightRegexAll && HasRegexLiteral(null, item.Arguments)) {
+                // `s[/x/] = v' is String#[]=, which stores $~ (RegexScopeMethods), in no frame in a match sink (IsMatchSink)
+                if (!LightRegexAll && !t_matchSink && HasRegexLiteral(null, item.Arguments)) {
                     return why != null && Refuse(why, "RegularExpression passed to []= (it sets $~)");
                 }
                 return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
@@ -1316,7 +1474,7 @@ namespace IronRuby.Compiler.Ast {
                     }
                     foreach (var clause in caseExpression.WhenClauses) {
                         foreach (var comparison in clause.Comparisons) {
-                            if (comparison is RegularExpression && !LightRegexAll) {
+                            if (comparison is RegularExpression && !LightRegexAll && !t_matchSink) {
                                 return Refuse(why, "RegularExpression in a when clause (Regexp#=== sets $~)");
                             }
                             if (!IsScopeFree(comparison, blockLiterals, why)) {
@@ -1372,7 +1530,8 @@ namespace IronRuby.Compiler.Ast {
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 var call = node as MethodCall;
                 if (call != null) {
-                    if (!LightRegexAll && HasRegexLiteral(call.Target, call.Arguments) && RegexScopeMethods.Contains(call.MethodName)) {
+                    if (!LightRegexAll && HasRegexLiteral(call.Target, call.Arguments) && RegexScopeMethods.Contains(call.MethodName) &&
+                        !(t_matchSink && MatchSinkMethods.Contains(call.MethodName))) {
                         return why != null && Refuse(why, "RegularExpression passed to " + call.MethodName + " (it sets $~)");
                     }
                     var blockReference = call.Block as BlockReference;
@@ -1503,7 +1662,7 @@ namespace IronRuby.Compiler.Ast {
             }
             var item = target as ArrayItemAccess;
             if (item != null && item.Block == null) {
-                if (!LightRegexAll && HasRegexLiteral(null, item.Arguments)) {
+                if (!LightRegexAll && !t_matchSink && HasRegexLiteral(null, item.Arguments)) {
                     return why != null && Refuse(why, "RegularExpression passed to []= (it sets $~)");
                 }
                 return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
@@ -1605,10 +1764,21 @@ namespace IronRuby.Compiler.Ast {
                 : make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
-            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope, inLoop)));
+            bool blockLiterals = LightBlocksEnabled && HasLightBlockLiteral();
+            // A match sink keeps its $~ in a sink scope of its own, taken at its first call that stores $~, and puts it into the
+            // scope it makes on demand (RubyOps.TakeMatchSink, SeedLightScopeMatch); it gives the sink back as it returns.
+            var matchSlot = (!blockLiterals && IsMatchSink()) ? scope.DefineHiddenVariable("#sink", typeof(RubyScope)) : null;
+            light.MatchSink = matchSlot;
+            MSA.Expression lateScope = Ast.Call(_LightScopeInLoop, light.MakeScope, inLoop);
+            if (matchSlot != null) {
+                lateScope = Ast.Call(_SeedLightScopeMatch, lateScope, matchSlot);
+            }
+            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, lateScope));
 
             var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, inLoop, HasBlockGuard) {
-                BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral(),
+                BlockLiterals = blockLiterals,
+                LiteralCalls = LightLiteralCallsEnabled && LightBlockPassEnabled && HasOnlyNarrowLiterals(),
+                MatchSlot = matchSlot,
                 BlockParameter = LightBlockGivenEnabled ? blockParameter : null,
                 SuperModule = LightSuperEnabled ? ConstantValue(declaringModule) as RubyModule : null,
                 SuperName = _name,
@@ -1647,6 +1817,32 @@ namespace IronRuby.Compiler.Ast {
         /// its scope after all.
         /// </summary>
         private static readonly MethodInfo/*!*/ _LightScopeInLoop = typeof(RubyOps).GetMethod("LightScopeInLoop");
+        private static readonly MethodInfo/*!*/ _SeedLightScopeMatch = typeof(RubyOps).GetMethod("SeedLightScopeMatch");
+        private static readonly MethodInfo/*!*/ _TakeMatchSink = typeof(RubyOps).GetMethod("TakeMatchSink");
+        private static readonly MethodInfo/*!*/ _ReturnMatchSink = typeof(RubyOps).GetMethod("ReturnMatchSink");
+
+        private static MSA.Expression/*!*/ LeaveLightFrame(LightFrame/*!*/ light, MSA.ParameterExpression/*!*/ scopeVariable) {
+            MSA.Expression leave = Methods.LeaveLightMethodFrame.OpCall(light.Rfc, scopeVariable);
+            if (light.MatchSink == null) {
+                return leave;
+            }
+            // A TracePoint's :return hook runs after this (TraceReturnExpression) and may make the scope then: it is made now,
+            // with the sink's $~, before the sink is given back.
+            return Ast.IfThenElse(Ast.NotEqual(light.MatchSink, AstUtils.Constant(null, typeof(RubyScope))),
+                Ast.Block(
+                    Ast.IfThen(
+                        Ast.NotEqual(
+                            Ast.And(Ast.Field(null, typeof(TracePoint).GetField("ActiveEvents")), AstUtils.Constant((int)TraceEvents.Return)),
+                            AstUtils.Constant(0)
+                        ),
+                        Ast.Block(light.LazyScope, AstUtils.Empty())
+                    ),
+                    leave,
+                    Ast.Call(_ReturnMatchSink, light.MatchSink)
+                ),
+                leave
+            );
+        }
         private static readonly MethodInfo/*!*/ _EnterLightLoop = typeof(RubyOps).GetMethod("EnterLightLoop");
         private static readonly MethodInfo/*!*/ _LeaveLightLoop = typeof(RubyOps).GetMethod("LeaveLightLoop");
 
@@ -1670,6 +1866,16 @@ namespace IronRuby.Compiler.Ast {
             // makes none. The scope made on demand has the frame's locals (its tuple, made from the register locals if those are
             // used), self, block and flow-control frame, which is all the block and the call read from it.
             internal bool BlockLiterals;
+            // The frame's sink when nothing in it reads $~ (IsMatchSink), null otherwise: a light site of one of MatchSinkMethods has
+            // RubyCallFlags.HasMatchSink and is given the sink as its scope (MakeLightCall).
+            internal MSA.ParameterExpression MatchSlot;
+
+            // Every literal of the body is of the narrow shape (MethodDefinition.HasOnlyNarrowLiterals): a call with a block takes
+            // the light site as in a body without literals (LightScopeCall), the literal's Proc, made over the scope made on
+            // demand, being its block argument like any other; a rule that reads the caller's scope answers LightScopeRequired and
+            // the call is made again through the full site with that scope. It is the call that no longer makes the scope, not
+            // the literal: a literal's instantiation still does.
+            internal bool LiteralCalls;
 
             // see LightFrame.MakesCalls
             internal bool MakesCalls;
@@ -2136,7 +2342,7 @@ namespace IronRuby.Compiler.Ast {
                 // blocks, whose calls use the scope made on demand (BlockLiterals). The Proc is an argument like the others: the
                 // rules bind it as a block parameter whatever scope they are given, and one that reads the caller's scope answers
                 // RubyOps.LightScopeRequired as for any call.
-                bool blockPass = signature.HasBlock && LightBlockPassEnabled && !BlockLiterals && _rfc != null;
+                bool blockPass = signature.HasBlock && LightBlockPassEnabled && (!BlockLiterals || LiteralCalls) && _rfc != null;
                 if (!signature.HasScope || signature.HasBlock && !blockPass || signature.ResolveOnly || signature.IsSuperCall || signature.IsVirtualCall ||
                     signature.IsInteropCall || signature.HasLightScope) {
                     return null;
@@ -2146,9 +2352,14 @@ namespace IronRuby.Compiler.Ast {
                     return null;
                 }
 
-                var lightAction = RubyCallAction.Make(action.Context, action.MethodName,
-                    new RubyCallSignature(signature.ArgumentCount, signature.Flags | RubyCallFlags.HasLightScope));
-                return MakeLightCall(reduced, action, lightAction, DispatchIntrinsics.IsLightBlockGivenSite(action.MethodName, lightAction.Signature));
+                var lightFlags = signature.Flags | RubyCallFlags.HasLightScope;
+                // (not with a block: a library method that yields stores $~ for the block, which then reads it from the frame)
+                bool sink = MatchSlot != null && !signature.HasBlock && MatchSinkMethods.Contains(action.MethodName);
+                if (sink) {
+                    lightFlags |= RubyCallFlags.HasMatchSink;
+                }
+                var lightAction = RubyCallAction.Make(action.Context, action.MethodName, new RubyCallSignature(signature.ArgumentCount, lightFlags));
+                return MakeLightCall(reduced, action, lightAction, DispatchIntrinsics.IsLightBlockGivenSite(action.MethodName, lightAction.Signature), sink);
             }
 
             /// <summary>
@@ -2206,7 +2417,7 @@ namespace IronRuby.Compiler.Ast {
             // The call through the light site, then through the ordinary one with the scope made on demand if the light site's
             // rule answered RubyOps.LightScopeRequired, both with the same evaluated arguments (see LightScopeCall).
             private MSA.Expression/*!*/ MakeLightCall(MSA.DynamicExpression/*!*/ reduced, RubyMetaBinder/*!*/ action, RubyMetaBinder/*!*/ lightAction,
-                bool blockGiven) {
+                bool blockGiven, bool matchSink = false) {
                 int count = reduced.Arguments.Count;
                 var temps = new MSA.ParameterExpression[count];
                 var body = new AstExpressions();
@@ -2224,6 +2435,16 @@ namespace IronRuby.Compiler.Ast {
                 var result = Ast.Variable(typeof(object), "#r");
                 temps[0] = result;
                 MakesCalls = true;
+                // (a LightDynamicExpression takes its builder's arguments: each site gets a copy)
+                AstExpressions sinkLightArgs = null;
+                if (matchSink) {
+                    // the frame's sink, taken at its first such call (RubyOps.TakeMatchSink), in place of the declaring scope
+                    sinkLightArgs = new AstExpressions(lightArgs);
+                    sinkLightArgs[0] = Ast.Coalesce(MatchSlot, Ast.Assign(MatchSlot,
+                        Ast.Call(_TakeMatchSink, AstUtils.Convert(_declaringScope, typeof(RubyScope)))));
+                }
+                var sinkFullArgs = matchSink ? new AstExpressions(fullArgs) : null;
+                var sinkLateArgs = matchSink ? new AstExpressions(fullArgs) : null;
                 body.Add(Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), lightArgs)));
                 MSA.Expression needsScope = Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightScopeRequired));
                 if (blockGiven && BlockParameter == null) {
@@ -2231,6 +2452,22 @@ namespace IronRuby.Compiler.Ast {
                     needsScope = Ast.OrElse(needsScope, Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightBlockGiven)));
                 }
                 MSA.Expression value = Ast.Condition(needsScope, AstUtils.LightDynamic(action, typeof(object), fullArgs), result);
+                if (matchSink) {
+                    // The light call stores $~ in the frame's sink. Once the frame has its scope, the call stores $~ there, as an
+                    // ordinary one does.
+                    body.RemoveAt(body.Count - 1);
+                    value = Ast.Condition(
+                        Ast.NotEqual(_scope, AstUtils.Constant(null, _scope.Type)),
+                        AstUtils.LightDynamic(action, typeof(object), sinkFullArgs),
+                        Ast.Block(
+                            Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), sinkLightArgs)),
+                            Ast.Condition(needsScope,
+                                AstUtils.LightDynamic(action, typeof(object), sinkLateArgs),
+                                result
+                            )
+                        )
+                    );
+                }
                 if (blockGiven && BlockParameter != null) {
                     // `block_given?' that is Kernel's (DispatchIntrinsics.TryBuildBlockGiven): whether the frame was given a
                     // block, which is what Kernel#block_given? reads from the scope this frame would have to make for it -

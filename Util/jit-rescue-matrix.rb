@@ -15,6 +15,11 @@
 # class list of a rescue is evaluated after the inner ensure clauses have run, `$!` is
 # set in the handler and restored after it, `retry` re-runs the protected part only, an
 # `ensure` runs once whether the body returns, raises, throws or is timed out.
+# Section 23 is for typed bodies that take the begin (JitCompiler.EmitExceptionBody): they emit
+# the statements, else and ensure in order and deopt where the generic body would raise, so the
+# order of the clauses, the value of the begin, a deopt after an effect, TracePoint, Thread#raise
+# and backtraces must be the generic body's. Which methods are specialized:
+#   IR_JIT_VERBOSE=1 ./ir.sh Util/jit-rescue-matrix.rb 2>&1 >/dev/null | grep -a 'specialized P'
 
 def t(label)
   print label.ljust(56), ' => '
@@ -300,3 +305,163 @@ class P
 end
 t("21. redefined")          { o.pure(10) }
 t("22. $! at the end")      { $!.inspect }
+
+# 23. typed bodies that take the begin
+class Q
+  def initialize; @n = 0; @e = 0; @log = []; end
+  attr_reader :n, :e, :log
+
+  # a method-level rescue, else and ensure: the order of the clauses and the value
+  def mlevel(x)
+    @n += x
+  rescue ZeroDivisionError
+    -1
+  else
+    @n += 1
+    @n * 2
+  ensure
+    @e += 1
+  end
+
+  # the value of a begin with else and ensure is the else clause's; the ensure clause's is dropped
+  def value(x)
+    begin
+      x + 1
+    rescue StandardError
+      0
+    else
+      x + 2
+    ensure
+      x + 3
+    end
+  end
+
+  # nested: the inner ensure before the outer else and ensure
+  def nested(x)
+    begin
+      begin
+        @n += x
+      ensure
+        @e += 1
+      end
+    rescue StandardError
+      -1
+    else
+      @e * 10
+    ensure
+      @e += 100
+    end
+  end
+
+  # an effect, then a deopt in the protected part (an overflow into a Bignum): the effect once
+  def eff_deopt(x)
+    @n += 1
+    begin
+      x * x
+    rescue StandardError
+      -1
+    end
+  end
+
+  # a deopt in the ensure clause after the protected part's effect
+  def ens_deopt(x)
+    begin
+      @n = x
+    ensure
+      @e = x * x
+    end
+  end
+
+  # a raise in the ensure clause on the normal path
+  def ens_raise(x)
+    begin
+      x + 1
+    ensure
+      raise ArgumentError, "ens" if x > 250
+    end
+  end
+
+  # $! read in the ensure clause of a run that raised nothing: the $! of whoever called
+  def ens_bang(x)
+    begin
+      x + 1
+    ensure
+      @log << $!
+    end
+  end
+
+  # the backtrace of an exception the protected part raises and the rescue takes, and of one that goes through
+  def bt(x)
+    begin
+      100 / x
+    rescue ZeroDivisionError => e
+      e.backtrace_locations.first.label
+    end
+  end
+
+  def bt_through(x)
+    begin
+      100 / x
+    rescue ArgumentError
+      -1
+    ensure
+      @e += 1
+    end
+  end
+
+  def plain(x)
+    begin
+      x + 1
+    rescue StandardError
+      -1
+    end
+  end
+
+  # an optional parameter's default is evaluated outside the method's own rescue
+  def boom = raise("boom")
+  def dflt(x, a = 1)
+    x + a
+  rescue
+    :rescued
+  ensure
+    @e += 1
+  end
+end
+
+q = Q.new
+t("23. method level")       { [warm { |i| q.mlevel(i % 3) }, q.n, q.e] }
+t("23. method level, nil")  { [q.mlevel(nil), q.n, q.e] }
+t("23. value")              { [warm { |i| q.value(i) }, q.value(5), (q.value(nil) rescue $!.class)] }
+t("23. nested")             { q = Q.new; [warm { |i| q.nested(i % 3) }, q.nested(2), q.n, q.e] }
+t("23. nested, nil")        { [q.nested(nil), q.e] }
+t("23. effect, deopt")      { q = Q.new; warm { |i| q.eff_deopt(i) }; [q.eff_deopt(2**40), q.n] }
+t("23. effect, raise")      { [q.eff_deopt(nil), q.n] }
+t("23. ensure deopt")       { q = Q.new; warm { |i| q.ens_deopt(i) }; [q.ens_deopt(2**40), q.n, q.e] }
+t("23. ensure raise")       { q = Q.new; [warm(250) { |i| q.ens_raise(i) }, q.ens_raise(300)] }
+t("23. $! in ensure")       { q = Q.new; warm { |i| q.ens_bang(i) }; begin; raise "outer"; rescue; q.ens_bang(1); end; [q.log.compact.map(&:message), $!] }
+t("23. backtrace, rescued") { warm { |i| q.bt(i + 1) }; q.bt(0) }
+t("23. backtrace, through") { warm { |i| q.bt_through(i + 1) }; begin; q.bt_through(0); rescue ZeroDivisionError => e; e.backtrace_locations.first(2).map(&:label); end }
+t("23. bt_through ensure")  { q.e }
+t("23. default")            { q = Q.new; [warm { |i| q.dflt(i) + q.dflt(i, 2) }, q.dflt(1, nil), q.dflt(nil), q.e] }
+t("23. default raises")     { [(q.dflt(1, q.boom) rescue :outside), q.e] }
+
+events = []
+tp = TracePoint.new(:raise, :rescue) { |e| events << [e.event, e.raised_exception.class, e.method_id] if e.method_id == :bt }
+warm { |i| q.bt(i + 1) }
+tp.enable { q.bt(0); q.bt(1) }
+t("23. TracePoint")         { events }
+
+class Stop < Exception; end
+t("23. Thread#raise") do
+  th = Thread.new { Thread.current.report_on_exception = false; r = 0; loop { r += q.plain(1) } }
+  sleep 0.05
+  th.raise(Stop, "stop")
+  begin; th.join; rescue Stop => e; e.class; end
+end
+t("23. Thread#raise, rescued") do
+  th = Thread.new { Thread.current.report_on_exception = false; loop { q.plain(1) } rescue :out }
+  sleep 0.05
+  th.raise(ArgumentError, "a")
+  th.value
+end
+t("23. Timeout")            { Timeout.timeout(0.1) { loop { q.plain(1); q.value(1) } } }
