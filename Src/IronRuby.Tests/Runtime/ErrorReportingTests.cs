@@ -503,6 +503,55 @@ p q(1)
         }
 
         /// <summary>
+        /// The conversion of an interpolated local variable on a later line of a string (a heredoc's) reports that line, as
+        /// MRI's does: the variable's node carries its declaration's span, so the part's line comes from StringConstructor.PartLines.
+        /// </summary>
+        public void Backtrace_InterpolatedLocalLine1() {
+            TestOutput(@"
+require 'ruby4'; class Bad; def to_s = raise(""no""); end
+def bt = yield rescue $!.backtrace_locations[1].lineno
+def m(x)
+  y = 1
+  s = <<~E
+    a #{y}
+    b #{x}
+  E
+  s
+end
+p bt { m(Bad.new) }
+def m2(x) = ""a
+#{x}""
+p bt { m2(Bad.new) }
+def m3(x)
+  ""#{x}""
+end
+p bt { m3(Bad.new) }
+def m4(x)
+  v = :""s
+#{x}""
+  v
+end
+p bt { m4(Bad.new) }
+def m5(x)
+  [1,
+   ""#{x}""]
+end
+p bt { m5(Bad.new) }
+r = nil
+3000.times { r = m(1) }
+p r, bt { m(Bad.new) }
+", @"
+8
+14
+17
+22
+28
+""a 1\nb 1\n""
+8
+");
+        }
+
+        /// <summary>
         /// Kernel#send and BasicObject#__send__ leave no frame of their own in a backtrace, with a String name too (as with a
         /// Symbol, whose call the binder makes in place); Kernel#public_send keeps its frame. LEDGER gap 27.
         /// </summary>

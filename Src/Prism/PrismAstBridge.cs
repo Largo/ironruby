@@ -774,16 +774,16 @@ namespace IronRuby.Prism {
                     // interpolated string with nothing interpolated; MRI treats it as the single
                     // literal it looks like, frozen or chilled with the rest of the file's.
                     var folded = TryFoldAdjacentLiterals(interp, span);
-                    return folded ?? new StringConstructor(StringParts(interp.Parts), StringKind.Mutable, span) { SourceEncoding = _encoding };
+                    return folded ?? WithPartLines(new StringConstructor(StringParts(interp.Parts), StringKind.Mutable, span) { SourceEncoding = _encoding }, interp.Parts);
                 }
                 case Pm.InterpolatedSymbolNode interpSymbol:
-                    return new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span);
+                    return WithPartLines(new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span), interpSymbol.Parts);
                 case Pm.XStringNode xstr:
                     return new StringConstructor(
                         new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped, LiteralEncoding(xstr)), LiteralEncoding(xstr), span) },
                         StringKind.Command, span);
                 case Pm.InterpolatedXStringNode interpX:
-                    return new StringConstructor(StringParts(interpX.Parts), StringKind.Command, span);
+                    return WithPartLines(new StringConstructor(StringParts(interpX.Parts), StringKind.Command, span), interpX.Parts);
                 case Pm.EmbeddedStatementsNode embedded:
                     return StatementsAsExpression(embedded.Statements, span);
 
@@ -1330,6 +1330,26 @@ namespace IronRuby.Prism {
                 case Pm.NumberedReferenceReadNode numbered: return numbered.Number.ToString();
                 default: throw Unsupported(node);
             }
+        }
+
+        /// <summary>
+        /// The line of each part that reads a local variable (`#{x}`): the variable's node is shared by every read and carries
+        /// its declaration's span, so the conversion of such a part on a later line of the string (a heredoc) learns its own
+        /// line from here (StringConstructor.PartLines), as MRI reports it.
+        /// </summary>
+        private StringConstructor/*!*/ WithPartLines(StringConstructor/*!*/ ctor, Pm.PmNode/*!*/[]/*!*/ parts) {
+            var built = ctor.Parts;
+            if (built.Count != parts.Length) {
+                return ctor;
+            }
+            int[] lines = null;
+            for (int i = 0; i < parts.Length; i++) {
+                if (built[i] is LocalVariable && (parts[i] is Pm.EmbeddedStatementsNode || parts[i] is Pm.EmbeddedVariableNode)) {
+                    (lines ??= new int[parts.Length])[i] = Span(parts[i]).Start.Line;
+                }
+            }
+            ctor.PartLines = lines;
+            return ctor;
         }
 
         private List<Expression>/*!*/ StringParts(Pm.PmNode[]/*!*/ parts) {

@@ -65,6 +65,34 @@ true
         }
 
         /// <summary>
+        /// The default descriptions (rb_any_to_s, rb_obj_inspect, and the core #inspect methods that
+        /// start with #&lt;Foo:0x...) are BINARY strings in MRI; a class name, an instance variable name
+        /// or a part that is not ASCII takes them over to UTF-8.
+        /// </summary>
+        public void Scenario_DescriptionEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+class Foo; def initialize(v); @v = v; end; end
+class Café; end
+o = Object.new
+o.instance_variable_set(:@é, 1)
+p Object.new.to_s.encoding, Object.new.inspect.encoding, Foo.new(1).inspect.encoding
+p Café.new.to_s.encoding, Café.new.inspect.encoding, o.inspect.encoding
+p proc {}.inspect.encoding, Thread::Mutex.new.inspect.encoding, binding.inspect.encoding
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+");
+        }
+
+        /// <summary>
         /// Kernel#inspect of an object met again inside its own inspect: MRI's "#&lt;Foo:0x... ...&gt;".
         /// </summary>
         public void Scenario_InspectRecursive1() {

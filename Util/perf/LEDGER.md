@@ -4033,7 +4033,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (Proc.CalleeName in its rare state; RubyLambdaMethodInfo.GetLambdaFor), in the rule and the
     first-call dispatcher; such a call skips the method JIT's stub. light-entry-matrix (claude/perf-lsite)
     "define_method body by alias": CRuby's output. DefineMethodCallee1.
-  Not fixed: `42.compare_to(o)` in inline-matrix's `tree_int_key` answers Int32#CompareTo's
+  Not fixed (fixed in the eighth round, see below): `42.compare_to(o)` in inline-matrix's `tree_int_key` answers Int32#CompareTo's
   "Object must be of type Int32." where CRuby has no such method. That is IronRuby's interop
   (RubyModule.IsUnmangledBuiltin: snake_case CLR names on Integer and Float, `5.to_string("X")`,
   which ClrTests asserts), not a leak; matching CRuby means dropping those names, or mapping them
@@ -4225,6 +4225,14 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   For the gate: $~/$_ inside string instance_eval/class_eval are the caller's; backtrace, caller, binding and eval
   file lines of calls in multi-line statements; fibers' $~/$_ are their own (a fiber no longer sees or sets its
   creator's).
+  Eighth round (2026-11-28, on claude/happy-gauss-95wm2j fcbc67b): Integer and Float answer their CLR methods by their
+  CLR names only (5.ToString("X"), 5.CompareTo(3), (2**70).IsEven); the snake_case spellings (compare_to, to_string,
+  equals, is_even) are NoMethodError, as in CRuby, so inline-matrix's tree_int_key is same. ClrIntegerClrMembers1.
+  For the gate: a program that called 5.to_string or 1.5.compare_to through IronRuby's interop must use the CLR names.
+  Ninth round (2026-11-28, on fcbc67b + the eighth): an interpolated local variable on a later line of a string (a
+  heredoc's `#{x}`) reports its own line when its conversion raises: the bridge records the part's line
+  (StringConstructor.PartLines) and the conversion is marked as a call on a later line is (AstGenerator.AddCallLine).
+  Backtrace_InterpolatedLocalLine1. For the gate: backtrace lines of such parts.
 - **perf/json (2026-11-27) - `case` over String literals looks its subject up once while String#===
   is the library's (gap 7)** - gated 2026-11-28 (round 6's gate entry). Commit 0a78877 on `claude/perf-strsearch`, based on
   claude/happy-gauss-95wm2j 15285eb with 0518f08 merged in. Measured first: a perf profile of AWFY

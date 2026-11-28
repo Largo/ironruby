@@ -149,6 +149,7 @@ namespace IronRuby.Tests {
                 Scenario_Globals3,
                 Scenario_InspectRecursive1,
                 Scenario_InspectObjectId1,
+                Scenario_DescriptionEncoding1,
 
                 Scenario_RubyMethodMissing1, 
                 Scenario_RubyMethodMissing2, 
@@ -1060,6 +1061,7 @@ namespace IronRuby.Tests {
                 Backtrace_ArityCalleeFrame1,
                 Backtrace_SendHidden1,
                 Backtrace_CallLine1,
+                Backtrace_InterpolatedLocalLine1,
                 Backtrace_RaiseInEnsure1,
                 Backtrace_CompiledLoopLine1,
                 Backtrace_CompiledLoopLineFrameReleased1,

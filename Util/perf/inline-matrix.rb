@@ -338,8 +338,8 @@ when /\Atree/
     kp = (0...200).map { |i| K.new((i * 7919) % 1009) }
     puts tree_run(t, probe, N / 2) + tree_run(kt, kp, N / 2) + tree_run(t, probe, N / 2)
   when 'tree_nil_key', 'tree_int_key', 'tree_sym_key'
-    # (an Integer key differs from CRuby on every tree and without the JIT: IronRuby's .NET interop answers
-    # `42.compare_to(o)' with Int32#CompareTo, an ArgumentError, where CRuby has no such method)
+    # (an Integer key: `42.compare_to(o)' is a NoMethodError, as in CRuby - Int32's CLR methods are reachable by their
+    # CLR names only, 42.CompareTo)
     odd = { 'tree_nil_key' => nil, 'tree_int_key' => 42, 'tree_sym_key' => :k }[c]
     puts tree_run(t, probe, N, ->(i) { probe[(N - 1) % probe.size] = odd })
   when 'tree_poly', 'tree_poly3'

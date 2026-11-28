@@ -160,7 +160,8 @@ namespace IronRuby.Builtins {
         /// by a space rather than by the '@' this used to print, omitted entirely when the proc has
         /// no Ruby source or comes from Method#to_proc, and replaced by "(&amp;:name)" for a proc a
         /// Symbol produced. The result is
-        /// a binary string, as every #inspect-ish description in MRI is.
+        /// a binary string, as every #inspect-ish description in MRI is, unless the path or the symbol
+        /// name is not ASCII: then it is UTF-8.
         /// </summary>
         [RubyMethod("to_s"), RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(Proc/*!*/ self) {
@@ -169,11 +170,11 @@ namespace IronRuby.Builtins {
             var str = RubyUtils.ObjectToMutableStringPrefix(context, self);
             if (self.SymbolName != null) {
                 str.Append("(&:");
-                str.Append(self.SymbolName);
+                AppendDescriptionText(str, self.SymbolName);
                 str.Append(')');
             } else if (self.SourcePath != null && !self.Dispatcher.WrapsMethod) {
                 str.Append(' ');
-                str.Append(self.SourcePath);
+                AppendDescriptionText(str, self.SourcePath);
                 str.Append(':');
                 str.Append(self.SourceLine.ToString(CultureInfo.InvariantCulture));
             }
@@ -183,9 +184,19 @@ namespace IronRuby.Builtins {
             }
 
             str.Append('>');
-            str.ForceEncoding(RubyEncoding.Binary);
 
             return str;
+        }
+
+        // The description starts BINARY (RubyUtils.CreateObjectDescription), which cannot hold the
+        // characters of a path or a symbol name that is not ASCII as they are; appended as a UTF-8
+        // string, it takes the description over to UTF-8, as it does in MRI.
+        private static void AppendDescriptionText(MutableString/*!*/ str, string/*!*/ text) {
+            if (text.IsAscii()) {
+                str.Append(text);
+            } else {
+                str.Append(MutableString.Create(text, RubyEncoding.UTF8));
+            }
         }
 
         [RubyMethod("to_proc")]
