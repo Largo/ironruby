@@ -1214,6 +1214,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     write is a step of its own, about 8 ns per call (perf/iter3 could not see it end to end).
     perf/endpark took that step (see Landed): the harness's take-and-park 24 -> 16 ns, end to end
     within the noise.
+    perf/stagea simulated stage A in the harness before building it and found nothing to build (see
+    Rejected): the descriptor's per-call fill costs what the parked cycle costs, `e1`'s steps 44 ns
+    parked against 46-61 as a descriptor. The literal's 45-50 ns end to end is not in one runtime step.
 
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
@@ -7456,6 +7459,29 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/stagea (round thirty-seven, 2026-11-28) - stage A of `Docs/block-calling-convention.md`, a narrow
+  literal given to a `[BlockNotKept]` iterator as a block descriptor: simulated, not built** (gap 13).
+  Before the matrix or the compiler work, the harness (`IronRuby.Tests /blockcost`, now with bytes per
+  iteration) timed what `e1`'s call would do with a descriptor: the literal's Proc taken from a slot by the
+  thread that owns it with plain reads and writes (no atomic), its scope never made, a frame header filled
+  with what the scope would be made from on demand (shape, declaring scope and module, the locals tuple,
+  self, block, rfc, callee), the `[BlockNotKept]` yield, and the Proc given back cleared. Best of five,
+  3,000,000 iterations, two runs, ns per call: `e1`'s steps parked (as now, after perf/endpark) 40-44;
+  as a descriptor with the full header 57-62; with only the header fields that change per call stored
+  (the tuple and the rfc; the rest compared first) 41-47; with no header at all 29-33, and that floor
+  holds the yield's 15 alone. A header is needed (a `send(:binding)` in the block must see the method's
+  locals, so the tuple stays, and the scope made from it needs the rest), and filling it is reference
+  stores into a heap object, each a GC write barrier: the same work the parked scope's reinitialization
+  (`ReuseParkedScopeLazy`, 6 ns) and the cycle's clearing do. The stage-0 bound (~50 ns of `e1`) took the
+  descriptor's fill as free. End to end the literal's cost sits elsewhere too: `ept`, `ep` with a narrow
+  literal in a branch never taken, is 100-102 ns against `ep`'s 90-92 and `e1`'s 145-151, so having a
+  literal costs the frame 10 ns (its tuple, the park checks) and evaluating it 45-49, of which the
+  runtime steps the descriptor would replace are about 29 (44 less the yield's 15) and the rest the
+  compiled code around the instantiation. What would pay is the block reaching the caller's state where
+  it is, CRuby's captured `ep`, without copying it into a heap object per call; the DLR's call sites pass
+  objects, not references into a frame. Stages B and D carry the same fill (B: `nyl`'s steps 68-73 hold
+  the same cycle). Left as they were: the code; the harness keeps the simulated rows.
 
 - **perf/procscope (round thirty-seven, 2026-11-28) - a literal's Proc over a scope made but not
   published as the frame's (change B of `Docs/light-frame-literal-blocks.md`): prototyped, measured,

@@ -184,6 +184,28 @@ tried exactly this and saw nothing end to end, where the host's noise was larger
 shows it. It is a round of its own (the take must stay atomic: two threads may reach for the same parked
 scope).
 
+### Stage A, simulated before it was built (perf/stagea)
+
+The harness times `e1`'s call as stage A would make it (the rows "e1: all steps (descriptor, ...)"): the
+Proc taken from its slot by the thread that owns it, with no atomic, its scope never made, a frame header
+filled for the scope to be made from on demand, the yield, and the Proc given back. ns per call, two runs:
+
+| `e1`'s steps | ns | bytes |
+|---|---|---|
+| parked, as now (after perf/endpark) | 40-44 | 24 (the tuple) |
+| descriptor, the whole header stored per call | 57-62 | 24 |
+| descriptor, only the fields that change per call stored (the tuple, the rfc) | 41-47 | 24 |
+| descriptor, no header (not sound: a scope made on demand could not be made) | 29-33 | 0 |
+
+**Stage A does not pay.** Filling the header is a set of reference stores into a heap object, each a GC
+write barrier, which is what the parked scope's reinitialization costs too; the stage-0 bound took the fill
+as free. The tuple cannot be dropped (`Locals = null` above): a `send(:binding)` in a narrow literal shows the
+method's locals, in CRuby too. And the end to end does not sit in the runtime steps alone: `ept` (`ep` with a
+narrow literal in a branch never taken) is 100-102 ns against `ep`'s 90-92 and `e1`'s 145-151, so having a
+literal costs the frame 10 ns and evaluating it 45-49, of which the steps a descriptor would replace are about
+29. Stages B and D carry the same fill. What would pay is the block reaching the caller's state in place, as
+CRuby's captured `ep` does, which objects passed through call sites cannot do.
+
 ## 4. Stages
 
 Each behind a switch of its own, with its matrix before its code, keepable alone.

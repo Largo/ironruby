@@ -27,6 +27,7 @@ using Microsoft.Scripting.Hosting;
 
 namespace IronRuby.Tests.Perf {
     internal static class BlockCostHarness {
+        internal static long ProtoNew;
         private const string Source = @"
 PE = proc { |x| }
 PY = proc { 1 }
@@ -38,6 +39,7 @@ class BcO
   def e1(a); a.each { |x| }; 1; end
   def e0(a); 1; end
   def ep(a); a.each(&PE); 1; end
+  def ept(a); return a.each { |y| } if a.nil?; a.each(&PE); 1; end
   def nyp(a) = ny(&PY)
   def grab(&b) = b
   def lit1 = grab { 1 }
@@ -49,6 +51,7 @@ def bc_run_nyl(o, a, n); i = 0; while i < n; o.nyl(a); i += 1; end; end
 def bc_run_e1(o, a, n); i = 0; while i < n; o.e1(a); i += 1; end; end
 def bc_run_e0(o, a, n); i = 0; while i < n; o.e0(a); i += 1; end; end
 def bc_run_ep(o, a, n); i = 0; while i < n; o.ep(a); i += 1; end; end
+def bc_run_ept(o, a, n); i = 0; while i < n; o.ept(a); i += 1; end; end
 def bc_run_nyp(o, a, n); i = 0; while i < n; o.nyp(a); i += 1; end; end
 ";
 
@@ -295,9 +298,118 @@ def bc_run_nyp(o, a, n); i = 0; while i < n; o.nyp(a); i += 1; end; end
                 return last;
             });
 
+            // ---- stage A, simulated: the literal as a descriptor - a Proc whose scope is made only on demand, taken from
+            // the slot by the thread that owns it with plain reads and writes, its frame header filled, given back at exit
+            var hdr = new ProtoHeader();
+            var protoSlot = new ProtoSlot { Owner = Environment.CurrentManagedThreadId, Item = procE };
+            Report("e1: all steps (descriptor, simulated)", n, k => {
+                object last = null;
+                var rfc0 = RubyOps.EnterLightMethod(null);
+                for (int i = 0; i < k; i++) {
+                    var locals = new MutableTuple<object>();
+                    Proc proc = null;
+                    if (protoSlot.Owner == Environment.CurrentManagedThreadId) { proc = protoSlot.Item; protoSlot.Item = null; }
+                    if (proc == null || !proc.TryReuse()) { ProtoNew++; proc = new Proc(ProcKind.Block, o, methodScope, litx.Dispatcher); }
+                    proc.ReuseParked(o, false);
+                    hdr.Shape = shape; hdr.DeclaringScope = declaringScope; hdr.DeclaringModule = declaringModule; hdr.Locals = locals;
+                    hdr.Self = o; hdr.Block = null; hdr.Rfc = rfc0; hdr.Callee = null;
+                    var bfc = RubyOps.CreateBfcForBlockNotKept(proc);
+                    object r;
+                    bfc.Yield(array[0], out r);
+                    RubyOps.LeaveProcConverter(bfc);
+                    RubyOps.LeaveLightMethodFrame(rfc0, null);
+                    if (proc.IsReusableAndInactive) {
+                        hdr.DeclaringScope = null; hdr.DeclaringModule = null; hdr.Locals = null; hdr.Self = null; hdr.Rfc = null;
+                        proc.ClearForPark();
+                        if (protoSlot.Owner == Environment.CurrentManagedThreadId) { protoSlot.Item = proc; }
+                    }
+                    last = r;
+                }
+                return last;
+            });
+
+            Report("e1: all steps (descriptor, no header)", n, k => {
+                object last = null;
+                var rfc0 = RubyOps.EnterLightMethod(null);
+                for (int i = 0; i < k; i++) {
+                    var locals = new MutableTuple<object>();
+                    Proc proc = null;
+                    if (protoSlot.Owner == Environment.CurrentManagedThreadId) { proc = protoSlot.Item; protoSlot.Item = null; }
+                    if (proc == null || !proc.TryReuse()) { ProtoNew++; proc = new Proc(ProcKind.Block, o, methodScope, litx.Dispatcher); }
+                    proc.ReuseParked(o, false);
+                    
+                    
+                    var bfc = RubyOps.CreateBfcForBlockNotKept(proc);
+                    object r;
+                    bfc.Yield(array[0], out r);
+                    RubyOps.LeaveProcConverter(bfc);
+                    RubyOps.LeaveLightMethodFrame(rfc0, null);
+                    if (proc.IsReusableAndInactive) {
+                        
+                        proc.ClearForPark();
+                        if (protoSlot.Owner == Environment.CurrentManagedThreadId) { protoSlot.Item = proc; }
+                    }
+                    last = r;
+                }
+                return last;
+            });
+
+            Report("e1: all steps (descriptor, header: changed only)", n, k => {
+                object last = null;
+                var rfc0 = RubyOps.EnterLightMethod(null);
+                for (int i = 0; i < k; i++) {
+                    var locals = new MutableTuple<object>();
+                    Proc proc = null;
+                    if (protoSlot.Owner == Environment.CurrentManagedThreadId) { proc = protoSlot.Item; protoSlot.Item = null; }
+                    if (proc == null || !proc.TryReuse()) { ProtoNew++; proc = new Proc(ProcKind.Block, o, methodScope, litx.Dispatcher); }
+                    proc.ReuseParked(o, false);
+                    if (hdr.Shape != shape) hdr.Shape = shape; if (hdr.DeclaringScope != declaringScope) hdr.DeclaringScope = declaringScope; if (hdr.DeclaringModule != declaringModule) hdr.DeclaringModule = declaringModule; hdr.Locals = locals;
+                    hdr.Rfc = rfc0;
+                    var bfc = RubyOps.CreateBfcForBlockNotKept(proc);
+                    object r;
+                    bfc.Yield(array[0], out r);
+                    RubyOps.LeaveProcConverter(bfc);
+                    RubyOps.LeaveLightMethodFrame(rfc0, null);
+                    if (proc.IsReusableAndInactive) {
+                        hdr.Locals = null; hdr.Rfc = null;
+                        proc.ClearForPark();
+                        if (protoSlot.Owner == Environment.CurrentManagedThreadId) { protoSlot.Item = proc; }
+                    }
+                    last = r;
+                }
+                return last;
+            });
+
+            Report("e1: all steps (descriptor, no header, no tuple)", n, k => {
+                object last = null;
+                var rfc0 = RubyOps.EnterLightMethod(null);
+                for (int i = 0; i < k; i++) {
+                    
+                    Proc proc = null;
+                    if (protoSlot.Owner == Environment.CurrentManagedThreadId) { proc = protoSlot.Item; protoSlot.Item = null; }
+                    if (proc == null || !proc.TryReuse()) { ProtoNew++; proc = new Proc(ProcKind.Block, o, methodScope, litx.Dispatcher); }
+                    proc.ReuseParked(o, false);
+                    
+                    
+                    var bfc = RubyOps.CreateBfcForBlockNotKept(proc);
+                    object r;
+                    bfc.Yield(array[0], out r);
+                    RubyOps.LeaveProcConverter(bfc);
+                    RubyOps.LeaveLightMethodFrame(rfc0, null);
+                    if (proc.IsReusableAndInactive) {
+                        
+                        proc.ClearForPark();
+                        if (protoSlot.Owner == Environment.CurrentManagedThreadId) { protoSlot.Item = proc; }
+                    }
+                    last = r;
+                }
+                return last;
+            });
+
+            Console.WriteLine("  (descriptor: {0} Procs made)", ProtoNew);
             // ---- end to end, through Ruby
             Console.WriteLine();
-            foreach (var name in new[] { "nb0", "nyp", "nyl", "e0", "ep", "e1" }) {
+            foreach (var name in new[] { "nb0", "nyp", "nyl", "e0", "ep", "ept", "e1" }) {
                 ReportRuby(engine, name, n);
             }
         }
@@ -310,13 +422,15 @@ def bc_run_nyp(o, a, n); i = 0; while i < n; o.nyp(a); i += 1; end; end
             body(n / 10);
             double best = Double.MaxValue;
             Taken = 0;
+            long bytes0 = GC.GetAllocatedBytesForCurrentThread();
             for (int round = 0; round < 5; round++) {
                 var sw = Stopwatch.StartNew();
                 GC.KeepAlive(body(n));
                 sw.Stop();
                 best = Math.Min(best, sw.Elapsed.TotalMilliseconds * 1e6 / n);
             }
-            Console.WriteLine("  {0,-80} {1,7:F1} ns{2}", label, best, Taken > 0 ? String.Format("  (parked: {0:P0})", Taken / (5.0 * n)) : "");
+            Console.WriteLine("  {0,-80} {1,7:F1} ns {3,4} B{2}", label, best, Taken > 0 ? String.Format("  (parked: {0:P0})", Taken / (5.0 * n)) : "",
+                (GC.GetAllocatedBytesForCurrentThread() - bytes0) / (5 * n));
         }
 
         private static void ReportRuby(ScriptEngine engine, string name, int n) {
@@ -332,5 +446,14 @@ def bc_run_nyp(o, a, n); i = 0; while i < n; o.nyp(a); i += 1; end; end
             }
             Console.WriteLine("  {0,-80} {1,7:F1} ns", "end to end: " + name + " (the caller's while loop included)", best);
         }
+    }
+    // perf/stagea's simulation of a block descriptor (Docs/block-calling-convention.md, "Stage A, simulated"): what the
+    // scope would be made from on demand, and the slot its Proc is taken from by the thread that owns it.
+    internal sealed class ProtoHeader {
+        internal object Shape, DeclaringScope, DeclaringModule, Locals, Self, Block, Rfc, Callee;
+    }
+    internal sealed class ProtoSlot {
+        internal int Owner;
+        internal Proc Item;
     }
 }
