@@ -2043,8 +2043,58 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-28 for round 9 of round thirty-seven** (master c4719ea with #301 and #302, perf/crubydiff's
+  eighth to tenth rounds, perf/ownerpark (rejected), perf/yieldloop, perf/kwjit with perf/kwcall's fix,
+  perf/kernelcall, perf/datafilter, perf/namedblock, perf/heldrfc, perf/loopivar2, perf/sharedargs): the branch
+  `claude/happy-gauss-95wm2j` at 597b8dc9 against master c4719ea (the baseline moved with the merge; its
+  census matches f81fc19's), Release net10.0, the composite R2R host on both, four cores: **PASS for what it
+  computes, with one timing item open: Towers** (below).
+  The merge itself: master's ledger and the branch's met in gap 26 (master's two paragraphs kept, the
+  branch's closed gap 27 heading kept) and at the top of Landed (both kept); perf/heldrfc's branch moved
+  perf/havlakalloc's entry, whose old copy went and whose gated mark the moved one took. No code conflict.
+  ReflectionCache.Generated.cs is what ClassInitGenerator writes. No new DLR patch; master's
+  check-dlr-patches refuses the branch's DLR checkout (its 0111 and 0112 overlap master's 0110), so the base
+  is built on a DLR with master's patches alone.
+  IronRuby.Tests (`parallel-tests.sh`, Debug): 1,427 tests, every one executed, none failed.
+  `gate-matrices.rb --all` in 7 modes (the six default ones, and every round 9 switch off at once:
+  IR_ARRAY_CLASS_FAST, IR_HELD_METHOD_BLOCKS, IR_INSTANCE_DATA_FILTER, IR_JIT_KWREST, IR_LOOP_IVAR_WRITES,
+  IR_OSR_YIELD, IR_PASSED_BLOCKS, IR_SHARED_SHAPES): 1,329 same, 119 baseline, 15 DIFF, each explained:
+  regexp-binary-ctype prints what it printed at round 8; string-race-matrix, compared over five runs of each
+  tree (rows not always ok 110 -> 88, lost writes 106 -> 0, no row failing only on the new build);
+  thread-backtrace's row 3 under -X:NoJITCalls, a race in the matrix (the child can read main's backtrace
+  before main blocks in `q3.pop`; one of three runs printed CRuby's output exactly, `Thread::Queue#pop` frame
+  and all, which master does not), made deterministic by perf/crubydiff's 419f23e (round 10).
+  A probe file for the round's changes - Integer and Float without snake_case CLR names (`5.to_string`, a
+  user's `compare_to` on an Integer key), an interpolated heredoc part's backtrace line, the encodings of
+  default descriptions, a `while` loop yielding once per iteration hot (break, next, a raise through the
+  yield, a tail statement that deopts), `**rest` methods hot with keys varying and a body that deopts,
+  singleton classes given to an Array, a String and a Hash while compiled code asks their class (from 8
+  threads too, and 70,000 Strings with ivars), blocks passed on, stored by their callee and called later and
+  `&block` stored and passed to `super`, block loops writing ivars with a deopt and a frozen self,
+  define_singleton_method by Symbol and String and 300 OpenStructs - prints CRuby's output with the JIT on
+  and off and with the round's switches off. Master differs in 8 rows. Both print one `-w` warning CRuby
+  does not, from ostruct.rb ("method redefined; discarding old table!"), fixed by perf/crubydiff's round 11.
+  Read for the parts without a GVL: perf/datafilter sets its bit with `Interlocked.Or` before the table entry
+  is added and reads it with `Volatile.Read` before the table is, so a reader that finds the bit clear finds
+  no entry, and one that learned of the singleton class through any synchronisation finds the bit set; per
+  runtime, as the table is.
+  ruby/spec, all five suites (32,285 examples): no failure the known list does not name.
+  Census against master (Src/StdLib, Util/bench, AWFY): as at round 8 (light frames 82.5%, method JIT
+  compiles 12.3%); against round 8, 10 method-JIT ups and nothing down.
+  AWFY, 8 iterations: all fourteen verify. AWFY 12 in both orders: geomean new/base 0.919 and 0.912. Alone,
+  five rounds in each order, medians new/base: Havlak 0.869 / 0.866 (perf/heldrfc), DeltaBlue 0.978 / 1.014,
+  Richards 1.043 / 0.955, Towers 1.125 / 1.124. Towers again, three builds alternating: master, this tree
+  with the round's switches off (1.082) and as built (1.045) - the round's switches do not cause it; pinned
+  to two CPUs, ten rounds in each order: 1.074 (base first) and 1.017 (new first), least rounds 1.055 and
+  1.036. Towers has leaned slower than master since round 7 (1.068 and 1.035 there, 1.045 and 1.035 alone at
+  round 8): open, bisected by perf/struct before the branch goes to master. micro-table in both orders: no
+  line more than 5% slower in both (attr 1.15 then 0.95, cmp 1.12 then 0.99).
+  Start-up on the composite R2R host, best of ten alternating, two runs, base -> new ms: `-e 1` 368 -> 352 and
+  385 -> 343, `gem --version` 431 -> 437 and 440 -> 448, `gem list` 827 -> 702 and 829 -> 711,
+  `require "irb"` 812 -> 734 and 863 -> 765, irb 1+1 915 -> 784 and 926 -> 796: 0.85-0.96, `gem --version`
+  level (1.015 and 1.019).
 - **perf/yieldloop (2026-11-28) - a `while` loop with a yield in its body runs in its compiled copy (gap 18, stage
-  3a of `Docs/jit-resume-deopt.md`)** - not gated. The OSR copy gave up at the YieldCall (`[osr] emitter: node:
+  3a of `Docs/jit-resume-deopt.md`)** - gated 2026-11-28 (round 9's gate entry). The OSR copy gave up at the YieldCall (`[osr] emitter: node:
   YieldCall`), so `def each; i = 0; while i < @a.size; yield @a[i]; i += 1; end; end` ran its loop generic: about 22 ns
   an element of loop around the yield (`loop100` 29.8 generic, 8.0 typed).
   - The copy now takes a loop of the shape `while C; S...; yield E...; T...; end` with one yield in statement position
@@ -2076,7 +2126,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     next, redo pass with the switch on and off; the whole suite was not run.
 
 - **perf/kwcall (/perf-step, 2026-11-28) - the caller's keyword hash: nothing to win; a JIT'd
-  `**rest` whose body can deopt is declined** (fixes a slowdown perf/kwjit brought in).
+  `**rest` whose body can deopt is declined** (fixes a slowdown perf/kwjit brought in). Gated 2026-11-28 (round 9's gate entry).
   - **The caller's hash** (clock, ns; CRuby in brackets), bodies with a global variable assignment:
     a declared-keywords call `kd(k: 1)` 39 [42], `kd2(k: 1, j: 2)` 64 [45], `kr(k: 1)` 32 [40] -
     the method JIT binds them from the call's pairs (JitKeywordCall) without the hash, at CRuby's
@@ -2100,7 +2150,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/kwjit (/perf-step, 2026-11-28) - the method JIT takes a keyword method with `**rest`**
   (gap 38; switch `IR_JIT_KWREST`, on unless `=0`). Built on fcbc67b (claude/happy-gauss-95wm2j)
-  with de51cf89 merged.
+  with de51cf89 merged. Gated 2026-11-28 (round 9's gate entry).
   - **What changed.** JitKeywords.TryRecognize took a prologue only if its keyword Match refused
     other keys, so a method with `**o` kept the prologue in its body and the screen rejected it
     (`KeywordArgumentsTest`). It now takes `o = Rest(?kw?, names)` after the keyword reads as one
@@ -2139,7 +2189,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/datafilter (/perf-step, 2026-11-28, on fcbc67b + 672867e) - a filter by identity hash
   keeps objects without instance data out of the instance data table (`IR_INSTANCE_DATA_FILTER`)**
-  - instructions and clock, not gated. perf/kernelcall's lead: once one String and one Hash have a
+  - instructions and clock, gated 2026-11-28 (round 9's gate entry). perf/kernelcall's lead: once one String and one Hash have a
   singleton method, every String's and Hash's class lookup went to the ConditionalWeakTable
   (`@s.nil?` compiled +21% instructions, `@s.is_a?(String)` +37%). A per-object bit is unsafe on
   MutableString (non-atomic `_flags`) and absent on Hash, so each runtime keeps 65,536 bits (8 KB)
@@ -2153,7 +2203,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/kernelcall (/perf-step, 2026-11-28, on 744b83e) - an Array without instance data is
   answered its class without the instance data table (`RubyArray.MayHaveInstanceData`,
-  `IR_ARRAY_CLASS_FAST`)** - instructions and clock, not gated. The round's premise (a C# Kernel
+  `IR_ARRAY_CLASS_FAST`)** - instructions and clock, gated 2026-11-28 (round 9's gate entry). The round's premise (a C# Kernel
   call costs ~28 ns over CRuby whatever it does) did not hold when counted: over an empty
   method in the same harness, `Integer(5)` costs what `@i.gcd(4)` costs, implicit and explicit
   self alike, and the rows' gap to CRuby is the harness's Ruby call. The outlier the counts
@@ -2169,7 +2219,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   once one of its instances has a singleton class (a String's, a Hash's) - the bit is RubyArray's
   alone; and the harness's own Ruby call (gap 13).
 
-- **perf/loopivar2 (/perf-step, 2026-11-28, not gated) - outlined loops write self's instance
+- **perf/loopivar2 (/perf-step, 2026-11-28, gated 2026-11-28 (round 9's gate entry)) - outlined loops write self's instance
   variables by default (`IR_LOOP_IVAR_WRITES=0` refuses them), block loops included: the 2x
   "slowdown" that kept perf/loopivar off was the GC, not the stores** (on fcbc67b).
   - **The cause.** In Util/bench/loopivar-shapes.rb, `times_count` timed after `while_count` in one
@@ -2207,7 +2257,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     core/array/each as on the base; IronRuby.Tests (Debug) PASSED.
 
 - **perf/sharedargs (round forty-one, 2026-11-28) - a call of another shape gets a shared rule of its
-  own (gap 32)** - not gated. A shared rule is one per method, receiver type and delegate type; OpenStruct's
+  own (gap 32)** - gated 2026-11-28 (round 9's gate entry). A shared rule is one per method, receiver type and delegate type; OpenStruct's
   `define_singleton_method!(name, ...)` (a Symbol) and `("#{name}=", ...)` (a String) share the key, and
   the second shape's call, failing the first's argument test, got a rule of its own, which tests one
   class version: built and compiled again for each object's singleton class (~200 us), 207-209 times in
@@ -2230,7 +2280,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   module/define_method one error each on both builds (the known `into`/`to` messages).
 
 - **perf/heldrfc e8a74f4 (round forty-three, 2026-11-28) - a method's scope holds its caller's literal
-  block until it is parked (gap 25)** - not gated. At fcbc67b (rounds seven and eight merged) Havlak
+  block until it is parked (gap 25)** - gated 2026-11-28 (round 9's gate entry). At fcbc67b (rounds seven and eight merged) Havlak
   allocated 1.79 GB an iteration again, method scopes 24% and Procs 13% as before perf/havlakalloc: round
   thirty-seven's perf/literalcode (`2eda4af`, "a body that evaluates a literal block on every call is not a
   light frame") made `Vector#each`, `has_some` and every method that calls them with a literal methods
@@ -2267,7 +2317,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   Proc keeps until the park (its converter, the callee's scope) is dropped only by that scope's park.
 
 - **perf/namedblock 4e87b11 977e047 (round forty-two, 2026-11-28) - a named block that a method only
-  passes on stays reusable (gap 25)** - not gated. `def each(&b) = @items.each(&b)` (som.rb's `SomSet#each`,
+  passes on stays reusable (gap 25)** - gated 2026-11-28 (round 9's gate entry). `def each(&b) = @items.each(&b)` (som.rb's `SomSet#each`,
   `has_some`, `get_one`; 5 of AWFY's 6 methods with a named block, about 320 of the standard library's
   800) converted its caller's literal for good (`EnterLightMethodNamingBlock`: ConvertAsMethodFrame), so no
   caller passing a literal to it could make its Proc again or park its scope: a caller of `SomSet#each` 374 B
@@ -4324,7 +4374,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   both.
 
 - **perf/crubydiff (round thirty-seven, 2026-11-26) - differences from CRuby, not speed** - not
-  gated when merged; gated 2026-11-27 (round 5's gate entry), its third and fourth rounds 2026-11-28 (round 6's), its fifth and sixth 2026-11-28 (round 7's), its seventh 2026-11-28 (round 8's); one commit each, every one with CRuby 4.0's output as a registered IronRuby.Tests case.
+  gated when merged; gated 2026-11-27 (round 5's gate entry), its third and fourth rounds 2026-11-28 (round 6's), its fifth and sixth 2026-11-28 (round 7's), its seventh 2026-11-28 (round 8's), its eighth to tenth 2026-11-28 (round 9's); one commit each, every one with CRuby 4.0's output as a registered IronRuby.Tests case.
   - `Class#new` handed a library `initialize` (Struct's, Array's) the caller's scope, whose
     refinements then reached it: `Util/struct-matrix.rb`'s `UsingRefine.make` (after 200 calls, when
     the rule was compiled) and an Array subclass from the first call. The inner site now takes no scope
