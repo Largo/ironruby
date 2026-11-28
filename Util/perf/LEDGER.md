@@ -1444,6 +1444,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `Vector#each` costs 3-4% more instructions per call than the scope-ful one did.
     Round forty-two took the first of those (see Landed, perf/namedblock): a block that a
     method only passes on stays reusable. Havlak 1.33 -> 1.17 GB an iteration.
+    Round forty-three found both undone by round thirty-seven's perf/literalcode, merged
+    with them: it takes a method that evaluates a literal block on every call out of light
+    frames (`Vector#each`, `has_some` and their callers), and a method with a scope converted
+    its caller's literal for good, so at fcbc67b Havlak was back at 1.70-1.79 GB. Now a
+    method's scope holds the block as a light frame's does (see Landed, perf/heldrfc):
+    1.18 GB.
 26. **Start-up: `gem` and `irb` answer in 0.7 to 2.2 s, CRuby in 0.1 to 0.2** (the one
     thing that has to stay fast while the tiers stay on by default, and it is not fast).
     2026-11-18, a7060a27, the ReadyToRun host (`IR_CONFIG=R2R`, what `ir.sh` runs when
@@ -2223,6 +2229,85 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   respond_to, public_send, send, basicobject method_missing: no failures; language/send and
   module/define_method one error each on both builds (the known `into`/`to` messages).
 
+- **perf/heldrfc e8a74f4 (round forty-three, 2026-11-28) - a method's scope holds its caller's literal
+  block until it is parked (gap 25)** - not gated. At fcbc67b (rounds seven and eight merged) Havlak
+  allocated 1.79 GB an iteration again, method scopes 24% and Procs 13% as before perf/havlakalloc: round
+  thirty-seven's perf/literalcode (`2eda4af`, "a body that evaluates a literal block on every call is not a
+  light frame") made `Vector#each`, `has_some` and every method that calls them with a literal methods
+  with a scope made at entry (`IR_LIGHT_FRAMES=why`: "body needs its scope after the rewrite"), and a method
+  with a scope converted its caller's literal for good - not at the call site's CreateRfcForMethod, which
+  these calls do not go through, but in the scope's own InitializeRfc (Kind = Proc, the scope its frame,
+  never inactive again). Found by the GC allocation-tick probe and by printing what refused each park.
+  Now a method's scope converts the literal as before but marks it reusable and held
+  (`RubyMethodScope.InitializeMethodRfc`, `Proc.HoldForMethodScope`; CreateRfcForMethod likewise), and
+  EndPark releases the hold and drops the Proc's frame when it parks the scope (`Proc.ReleaseHold(scope)`)
+  - perf/havlakalloc's proof, which holds for a method with a scope as for a light frame: a method that
+  names its block or calls super has no parking slot, and parking means nothing captured the scope nor kept
+  a Proc of it. A block another method passed on (perf/namedblock) that reaches a method with a scope is
+  held by it the same way instead of being cleared for good. Switch: IR_HELD_METHOD_BLOCKS=0.
+  Census (Src/StdLib + AWFY, 28,378 methods): 0 methods changed - light frames 82.7%, JIT compiles 12.0%,
+  maybe 11.5%, never 76.6% on both (a runtime change); perf/literalcode had taken light frames from 94.7%.
+  Bytes (alloc.rb against 2e96b84, perf/namedblock merged with fcbc67b): Havlak 1,697,532,242 ->
+  1,180,852,612 (0.70), DeltaBlue 14,605,880 -> 9,664,089 (0.66), Towers 135 -> 15 KB, the rest level;
+  geomean 0.808. Per call (probe): callers of `Vector#each` 383 -> 135 B, of `SomSet#each` 382 -> 134,
+  of `contains` 414 -> 166, `find_set` 470 -> 222. Time, ten alternating AWFY processes each (a run or two
+  of Havlak gave no figure), medians: against the base Havlak 0.961, DeltaBlue 0.972, CD 1.010 (ranges
+  overlapping); in one tree with the switch off and on Havlak 0.934.
+  Checks: Util/held-block-matrix.rb's callees are methods with a scope now, and it catches a release
+  without the proof (the hold released when a callee fails to park: three rows wrong, a kept binding's
+  `yield` meeting a parked caller); a hold that is only a reuse flag is not caught there, since the
+  Proc's frame (the callee's scope) keeps it active until the park in that path. held-block,
+  passed-block, parked-scope, block-pass, block-given, nested-proc, jit-blockparam, light-entry,
+  hot-shapes, block-scope-reuse, super-light, loop-exit in the gate's six modes and
+  IR_HELD_METHOD_BLOCKS=0: 84 same. ruby/spec language/block, yield, break, send, def, core/proc,
+  core/binding, core/kernel/block_given: as on the base (send's one known `into`/`to` error on both).
+  IronRuby.Tests, Debug net10.0: 1,424 tests, none failed or flaky, as on the base. No AWFY benchmark fails.
+  For the gate: perf/literalcode and perf/havlakalloc were each measured without the other; with this
+  they compose (a method with a scope made at entry, parked, whose callers park too). The frame a held
+  Proc keeps until the park (its converter, the callee's scope) is dropped only by that scope's park.
+
+- **perf/namedblock 4e87b11 977e047 (round forty-two, 2026-11-28) - a named block that a method only
+  passes on stays reusable (gap 25)** - not gated. `def each(&b) = @items.each(&b)` (som.rb's `SomSet#each`,
+  `has_some`, `get_one`; 5 of AWFY's 6 methods with a named block, about 320 of the standard library's
+  800) converted its caller's literal for good (`EnterLightMethodNamingBlock`: ConvertAsMethodFrame), so no
+  caller passing a literal to it could make its Proc again or park its scope: a caller of `SomSet#each` 374 B
+  per call, `contains` 406. A method whose block parameter is only passed on (`JitStub.BlockParameterOnlyPassed`:
+  `&b` arguments, no other read, no yield, no super) now converts a literal block reusable
+  (`Proc.ConvertAsPassingMethodFrame`, `RubyOps.EnterLightMethodPassingBlock`), and each call it passes the
+  block to holds it (`Proc.PassHeldFlag`, not reusable while set; `HoldPassedBlock` around the call,
+  `EndPassedBlock` after it). Receivers known to keep nothing lift the hold as they take the block - a light
+  frame that only yields, a [BlockNotKept] library method, another method that only passes it on - and when
+  the call returns a hold still set (a receiver the binder hands a Proc to, a library method that may keep it,
+  a CLR method) makes the block not reusable for good, as does an exception or a break out of the call. A
+  Ruby method that may keep a block that is not its own call's literal - one naming it
+  (`EnterLightMethodNamingBlock`) or with a scope (`CreateRfcForMethod`) - clears its reuse for good as it
+  takes it: the first version had only the confirmations, and Richards' `TaskControlBlock#initialize`, which
+  stores its `&block` and calls `super()` (passing it to `TaskState#initialize`, a light frame that only
+  yields), had its block confirmed and the caller's literal made again for the next task -
+  NullReferenceException; alloc.rb's FAIL found it, the matrix had not. Switch: IR_PASSED_BLOCKS=0.
+  Bytes (alloc.rb against 5fe9f8a): Havlak 1,334,668,414 -> 1,172,432,918 (0.88), the rest level (Towers
+  106-165 KB and Richards 754-793 KB swing on both builds); geomean 0.972. Per call (probe): a caller of
+  `SomSet#each` 374 -> 134 B, of `SomSet#contains` 406 -> 166. Time, ten alternating AWFY processes each,
+  medians: against the base Havlak 0.984 (ranges 2.51-2.96 and 2.41-2.87 s), DeltaBlue 1.002, CD 0.987; in
+  one tree with the switch off and on Havlak 0.948. Instructions (callgrind, switch off -> on): `set_each`
+  -0.4%, `set_contains` +0.7%, `find_set` -0.1%, `vec_each` level.
+  Checks: Util/passed-block-matrix.rb (new: passed to a light frame that only yields, to a [BlockNotKept]
+  method, through two passing methods; kept by the receiver, on some calls, through a chain, by Hash.new,
+  define_method and Enumerator.new; identity across the pass; block_given?; break; a Method and a lambda
+  passed through; an exception while held; threads; a receiver that calls super with the block and one
+  that stores it and passes it on) and two-thread rows in Util/parked-scope-matrix.rb; with EndPass made
+  not to clear the reuse flag 8 rows go wrong, and with the two clears of the fix taken out the last two
+  rows go wrong. passed-block, held-block, block-pass, block-given, parked-scope, jit-blockparam,
+  light-entry, hot-shapes, nested-proc, block-scope-reuse, super-light in the gate's six modes and
+  IR_PASSED_BLOCKS=0: 77 same. ruby/spec language/block, send, def, break, core/proc,
+  core/kernel/block_given, core/module/define_method: as on the base (send and define_method have their one
+  known `into`/`to` error on both). IronRuby.Tests, Debug net10.0: 1,416 tests, none failed or flaky, as on
+  the base. No AWFY benchmark fails.
+  For the gate: every receiver the binder can hand a Proc to without a Ruby entry or a BlockParam (the hold
+  stays set there, so the block is not reused, but a receiver that confirms after keeping would be wrong);
+  the receivers that confirm (`EnterLightMethodWithBlock`, `CreateBfcForBlockNotKept`,
+  `EnterLightMethodPassingBlock`), which must keep nothing.
+
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
   design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple
@@ -2554,48 +2639,6 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     iteration) so that they need no log at all, which also answers the racing reader.
   - **Later** (perf/loopivar2): the slowdown was where a GC collection fell, not the stores; on by
     default since, block loops included.
-
-- **perf/namedblock 4e87b11 977e047 (round forty-two, 2026-11-28) - a named block that a method only
-  passes on stays reusable (gap 25)** - not gated. `def each(&b) = @items.each(&b)` (som.rb's `SomSet#each`,
-  `has_some`, `get_one`; 5 of AWFY's 6 methods with a named block, about 320 of the standard library's
-  800) converted its caller's literal for good (`EnterLightMethodNamingBlock`: ConvertAsMethodFrame), so no
-  caller passing a literal to it could make its Proc again or park its scope: a caller of `SomSet#each` 374 B
-  per call, `contains` 406. A method whose block parameter is only passed on (`JitStub.BlockParameterOnlyPassed`:
-  `&b` arguments, no other read, no yield, no super) now converts a literal block reusable
-  (`Proc.ConvertAsPassingMethodFrame`, `RubyOps.EnterLightMethodPassingBlock`), and each call it passes the
-  block to holds it (`Proc.PassHeldFlag`, not reusable while set; `HoldPassedBlock` around the call,
-  `EndPassedBlock` after it). Receivers known to keep nothing lift the hold as they take the block - a light
-  frame that only yields, a [BlockNotKept] library method, another method that only passes it on - and when
-  the call returns a hold still set (a receiver the binder hands a Proc to, a library method that may keep it,
-  a CLR method) makes the block not reusable for good, as does an exception or a break out of the call. A
-  Ruby method that may keep a block that is not its own call's literal - one naming it
-  (`EnterLightMethodNamingBlock`) or with a scope (`CreateRfcForMethod`) - clears its reuse for good as it
-  takes it: the first version had only the confirmations, and Richards' `TaskControlBlock#initialize`, which
-  stores its `&block` and calls `super()` (passing it to `TaskState#initialize`, a light frame that only
-  yields), had its block confirmed and the caller's literal made again for the next task -
-  NullReferenceException; alloc.rb's FAIL found it, the matrix had not. Switch: IR_PASSED_BLOCKS=0.
-  Bytes (alloc.rb against 5fe9f8a): Havlak 1,334,668,414 -> 1,172,432,918 (0.88), the rest level (Towers
-  106-165 KB and Richards 754-793 KB swing on both builds); geomean 0.972. Per call (probe): a caller of
-  `SomSet#each` 374 -> 134 B, of `SomSet#contains` 406 -> 166. Time, ten alternating AWFY processes each,
-  medians: against the base Havlak 0.984 (ranges 2.51-2.96 and 2.41-2.87 s), DeltaBlue 1.002, CD 0.987; in
-  one tree with the switch off and on Havlak 0.948. Instructions (callgrind, switch off -> on): `set_each`
-  -0.4%, `set_contains` +0.7%, `find_set` -0.1%, `vec_each` level.
-  Checks: Util/passed-block-matrix.rb (new: passed to a light frame that only yields, to a [BlockNotKept]
-  method, through two passing methods; kept by the receiver, on some calls, through a chain, by Hash.new,
-  define_method and Enumerator.new; identity across the pass; block_given?; break; a Method and a lambda
-  passed through; an exception while held; threads; a receiver that calls super with the block and one
-  that stores it and passes it on) and two-thread rows in Util/parked-scope-matrix.rb; with EndPass made
-  not to clear the reuse flag 8 rows go wrong, and with the two clears of the fix taken out the last two
-  rows go wrong. passed-block, held-block, block-pass, block-given, parked-scope, jit-blockparam,
-  light-entry, hot-shapes, nested-proc, block-scope-reuse, super-light in the gate's six modes and
-  IR_PASSED_BLOCKS=0: 77 same. ruby/spec language/block, send, def, break, core/proc,
-  core/kernel/block_given, core/module/define_method: as on the base (send and define_method have their one
-  known `into`/`to` error on both). IronRuby.Tests, Debug net10.0: 1,416 tests, none failed or flaky, as on
-  the base. No AWFY benchmark fails.
-  For the gate: every receiver the binder can hand a Proc to without a Ruby entry or a BlockParam (the hold
-  stays set there, so the block is not reused, but a receiver that confirms after keeping would be wrong);
-  the receivers that confirm (`EnterLightMethodWithBlock`, `CreateBfcForBlockNotKept`,
-  `EnterLightMethodPassingBlock`), which must keep nothing.
 
 - **perf/havlakalloc 56526b1 c8010fb (round forty-one, 2026-11-28) - a light frame's scope holds its
   block until it is parked, not for good (gap 25)** - not gated. Havlak allocated 1.77 GB per iteration;

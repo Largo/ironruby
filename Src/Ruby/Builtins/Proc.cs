@@ -223,6 +223,27 @@ namespace IronRuby.Builtins {
             _kind &= ~HeldFlag;
         }
 
+        /// <summary>
+        /// A literal block a method's scope converted (RubyMethodScope.InitializeMethodRfc, the scope its frame): reusable if its
+        /// literal allows it, and held by the scope (see HeldFlag).
+        /// </summary>
+        internal void HoldForMethodScope() {
+            if (ScopeHeldBlocksEnabled && _dispatcher.ReusesProc && TracePoint.ActiveEvents == 0) {
+                _kind |= ReusableFlag | HeldFlag;
+            }
+        }
+
+        /// <summary>
+        /// ReleaseHold by the method scope that is being parked, which may be the proc's frame (HoldForMethodScope): that call has
+        /// returned, and the proc is inactive again.
+        /// </summary>
+        internal void ReleaseHold(RubyScope/*!*/ scope) {
+            _kind &= ~HeldFlag;
+            if (_activeFlowControlScope == scope) {
+                _activeFlowControlScope = null;
+            }
+        }
+
         internal bool IsReusable {
             get { return (_kind & ReusableMask) == ReusableFlag; }
         }
