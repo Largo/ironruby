@@ -1218,6 +1218,18 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        /// <summary>
+        /// `!x' of any x (JitCompiler.EmitNot): true, false and nil as NotBoolean, and anything else false - BasicObject#!,
+        /// rb_obj_not - once the site found x's class (its singleton class included) to resolve `!' to it; a class with a #!
+        /// of its own deopts.
+        /// </summary>
+        public static bool NotObject(RubyContext/*!*/ context, object value, KernelMethodSite/*!*/ site) {
+            if (value == null) { return true; }
+            if (value is bool) { return !(bool)value; }
+            if (!site.Resolves(ClassOf(context, value))) { throw Deopt(); }
+            return false;
+        }
+
         // The guards are inlined into the body; the deopt is thrown out of line.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GuardInt(object value) {

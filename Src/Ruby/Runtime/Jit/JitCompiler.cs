@@ -602,6 +602,7 @@ namespace IronRuby.Runtime.Jit {
             // such a body failed to compile and was declined where it used to be specialized.
             bool sinkStores = !HasWhileLoop(ast) && keywords == null && ast.Parameters.Optional.Length == 0;
             HashSet<string> sinkWide = null;
+            HashSet<string> sinkBoxed = null;
             bool initialIVarsOff = false;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
@@ -616,6 +617,7 @@ namespace IronRuby.Runtime.Jit {
                 c._noUnloggedEarlyWrites = !unloggedEarlyWrites;
                 c._sinkStores = sinkStores;
                 c._sinkWide = sinkWide;
+                c._sinkBoxed = sinkBoxed;
                 c._noInitialIVars = initialIVarsOff;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
@@ -664,6 +666,17 @@ namespace IronRuby.Runtime.Jit {
                         sinkWide.UnionWith(c._sinkWiden);
                         round--;
                         continue;
+                    }
+                    // a variable written as an object and as a boolean: another round holding it as an object
+                    if (c._sinkBox != null) {
+                        if (sinkBoxed == null) { sinkBoxed = new HashSet<string>(); }
+                        int known = sinkBoxed.Count;
+                        sinkBoxed.UnionWith(c._sinkBox);
+                        if (sinkBoxed.Count > known) {
+                            if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] held as an object in {0}: {1}, written as an Obj and as a Bool", ast.Name, String.Join(" ", c._sinkBox)); }
+                            round--;
+                            continue;
+                        }
                     }
                     if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] stores not held back in {0}: {1}", ast.Name, c._sinkObstacle); }
                     sinkStores = false;
@@ -2425,6 +2438,11 @@ namespace IronRuby.Runtime.Jit {
                 RequireBuiltin(JT.Bool, "!");
                 if (!IsPublicBuiltin(_context.NilClass, "!")) { throw Bail("operator ! on nil is not the built-in one"); }
                 _canDeopt = true;
+                if (ObjectOps && _refinements.IsEmpty) {
+                    // any other object: BasicObject#!, false, while its class resolves `!' to it (JitRuntime.NotObject)
+                    var site = new JitRuntime.KernelMethodSite("!", LibraryMethods("!", _context.BasicObjectClass));
+                    return Ast.Call(JitRuntime.M("NotObject"), Ast.Constant(_context), value, Ast.Constant(site));
+                }
                 return Ast.Call(JitRuntime.M("NotBoolean"), value);
             }
             RequireBuiltin(operandType, "!");
@@ -2500,6 +2518,13 @@ namespace IronRuby.Runtime.Jit {
             type = JT.Bool;
             return Ast.Constant(false);
         }
+
+        // IR_JIT_OBJECT_OPS=0 leaves `x.to_i', `x.empty?' and `!x' of an object that is no number, Array, Hash, true, false or nil
+        // to the generic call, and IR_JIT_SCREEN_CALL=0 lets the screen take `x.call' for an attribute read, as they used to
+        internal static readonly bool ObjectOps = Environment.GetEnvironmentVariable("IR_JIT_OBJECT_OPS") != "0";
+        // IR_JIT_SINK_BOXED=0: a variable written as an object and as a boolean is not held back (JitCompiler.Sink.cs)
+        internal static readonly bool SinkBoxedBooleans = Environment.GetEnvironmentVariable("IR_JIT_SINK_BOXED") != "0";
+        internal static readonly bool ScreenRefusesCall = Environment.GetEnvironmentVariable("IR_JIT_SCREEN_CALL") != "0";
 
         // IR_JIT_TYPE_TEST=0 turns EmitTypeTest off
         internal static readonly bool TypeTests = Environment.GetEnvironmentVariable("IR_JIT_TYPE_TEST") != "0";
@@ -2716,6 +2741,13 @@ namespace IronRuby.Runtime.Jit {
                     _canDeopt = true;
                     type = JT.Lng;
                     return Ast.Call(JitRuntime.M("FloatToLong"), t);
+                }
+                // an object: Integer#to_i, String#to_i of a plain decimal String, NilClass#to_i (JitRuntime.ToIntegerObject)
+                if (tt == JT.Obj && _refinements.IsEmpty && ObjectOps) {
+                    var site = new JitRuntime.KernelMethodSite("to_i", LibraryMethods("to_i", _context.IntegerClass, KindClass(JitRuntime.KindString), _context.NilClass));
+                    _canDeopt = true;
+                    type = JT.Obj;
+                    return Ast.Call(JitRuntime.M("ToIntegerObject"), Ast.Constant(_context), t, Ast.Constant(site));
                 }
                 throw Bail("to_i on " + tt);
             }
@@ -4308,6 +4340,10 @@ namespace IronRuby.Runtime.Jit {
                 !(args.Expressions[0] is SplattedArgument) && !IsElementRead(node.Target) && !IsElementRead(args.Expressions[0]))) {
                 return Walk(node.Target) && (argc == 0 || Walk(args.Expressions[0]));
             }
+
+            // `x.call' (a Proc's, a Method's): no attribute reader is named so, and the call runs Ruby code, which a typed body
+            // does not; taken for a read, it made a method wrapped only to be declined (Enumerator::Lazy#size's `n.call').
+            if (argc == 0 && node.Target != null && node.MethodName == "call" && JitCompiler.ScreenRefusesCall) { return No(node); }
 
             if (argc == 0 && (node.Target == null || node.Target is SelfReference || node.Target is InstanceVariable ||
                 node.Target is LocalVariable) && !(node.Target == null && node.MethodName == _methodName && _arity == 0)) {

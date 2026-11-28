@@ -2042,6 +2042,87 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   514 -> 475, `gem --version` 601 -> 591 and 584 -> 562, `gem list` 1043 -> 952 and 1040 -> 929,
   `require "irb"` 1100 -> 995 and 1080 -> 977, irb 1+1 1186 -> 1086 and 1167 -> 1075: 2-11% faster.
 
+- **perf/jitoptimism (2026-11-28, census and timed, not gated) - what the screen let through and the compiler declined**
+  (switches `IR_JIT_OBJECT_OPS`, `IR_JIT_SCREEN_CALL`, `IR_JIT_SINK_BOXED`). Built on happy-gauss 348fde1 merged with
+  perf/jitbody f1dc798. perf/jitisa left three new declines in app-shapes, methods `is_a?` used to keep out of the
+  screen. Each was either taken by the compiler or refused up front:
+  - **`n.call` (Enumerator::Lazy#size): refused.** The screen took `x.call` for a possible attribute read. A Proc's
+    or Method's call runs Ruby code, which no typed body does, so the screen now refuses a no-argument `x.call`.
+    Census: 4 methods maybe -> never, all ones that could only be wrapped to be declined.
+  - **`v.to_i`, `v.empty?` and `!v` on an untyped value (URI::Generic#set_port): taken.**
+    - `x.to_i` of an object: `JitRuntime.ToIntegerObject`. An Integer is itself, nil is 0, and a String of class
+      String in an ASCII-compatible encoding made of 1 to 18 ASCII digits is its value. Anything else deopts, as
+      does an exception while the String is read. A `KernelMethodSite` checks that the receiver's class (singleton
+      included) resolves to_i to Integer's, String's or NilClass's library method.
+    - `x.empty?` of a String (`StringEmpty`), and of a receiver the profile saw hold several types
+      (`IsEmptyOrString`).
+    - `!x` of any object: `NotObject`, false once the site finds the class resolves `!` to BasicObject's. It used to
+      deopt for anything but true, false and nil (Gem::Dependency#runtime?: 304 deopts and 9 retirements in
+      app-shapes, now none).
+  - **A deopt after an effect (CSV::Parser#prepare_variable): taken.** The body writes instance variables from
+    `@options[...]` reads. The writes were not held back: the index reads, type tests and identity tests were
+    missing from the sinking allow-list, though they throw nothing but a deopt and run no Ruby code. They are added
+    there, with the new helpers. `@backslash_quote`, written as an object and as `false`, is held as an object on
+    a second round (`_sinkBoxed`, as `_sinkWide` holds an Integer as a long).
+  - **app-shapes, traced:** specialized 121 -> 123 (set_port, prepare_variable), declined 32 -> 29, deopts 304 ->
+    0, retirements 9 -> 0.
+  - **Census:** 13 methods changed. 9 maybe -> compiles (marshal_load and initialize methods that read a Hash
+    into instance variables, Psych::Coder#[], ErrorHighlight's fetch_line, CSV::Writer#rewind); 4 maybe -> never
+    (the `x.call` refusal).
+  - **Clock** (ab.rb -r 5, app-shapes, new/off): uri 1.14, csv_parse 0.95, gem_version 1.01, gem_requirement
+    0.91, gem_spec 0.99, every one overlapping. uri alone, 9 rounds: 1.07, spreads 59% and 76% on a busy machine.
+    No measurable change. A callgrind count of app-shapes failed on one build and was not retried.
+  - **Checks:**
+    - `Util/jit-objops-matrix.rb` (new, 40 rows): to_i of Strings it must leave to the generic call (signs,
+      blanks, underscores, 19 or more digits, fullwidth digits, UTF-16LE), of nil, Integers, Floats, Rationals,
+      Symbols and Objects, a String subclass, a singleton to_i; empty? of Strings, Arrays, Hashes, nil, Integers;
+      ! of everything, of a class or singleton with its own !; set_port's mixed values; held-back object and
+      boolean writes with a default proc, a frozen self, a Hash subclass; `x.call`; String#to_i, String#empty?,
+      NilClass#to_i and BasicObject#! redefined, then restored; a refined to_i. It prints CRuby's output with the
+      JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls, IR_LIGHT_FRAMES=0 and the three switches off.
+    - jit, jit-calls, jit-const, jit-isa, unsampled, hot-shapes, hash-literal, jit-scan and inline in the same five
+      modes: the same as the base. inline's tree_int_key row says `Object must be of type Int32.` where CRuby
+      raises NoMethodError, on both builds.
+    - ruby/spec core/string/to_i, nil/to_i, integer/to_i, string/empty?, array/empty?, hash/empty?,
+      basicobject/!, proc/call: no failures on either build.
+    - IronRuby.Tests (Debug), all 1,403: PASSED.
+
+- **perf/jitisa (2026-11-28, census and timed, not gated) - `is_a?`, `kind_of?` and `instance_of?` in the method JIT's
+  typed body** (the census's "MethodCall (screen)": is_a? 693; switch `IR_JIT_TYPE_TEST`). Built on happy-gauss
+  f67ac44 merged with perf/jitbody e19f454.
+  - **What.** `x.is_a?(C)`, `x.kind_of?(C)` and `x.instance_of?(C)` (or on self), with C a constant and no block,
+    compile to `JitRuntime.IsKindOf`. It does Kernel's test with no frame or call: the ancestors of x's immediate
+    class, its singleton class included (`RubyContext.IsKindOf`), or `GetClassOf(x) == C` for instance_of?.
+  - **Guards.** C is the folded constant, guarded by the entry's constant version. A constant folded to something
+    that is no module bails at compile time. The new `JitRuntime.KernelMethodSite` checks that x's class resolves
+    the name to Kernel's method (public) under the current global method version. It keeps four entries
+    (class, version), each immutable, so a racing write only loses an entry. A class that resolves to anything
+    else deopts, and the generic call handles it: a BasicObject's NoMethodError, method_missing, a redefinition in
+    the class, a singleton or Kernel, a non-module C's TypeError, a CLR type group's conversion. Not compiled where
+    a refinement is active. The ancestors are walked on every test, so an include, prepend or extend after compile
+    is seen whether or not it moved a method version.
+  - **The polymorphic site.** IdentityCallSite holds one class and resolves again on every change: an `is_a?` fed
+    two classes in turn was no faster than the generic call (poly2 89.4 vs 89.3 ns). Four entries fix that.
+  - **Census** (Src/StdLib, Util/bench, AWFY): 180 methods up, none down, all never -> maybe. 154 are maybe only
+    because the census resolves no constant without a scope; 26 are behind a call.
+  - **Hot methods.** AWFY calls none of the three. app-shapes: 118 -> 121 specialized (`Set#__core_set__?`,
+    `check_refused` twice); declines 29 -> 32. The three new declines are existing screen optimism that the
+    `is_a?` refusal used to hide: `v.to_i` and `n.call` taken as possible attribute reads (URI::Generic#set_port,
+    Enumerator::Lazy#size) and a deopt after an effect at `[]` (CSV::Parser#prepare_variable). By clock
+    (ab.rb -r 7), app-shapes' rules and set overlap the switch off (1.01 each).
+  - **Clock** (ab.rb -r 3, `Util/bench/isa-shapes.rb`, ns, off -> new, CRuby): mono 72.9 -> 57.2 (46.9), poly2
+    89.8 -> 71.8 (63.5), poly4 143.6 -> 91.5 (62.9), a module argument 76.0 -> 65.7 (51.8), instance_of 67.3 ->
+    54.3 (46.1), an Integer/Float/else chain 150.6 -> 126.2 (75.3), on self 71.4 -> 52.3 (42.6); no overlap.
+  - **Checks.** `Util/jit-isa-matrix.rb` (new, 37 rows): receivers of every kind; Comparable, Enumerable, Module
+    and Class arguments; instance_of? with a singleton class; include, prepend and extend (an Object, a String,
+    Integer) after the body is hot; a constant swapped to another class and to a non-module; is_a?(5); a
+    BasicObject; method_missing; is_a? redefined in a class, a singleton, a class reopened and Kernel, then
+    restored; refined. It prints CRuby's output with the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
+    IR_LIGHT_FRAMES=0 and the switch off. jit, jit-calls, jit-const, hot-shapes, sdef and extend in the same
+    five modes: CRuby's output on both builds. One sdef run with the JIT on exited 1 with the right output; 19
+    more runs (11 on this build, 8 on the base) exited 0. ruby/spec core/kernel is_a, kind_of, instance_of and
+    core/module/case_compare: no failures on either build. IronRuby.Tests (Debug), all 1,402: PASSED.
+
 - **perf/lightlambda (2026-11-28) - a lambda literal in a branch no longer keeps its method out of light frames** - not
   gated. Chosen by the census of 50b07b5 + 8092170: LambdaDefinition, 73 methods, the next light-frame refusal after
   the `$~` family.
@@ -2074,6 +2155,41 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     334 examples, no failures on either. IronRuby.Tests (Debug): the new Method_LightFrameLambda1 and 164 tests named
     for blocks, lambdas, procs, closures, yield, return, break and next pass with the switch on and off; the whole
     suite was refused by the session's permission check and not run.
+
+- **perf/jitblockparam (2026-11-27, census and timed, not gated) - a typed body for a call without a block**
+  (switch `IR_JIT_BLOCK_PARAM`). A method whose block parameter is only passed on, `def w(a, b, &k) =
+  @t.two(a, b, &k)`, was never wrapped (`JitStub.ParameterShape`: "block parameter"), and one passing `&nil`
+  was refused at the screen (a call with a block). Now `JitStub.BlockParameterOnlyPassed` takes a method whose
+  block parameter is never read except as `&k`, never assigned, with no yield and no super, and only
+  mandatory parameters. Its typed body is compiled for a call without a block: there k is nil and `&k`
+  passes none, as `&nil` always does (`JitScreen.PassesNoBlock`; the screen, `EmitCall` and `TryInlineCall`
+  take such a call as one without a block). `block_given?` in a method body (not in an outlined loop, not
+  with optional or keyword parameters, Kernel's and unrefined) compiles to false on the same terms
+  (`EmitBlockGiven`). Such a body sets `JitCode.AssumesNoBlock`, and the entry adds `block == null` to its
+  test, so a call with a block runs the generic body, which passes it on. A method the profile saw called
+  with a block is declined ("called with a block"), at that call if it has a block parameter, before
+  anything is compiled. Inlined and directly called bodies are only ever called without a block.
+  Census (Src/StdLib, Util/bench, AWFY): 62 methods up, none down. 61 left "never (block parameter)"
+  (2 now compile, the rest are maybe), and `FW#pass_nil` left "never (MethodCall two)". Compiles 3,579 ->
+  3,583, maybe 3,180 -> 3,238. Traced runs: forward-shapes specialized 4 -> 7, declines 1 -> 1;
+  delegate-shapes 3 -> 3, 1 -> 1; app-shapes 120 -> 120 specialized, declines 28 -> 29. The new decline,
+  `CSV::FieldsConverter#each` (`@converters.each(&block)`), is always called with a block; it declines at
+  its first call. Most of the methods let through pass `&k` to an iterator, so they win nothing: the gain
+  is a forwarder to a leaf called without a block. Instructions per call (`callgrind/count.sh`,
+  `Util/bench/forward-shapes.rb`): fixed_blk 2,254 -> 1,703, param_only 2,094 -> 1,699, pass_nil
+  2,232 -> 1,697, the same as fixed (1,701). rest, rest_blk, dots and anon are unchanged (rest and dots
+  read +69 once and 0 on a rerun). Delegate-shapes is unchanged, row for row (its forwarders take a rest
+  or a block). Clock (ab.rb -r 3, noisy): param_only 54 -> 38 ns against the switch off; the other rows
+  overlap. `Util/jit-blockparam-matrix.rb` (new: `&k`, `&nil`, block_given? in the caller and callee,
+  break and next through the passed block, a lambda's return, `&obj` with to_proc once, `&:sym`, send and
+  Method#call with a block, two layers, anonymous `&`, an inlined callee's block_given?, k read, assigned,
+  through a binding, super with the implicit block, a deopt with a block in flight, a method always
+  called with a block, a block every third call, block_given? redefined, refined and in a loop, a
+  singleton, the callee redefined): CRuby's output with the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
+  IR_LIGHT_FRAMES=0 and the switch off. jit, jit-calls, dmeth-jit, block-pass, block-given, forward-rest
+  and hot-shapes in the same five modes: the same as the base (forward-rest's six bind_call-of-binding rows
+  differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
+  base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
 
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,
