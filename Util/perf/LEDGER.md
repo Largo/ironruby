@@ -1212,6 +1212,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the call site, rule and frames around it 35-45, which the convention does not reach.
     Stage A pays most per round (up to ~50 ns of `e1`); the park's compare-exchange as a release
     write is a step of its own, about 8 ns per call (perf/iter3 could not see it end to end).
+    perf/endpark took that step (see Landed): the harness's take-and-park 24 -> 16 ns, end to end
+    within the noise.
 
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
@@ -1947,6 +1949,27 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
+
+- **perf/endpark (round thirty-seven, 2026-11-28) - EndPark publishes the parked scope with a release
+  write, not a compare-exchange (gap 13)** - time, not gated. Stage 0 found the parked cycle's two atomics
+  about 16 ns of a literal's 50, one `CompareExchange` 10.4 ns here against a `Volatile.Write`'s 2.5. The
+  take stays an exchange; the park is now `Volatile.Write(ref slot.Parked, parked)`. Why it is sound: the
+  write is a release, so the scope, its tuple and the staged Procs written before it are visible to a
+  taker whose exchange finds the object. The object being published is held by this call alone (taken by
+  exchange from the slot or from Spare, or new), so no two parkers can publish the same one. What the
+  write overwrites is a scope another call parked meanwhile: it is dropped, and a taker that had read it
+  fails its exchange and makes a scope of its own - the old code dropped the newer one instead, the same
+  loss. A dropped object never comes back, since only its holder publishes. Exclusion was the take's
+  exchange all along: one parked object never reaches two frames. `IR_PARK_WRITE=0` is the old code.
+  Harness (`IronRuby.Tests /blockcost`), ns: take+park (P1) 24 -> 16, the `e1` steps together 50-52 ->
+  40-42, `nyl`'s 67 -> 63-65. End to end, `ab.rb -r 10` off/on, ns per call: `nyl` 151.8/151.3,
+  `eachl` 135.8/131.6, `each1` 153.7/156.7, `map1` 174.2/175.4, `times1` 161.2/157.5, `call` (no literal)
+  60.0/61.9, `nb0` 39.9/39.9 - all within the spread, as perf/iter3 found for 8 ns. Checked: parked-scope
+  (with its two-thread rows), block-scope-reuse (and its race), block-nest-reuse, nested-proc and
+  parked-iterator in the six modes and with the switch off: PASS, 42 same; block-scope-reuse-race ten runs
+  alone, stale 0 leaked 0 every time; sixteen threads calling one parking method (`each` and `map`
+  literals that read and write the frame's locals, a `Thread.pass` in the block) for 90 s with the JIT
+  and 90 s without, 104 million calls each, and 30 s with the switch off: every result right.
 
 - **perf/literalsite (round thirty-seven, 2026-11-27) - a call with a block in a light frame whose
   literals are all narrow takes the light site (gaps 16 and 13)** - instructions not counted, time and
