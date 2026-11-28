@@ -1652,6 +1652,14 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     transform of a process (4.1 ms for `-e 1`'s one character, a cold path), the JIT's re-parses
     of library methods (140 `def body: AST bridge` in irb), and fileutils.rb, tmpdir.rb and
     irb/completion.rb, still compiled from source (rescue re-raise frames, refinements).
+    2026-11-28, perf/jitreparse (Rejected, measured only): the method JIT's re-parses of the startup
+    library's methods cost ~6 ms of `-e 1`'s parse phases (11 parses; -X:NoJIT 5.9 ms against 12.5) and
+    ~11 ms of irb's (133 parses), most of `-e 1`'s the cold first run of parser and bridge paths. The
+    parse is at the method's first call because the runtime screen needs the AST (its callees resolved
+    on the declaring module), and the profile the stub keeps from that call on needs the screen's
+    results. A third of the stubs are called once, so deferring to the second call saves at most ~2 ms
+    and ~4-5 ms, against a rework of the profiling path the JIT's decisions rest on. Not taken; see
+    Rejected. The first top-level transform's cold path is still the larger lead.
 27. **Closed (perf/crubydiff, third round): `send` frames are hidden.** Was: **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -8127,6 +8135,42 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/jitreparse (2026-11-28) - the method JIT's re-parses of the startup library's methods: measured,
+  no change** (gap 26). Base 33818f7 merged with 4405475 (perf/requirecold).
+  A method of the startup library that the JIT may specialize keeps its def's source (AotCompiler.JitSource,
+  only for a method the static screen takes). RubyMethodBody parses it at the method's first call
+  (PrecompiledCode.ParseJitSource) and hands the AST to JitStub.Wrap.
+  - Cost, R2R host, IR_PHASE_TIMES (prism parse, load, AST bridge, def-body bridge; five runs):
+    | | JIT parses | parse phases | with -X:NoJIT |
+    |---|---|---|---|
+    | `-e 1` | 11 | 12.5 ms | 5.9 ms |
+    | `gem --version` | 51 | | |
+    | `gem list` | 78 | | |
+    | `require "irb"` | 69 | | |
+    | irb `1+1` | 133 | 33-35 ms | 20-25 ms |
+    A warm re-parse is ~0.08 ms. `-e 1`'s ~0.5 ms each is the first run of the parser's and bridge's paths
+    for defs, which nothing after pays in `-e 1`.
+  - What the AST is for at the first call: Wrap's Screen, whose verdict depends on the running program
+    (IsLeafMethod and IsCallableMethod resolve the body's callees on the declaring module, constant guards
+    are folded). It cannot be computed ahead of time: irb screens out 33 of its 133 at run time, all
+    accepted by the static screen. And the screen's results (keywords, literal defaults, per-count
+    bodies, the typed arity) are what Profile needs from the first call on.
+  - Of the stubs made, how often each was called while profiling (a throwaway counter, Release build):
+    `-e 1` 8 stubs, 4 once; `gem --version` 36, 22 once; `gem list` 53, 17 once; `require "irb"` 50, 19
+    once; irb 92, 31 once (12 reached the threshold of 40).
+  - The candidates:
+    - Deferring the parse to the second call: Observe needs only a CLR type, an immediate class and a
+      numeric kind per argument, so the first call could be kept as tokens and replayed. But it skips only
+      the once-called methods' parses, ~2 ms of `-e 1` and ~4-5 ms of irb (the cold costs fall on whichever
+      parse comes first), for a rework of the trampolines (a stub without an AST, per arity) and of Profile.
+      Those decide what the JIT specializes. Not worth it.
+    - Wrapping without screening: a method the screen would decline would keep the trampoline for life, in
+      the call sites' rules (Wrap's own comment): slower code, and other decisions.
+    - Parsing each file once: ruby4.rb's methods are among the parsed, and the file is 11,000 lines.
+    - A serialized AST in the library: a serializer for every node kind, to save at most ~1-2% of start-up.
+  Next lead instead: the cold path of the first top-level transform (4.1-4.8 ms for `-e 1`'s one-character
+  script).
 
 - **perf/stagea (round thirty-seven, 2026-11-28) - stage A of `Docs/block-calling-convention.md`, a narrow
   literal given to a `[BlockNotKept]` iterator as a block descriptor: simulated, not built** (gap 13).
