@@ -85,7 +85,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         private ScopeBuilder/*!*/ DefineLocals() {
-            return new ScopeBuilder(DefinedScope.AllocateClosureSlotsForLocals(0), null, DefinedScope);
+            return new ScopeBuilder(DefinedScope.AllocateClosureSlotsForLocals(0), null, DefinedScope) { CurrentLine = Location.Start.Line };
         }
 
         internal sealed override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {

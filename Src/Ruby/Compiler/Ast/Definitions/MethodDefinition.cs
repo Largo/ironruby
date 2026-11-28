@@ -141,7 +141,8 @@ namespace IronRuby.Compiler.Ast {
             // allocate closure slots for locals:
             int localCount = DefinedScope.AllocateClosureSlotsForLocals(closureIndex);
 
-            return new ScopeBuilder(parameters, firstClosureParam, localCount, null, DefinedScope);
+            // a method's frame starts at its `def' line (CompiledFrameExpression)
+            return new ScopeBuilder(parameters, firstClosureParam, localCount, null, DefinedScope) { CurrentLine = Location.Start.Line };
         }
 
         /// <summary>

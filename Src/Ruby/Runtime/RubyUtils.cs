@@ -1676,6 +1676,8 @@ namespace IronRuby.Runtime {
             // string's own, so that they are not left behind in the caller's frame.
             var scope = new RubyModuleEvalScope(new RubyBindingCopyScope(parent, parent.SelfObject), module, self);
             scope.SetDebugName("instance/module-eval");
+            // its $~ and $_ are the caller's frame's, as in MRI (instance_eval("$1") after a match)
+            scope.ShareSpecialVariablesOf(parent.GetInnerMostClosureScope());
             return scope;
         }
 

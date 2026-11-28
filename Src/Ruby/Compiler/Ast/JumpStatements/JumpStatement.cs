@@ -42,7 +42,8 @@ namespace IronRuby.Compiler.Ast {
         // Marks the sequence point like any other statement does, so that caller/backtraces taken
         // while evaluating `return caller` report the line of the return.
         internal sealed override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
-            return gen.AddDebugInfo(TransformJump(gen), Location);
+            EnterLine(gen);
+            return LeaveLine(gen, gen.AddDebugInfo(TransformJump(gen), Location));
         }
 
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {

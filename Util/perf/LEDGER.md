@@ -3771,6 +3771,22 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   FloatDomainError); sort_by no longer calls Array#<<; Method#unbind's owner for a visibility forwarder;
   Proc#source_location of a method's to_proc; Method#source_location and #inspect of core methods (C# ones
   now have CRuby's location; prelude ones CRuby's line).
+  Seventh round (2026-11-28, on claude/happy-gauss-95wm2j 50b07b5 + the sixth):
+  - A string instance_eval/class_eval shares its caller's $~ and $_ (RubyClosureScope.ShareSpecialVariablesOf on
+    the module-eval scope). Eval_InstanceEvalSpecialVariables1.
+  - A call on a later line of a multi-line statement reports its own line (the line of its name, prism's
+    message_loc): the generator tracks the frame's line (ScopeBuilder.CurrentLine) and wraps a MethodCall on another
+    line in a sequence point and SourceLineMarker before it and back after it (AstGenerator.AddCallLine); a statement
+    on one line gets nothing, nor does a call where the line is unknown. Free in the interpreter; a store per such call
+    in compiled frames, multi-line statements only; the method JIT and light frames report the lines with it.
+    IR_CALL_LINES=0 turns it off. ab.rb -r 8, base / new / off: frame-cost new/base 0.93-1.09, app-shapes' steady shapes
+    (json_parse, invoice_build, render, rules, query_aggregate, set, time, pp) 0.96-1.06, the noisy ones overlapping.
+    caller-matrix's eval row now same. Backtrace_CallLine1.
+  - A fiber's block keeps its own $~ and $_ (ec->root_svar), as a thread's: the prelude's Fiber calls its block through
+    Proc#__ir_call_as_root__ with a BlockParam marked as a root. Fiber_OwnSpecialVariables1.
+  For the gate: $~/$_ inside string instance_eval/class_eval are the caller's; backtrace, caller, binding and eval
+  file lines of calls in multi-line statements; fibers' $~/$_ are their own (a fiber no longer sees or sets its
+  creator's).
 - **perf/json (2026-11-27) - `case` over String literals looks its subject up once while String#===
   is the library's (gap 7)** - gated 2026-11-28 (round 6's gate entry). Commit 0a78877 on `claude/perf-strsearch`, based on
   claude/happy-gauss-95wm2j 15285eb with 0518f08 merged in. Measured first: a perf profile of AWFY

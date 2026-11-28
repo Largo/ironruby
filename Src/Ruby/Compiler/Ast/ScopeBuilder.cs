@@ -43,6 +43,10 @@ namespace IronRuby.Compiler.Ast {
         // How many ensure clauses of this scope the statements being transformed are in (see SourceLineMarker.InEnsure).
         internal int EnsureDepth;
 
+        // The line the frame reports at the point being transformed: the last statement's, or a call's within a statement
+        // that spans lines (AstGenerator.AddCallLine); -1 when control flow has made it unknown.
+        internal int CurrentLine = -1;
+
         // constant access site cache variables:
         private MSA.ParameterExpression _csCacheVariable;
         private MSA.ParameterExpression _csValueVariable;
