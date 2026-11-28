@@ -2074,6 +2074,52 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   proc, return and core/proc: 496 examples, no failure on either build. IronRuby.Tests in full on a
   Debug build: one failure, `Fiber_ThreadRaiseInSwitchBookkeeping1`, run while the specs loaded the
   host; alone it passed five times of five (three of three on the baseline).
+- **perf/kwfwd (/perf-step, 2026-11-27) - `f(*a, **h)` passes `a` itself and no array for an
+  empty `h`; `def m(*, **)` keeps no copy of its arguments for a `super`** (switch
+  `IR_KWSPLAT_BY_REFERENCE` for the first, on unless `=0`). Built on f7ae738b (claude/perf-lsite,
+  which has 4320d4a).
+  - **Where the cost was.** `rest_kw` (`(*a, **k) = two(*a, **k)`) 174 ns against `rest_fwd`'s
+    71 (CRuby 109, 84), `anon` (`(*, **, &)`) 264 (CRuby 88). Splitting it: binding `**k` costs
+    almost nothing (`kw_recv` = `rest_only`); passing an empty one on costs ~55 ns. Arguments.
+    UnsplatArguments made three arrays for it - a copy of `a`, a one-or-zero element array of
+    the keyword hash (SplatKeywordHash), and the AddRange - for a call that passes no keywords.
+    `anon` paid ~80 ns more: LowerGeneralParameters kept `?superargs?`, a copy of the whole
+    argument list for a parameterless `super`, because CanReadBackPositionals counted an
+    anonymous `*` as unreadable; and a method with `?superargs?` is no light frame
+    (`IR_LIGHT_FRAMES=why`: "optional, splat or post parameters").
+  - **What CRuby 4.0 does.** `splatarray false` for `f(*a, **h)` with h a variable (the list
+    itself; a `#to_hash` that appends to `a` shows in the arguments), and an empty or nil `**`
+    passes nothing. A parameterless `super` in `def m(*, **)` reads the anonymous rest.
+  - **What changed.** (1) Arguments.TransformToCallInternal: a positional splat followed by a
+    lone `**h` whose operand is a variable, constant or literal (KeywordArgumentSplat.
+    IsLoneSideEffectFree, MethodCall.IsSideEffectFree) passes the list when
+    KeywordArgumentSplat.TransformToArgument gives null, and `[*a, h]` (RubyOps.SplatAppendItem,
+    one array) otherwise; not fresh, so a callee's rest copies as for `f(*a)`. (2)
+    PrismAstBridge.CanReadBackPositionals takes an anonymous `*` of a method, which `super` reads
+    back from Symbols.RestArgsLocal - the local `f(*)` reads, which nothing can assign; and
+    `eval('super')` (SuperCall.EvalImplicitArguments) reads it there too. IronRuby.Tests'
+    SuperParameterlessEval2 caught that one: without `?superargs?` the eval'd `super` of
+    `def m(a, *, d:)` read the rest by its signature name, `*`, and passed none of it.
+  - **Checks.** New `Util/kwsplat-forward-matrix.rb` (empty/nil `**`, arity errors, optional,
+    keyword and mutating callees, keywords plus a positional Hash, frozen and
+    compare_by_identity hashes, to_hash order and errors, to_a, ruby2_keywords, the forwarders,
+    redefinition after bind, method_missing, `super(*, **, &)` and zsuper from anonymous
+    signatures): same as CRuby in default, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` except three probes that differ on the base build too (a `**` copy loses the
+    default proc; a ruby2_keywords hash before an explicit empty `**` is taken as keywords, where
+    CRuby keeps it positional - IronRuby's dispatchers convert a marked last item of any splat).
+    `=0` also differs on "to_hash that grows the splatted list", which this fixes.
+    splat-blockarg, splat-pass, kwrest-call, keyword-light, keyword-rest-light, anon-forward,
+    block-pass, light-entry, hot-shapes same as CRuby in every mode and with the switch off.
+    Specs language/keyword_arguments, send, def, super, method as before. IronRuby.Tests in full:
+    PASSED.
+  - **Clock** (`ab.rb -r 6`, Release net10.0, ns; CRuby / base / new): splat-shapes `rest_kw`
+    108.6 / 173.5 / 123.7, `rest_kw_blk` 115.1 / 184.0 / 128.0, `anon` 88.1 / 263.9 / 131.8; the
+    rest unchanged. forward-shapes and delegate-shapes unchanged (two rows that read 1.18 and
+    1.29 were 1.04 and 1.00 rerun alone with `-r 10`).
+  - **Left.** `anon` and `rest_kw` are still ~40 ns over CRuby. The ruby2_keywords case above
+    needs a call-site flag ("keywords given explicitly") that every dispatcher reads.
+    `f(*a, k: 1, &g)` (named keywords, not a `**`) still copies.
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
