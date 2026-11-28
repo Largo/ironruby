@@ -2444,6 +2444,12 @@ namespace IronRuby.Runtime {
                 if (!result.HasInstancesWithOwnClass) {
                     return result;
                 }
+                // an array no runtime has made instance data for has no class of its own (RubyArray.MayHaveInstanceData):
+                // $LOAD_PATH's singleton class sent every array of the process down the lookups below
+                var array = obj as RubyArray;
+                if (array != null && !array.MayHaveInstanceData && !result.HasAdoptedInstances) {
+                    return result;
+                }
             }
             RubyInstanceData data = TryGetNonRubyObjectInstanceData(obj);
             if (data != null && (result = data.ImmediateClass) != null) {
@@ -2951,6 +2957,12 @@ namespace IronRuby.Runtime {
         }
 
         internal bool TryGetClrTypeInstanceData(object/*!*/ obj, out RubyInstanceData result) {
+            // an array no runtime has made data for (RubyArray.MayHaveInstanceData): nothing to find in the table
+            var array = obj as RubyArray;
+            if (array != null && !array.MayHaveInstanceData) {
+                result = null;
+                return false;
+            }
             var owner = obj as IRubyInstanceDataOwner;
             if (owner != null && owner.TryGetInstanceData(this, out result)) {
                 return result != null;
@@ -3014,6 +3026,11 @@ namespace IronRuby.Runtime {
 
             if (_referenceTypeInstanceData.TryGetValue(obj, out result)) {
                 return result;
+            }
+            // marked before the entry is added: see TryGetClrTypeInstanceData
+            var array = obj as RubyArray;
+            if (array != null) {
+                array.MarkMayHaveInstanceData();
             }
             return _referenceTypeInstanceData.GetValue(obj, _CreateInstanceData);
         }
