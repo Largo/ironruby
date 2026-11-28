@@ -89,6 +89,12 @@ A100 = (1..100).to_a.freeze
 l = L.new(A100.dup)
 hot = 0
 400.times { l.each { |x| hot += x } }
+# every iterator of L hot too, so that the rows below run in the loops' compiled copies (IR_OSR_VERBOSE=1: specialized,
+# and the hazards' yield-jumps and yield-tails), not only in the generic loops
+400.times do
+  l.each_last { }; l.map_like { |x| x }; l.each2 { }; l.each_block { }
+  L.new(A100.dup).each_ensure { }; L.new(A100.dup).each_rescue { }
+end
 rows("hot") { hot }
 rows("sizes") { [[], [7], [1, 2, 3, 4], A100].map { |a| s = 0; L.new(a).each { |x| s += x }; s } }
 rows("returns self") { l.each { }.equal?(l) }
@@ -172,4 +178,38 @@ rows("big counter") {
     end
   }.new
   r = []; e = big.each { |x| r << x }; [r.size, e, e.class]
+}
+# the same past Int64 once the copy runs the loop: its `i += 2**49' overflows in the statements after the yield, which
+# then run in the generic loop from the locals as they were right after the yield (OsrYieldOutcome.RunTail)
+rows("big counter hot") {
+  big2 = Class.new {
+    def each
+      i = 0
+      while i < 2**64
+        yield i
+        i += 2**49
+      end
+      i
+    end
+  }.new
+  n = 0; last = nil
+  e = big2.each { |x| n += 1; last = x }
+  [n, last, e, e.class]
+}
+# an Integer counter that is still an Int32 when the copy is compiled (about 2,000 back edges) and outgrows it at the
+# 2,048th: the overflow is a deopt in the statements after the yield, after the block ran for that element
+rows("int overflow hot") {
+  ov = Class.new {
+    def each(lim, step)
+      i = 0
+      while i < lim
+        yield i
+        i += step
+      end
+      i
+    end
+  }.new
+  n = 0; s = 0
+  e = ov.each(17179869184, 1048576) { |x| n += 1; s += x }
+  [n, s, e]
 }

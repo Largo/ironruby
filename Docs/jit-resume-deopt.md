@@ -540,6 +540,29 @@ a typed copy) and needs the same suffix compiler for its way 2. Order:
 
 ## Stage 3a: a yield in an outlined loop (gap 18)
 
+**Built (round thirty-seven, perf/yieldloop, `IR_OSR_YIELD`, on by default), narrower and simpler than the plan
+below.** The shape is as designed (`WhileLoopExpression.GetYieldIndex`; in a method's own body, not a block's or an
+eval's). What changed in the building:
+
+- No Handback answer: `Retry` already means "go on at the head with the tuple as the copy left it". One new answer,
+  `OsrYieldOutcome`, covers ways 2 and 3: the copy writes its locals home and returns it, with the BlockParam when the
+  block jumped (way 3: the glue makes the generic post-yield test, `MethodYield`, which the light frame's rewriter makes
+  `LightMethodYield`, and returns from the method) or without one (way 2, or a deopt in the tail).
+- No separate suffix compiler: the generic loop transforms its tail statements a second time, in place, inside the
+  method's lambda (`MakeYieldHandBack`): the same scope, tuple layout, sites, line markers and hooks for free. That is
+  why the tail may hold no block, lambda, definition, loop, jump or exception handling (`YieldTailFinder`: their
+  transformation is not repeatable or leaves the tail). It also means the method-JIT resume of stage 3 does **not**
+  get its suffix from here: a method body has no generic loop around the resume point to hold a second copy, and still
+  needs B's dispatch or a suffix lambda.
+- Way 1: the tail is emitted typed; if it can deopt, the locals are taken right after the yield and a deopt in the
+  tail restores them and leaves with `RunTail`; a tail that deopts after an effect of its own declines the loop.
+- Way 4: the copy's body runs in a fault handler that writes its locals home.
+
+`Util/yield-loop-matrix.rb` warms every iterator up so that its rows run in the copies, and has two rows more (`big
+counter hot`, `int overflow hot`). `IR_OSR_VERBOSE=1` prints `yield-jumps` and `yield-tails`. The prelude's `while ...
+yield` methods (`take_while`, `sum`, `uniq`, `to_h`) are not reached: their yields are not statements
+(`break unless yield(x)`) and their loops stop earlier, at `__ary_size__`.
+
 Status: design, with its matrix (`Util/yield-loop-matrix.rb`, which CRuby and the unchanged build print
 alike). Written in round thirty-seven (perf/yieldresume) after perf/yieldloop measured the gap:
 `def each; i = 0; while i < @a.size; yield @a[i]; i += 1; end; self; end` costs about 40 ns per element

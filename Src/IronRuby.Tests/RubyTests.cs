@@ -424,6 +424,7 @@ namespace IronRuby.Tests {
                 FloatObjectId1,
                 JitCensus1,
                 BlockLoopEachIndex1,
+                OsrYieldLoop1,
                 BlockLoopNested1,
 
                 RangeConditionInclusive1,

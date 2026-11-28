@@ -15,6 +15,7 @@
 
 using MSA = System.Linq.Expressions;
 
+using System;
 using System.Collections.Generic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -74,6 +75,107 @@ namespace IronRuby.Compiler.Ast {
             _statements = statements;
         }
 
+        /// <summary>
+        /// IR_OSR_YIELD=0: a loop with a yield in its body is never given to a compiled copy (the copy gives up at the yield).
+        /// </summary>
+        internal static readonly bool YieldLoopsEnabled = Environment.GetEnvironmentVariable("IR_OSR_YIELD") != "0";
+
+        /// <summary>
+        /// Stage 3a of Docs/jit-resume-deopt.md: the index of the one `yield' of the loop, if the loop is of the shape a compiled
+        /// copy may run a yield in - a `while'/`until' tested first, one yield in statement position directly in its body with
+        /// plain arguments, no other yield anywhere in it, and statements after it (its tail) that the generic loop can run
+        /// again on its own (OsrYieldOutcome): no block, lambda or definition, no loop, no jump and no exception handling.
+        /// -1 otherwise.
+        /// </summary>
+        internal int GetYieldIndex() {
+            if (_isPostTest || !YieldLoopsEnabled) { return -1; }
+            int index = -1;
+            for (int i = 0; i < _statements.Count; i++) {
+                var yieldCall = _statements[i] as YieldCall;
+                if (yieldCall != null) {
+                    if (index >= 0 || !IsPlainYield(yieldCall)) { return -1; }
+                    index = i;
+                }
+            }
+            if (index < 0) { return -1; }
+            var finder = new YieldTailFinder();
+            _condition.Walk(finder);
+            for (int i = 0; i < _statements.Count && !finder.Refused; i++) {
+                if (i == index) {
+                    var args = ((YieldCall)_statements[i]).Arguments;
+                    if (args != null) {
+                        foreach (var arg in args.Expressions) { arg.Walk(finder); }
+                    }
+                } else {
+                    finder.InTail = i > index;
+                    _statements[i].Walk(finder);
+                }
+            }
+            return finder.Refused ? -1 : index;
+        }
+
+        private static bool IsPlainYield(YieldCall/*!*/ node) {
+            var args = node.Arguments;
+            if (args == null) { return true; }
+            foreach (var arg in args.Expressions) {
+                var hash = arg as HashConstructor;
+                if (arg is SplattedArgument || hash != null && hash.IsKeywordArguments) { return false; }
+            }
+            return true;
+        }
+
+        // Another yield anywhere in the loop, and in its tail anything whose transformation is not repeatable or that leaves it.
+        private sealed class YieldTailFinder : Walker {
+            internal bool Refused, InTail;
+
+            public override bool Enter(YieldCall/*!*/ node) { Refused = true; return false; }
+            public override bool Enter(BlockDefinition/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(LambdaDefinition/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(MethodDefinition/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(WhileLoopExpression/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(ForLoopExpression/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(Body/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(RescueExpression/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(BreakStatement/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(NextStatement/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(RedoStatement/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(RetryStatement/*!*/ node) { Refused |= InTail; return !Refused; }
+            public override bool Enter(ReturnStatement/*!*/ node) { Refused |= InTail; return !Refused; }
+        }
+
+        private static readonly System.Reflection.FieldInfo/*!*/ _OutcomeBfc = typeof(OsrYieldOutcome).GetField(nameof(OsrYieldOutcome.Bfc));
+        private static readonly System.Reflection.FieldInfo/*!*/ _OutcomeResult = typeof(OsrYieldOutcome).GetField(nameof(OsrYieldOutcome.Result));
+
+        /// <summary>
+        /// The copy handed an iteration back after its yield (OsrYieldOutcome): the block's jump gets the generic yield's
+        /// post-yield test, which returns from the method on a `break' (MethodYield; a light frame's LightMethodYield, which
+        /// the frame's rewriter puts in its place), then the statements after the yield run here and the loop goes on at its
+        /// head, the next back edge asking the copy again.
+        /// </summary>
+        private static MSA.Expression/*!*/ MakeYieldHandBack(AstGenerator/*!*/ gen, MSA.Expression/*!*/ osrResult, MSA.Expression/*!*/ tail,
+            MSA.Expression/*!*/ osrCountdown, MSA.LabelTarget/*!*/ continueLabel) {
+            var outcome = Ast.Variable(typeof(OsrYieldOutcome), "#yield-outcome");
+            var bfc = Ast.Field(outcome, _OutcomeBfc);
+            var result = Ast.Field(outcome, _OutcomeResult);
+            return Ast.Block(new[] { outcome },
+                Ast.Assign(outcome, Ast.TypeAs(osrResult, typeof(OsrYieldOutcome))),
+                Ast.IfThen(Ast.NotEqual(outcome, AstUtils.Constant(null, typeof(OsrYieldOutcome))),
+                    Ast.Block(
+                        Ast.IfThen(
+                            Ast.AndAlso(
+                                Ast.NotEqual(bfc, AstUtils.Constant(null, typeof(BlockParam))),
+                                Methods.MethodYield.OpCall(gen.CurrentScopeVariable, bfc, result)
+                            ),
+                            gen.Return(result)
+                        ),
+                        tail,
+                        Ast.Assign(osrCountdown, AstUtils.Constant(1L)),
+                        Ast.Continue(continueLabel)
+                    )
+                )
+            );
+        }
+
         // break, next and redo in the loop's body are jumps to its labels (Break/Next/RedoStatement)
         private static readonly System.Reflection.MethodInfo/*!*/ _LeaveLoopLine = typeof(PrecompiledFrames).GetMethod(nameof(PrecompiledFrames.LeaveLoopLine));
 
@@ -111,10 +213,24 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression loopLineVariable = ownsLoopLine ?
                 gen.CurrentScope.DefineHiddenVariable("#loop-line", typeof(PrecompiledFrames.LoopLine)) : outerLoop.LoopLineVariable;
 
+            // A loop with a yield its compiled copy may run (GetYieldIndex): in a method's own body, not a block's or an eval's,
+            // whose yields answer the block's or the eval's post-yield test.
+            int yieldIndex = (osr && gen.CurrentBlock == null && !gen.CompilerOptions.IsEval && gen.CurrentMethod != null) ? GetYieldIndex() : -1;
+
             gen.EnterLoop(redoVariable, resultVariable, breakLabel, continueLabel);
             gen.CurrentLoop.LoopLineVariable = loopLineVariable;
             gen.CurrentLoop.LoopLineScope = gen.CurrentScope;
             MSA.Expression transformedBody = gen.TransformStatements(_statements, ResultOperation.Ignore);
+            // The statements after the yield once more, which the generic loop runs when the copy hands an iteration back after
+            // its yield (OsrYieldOutcome): the same code, with the same line markers and :line hooks.
+            MSA.Expression transformedTail = null;
+            if (yieldIndex >= 0) {
+                var tail = new Statements();
+                for (int i = yieldIndex + 1; i < _statements.Count; i++) {
+                    tail.Add(_statements[i], _statements.GetStartLine(i));
+                }
+                transformedTail = (tail.Count > 0) ? gen.TransformStatements(tail, ResultOperation.Ignore) : AstUtils.Empty();
+            }
             MSA.Expression transformedCondition = _condition.TransformCondition(gen, true);
             gen.LeaveLoop();
 
@@ -148,6 +264,11 @@ namespace IronRuby.Compiler.Ast {
                 // the copy's operators are resolved under
                 osrSite.ScopeArgIndex = tupleArguments.Count;
                 tupleArguments.Add(AstUtils.Convert(gen.CurrentScopeVariable, typeof(object)));
+                // and the method's block, which a yield the copy makes yields to
+                if (yieldIndex >= 0) {
+                    osrSite.BlockArgIndex = tupleArguments.Count;
+                    tupleArguments.Add(AstUtils.Convert(gen.MakeMethodBlockParameterRead(), typeof(object)));
+                }
                 osrArguments = Ast.NewArrayInit(typeof(object), tupleArguments);
             }
 
@@ -167,6 +288,7 @@ namespace IronRuby.Compiler.Ast {
                 ),
                 Ast.Block(
                     Ast.Assign(osrResult, Ast.Call(Ast.Constant(osrSite, typeof(OsrLoopSite)), OsrLoopSite.RunMethod, osrArguments)),
+                    (transformedTail == null) ? (MSA.Expression)AstUtils.Empty() : MakeYieldHandBack(gen, osrResult, transformedTail, osrCountdown, continueLabel),
                     AstUtils.If(
                         Ast.Not(Ast.ReferenceEqual(osrResult, Ast.Constant(OsrLoopSite.Retry, typeof(object)))),
                         Ast.Assign(resultVariable, osrResult),

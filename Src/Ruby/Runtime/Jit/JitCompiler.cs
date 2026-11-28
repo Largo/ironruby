@@ -297,6 +297,12 @@ namespace IronRuby.Runtime.Jit {
         // the emitter meets them and loaded into typed CLR locals by the entry JitLoopCompiler
         // builds around this. Everything between those two edges is the same code.
         private readonly WhileLoopExpression _loop;
+        // Loop mode, a loop the generic code can finish an iteration of after its yield (OsrLoopSite.BlockArgIndex): the method's
+        // block, which its yield yields to; null otherwise, and a yield bails. The exit, outcome and BlockParam of the yield
+        // once EmitYieldLoopBody has emitted one (JitLoopFacts).
+        private MSA.ParameterExpression _yieldBlock;
+        private MSA.LabelTarget _yieldExit;
+        private MSA.ParameterExpression _yieldOutcome, _yieldBfc;
         private readonly Func<LocalVariable, JT, JitLoopSlot> _bindSlot;
         private readonly List<JitLoopSlot> _slots;
         private MSA.LabelTarget _breakLabel, _continueLabel;
@@ -373,13 +379,19 @@ namespace IronRuby.Runtime.Jit {
             internal List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>> Arrays;
             // what the loop's safe points check the versions against (EmitLoopSafePoint)
             internal JitLoopGuard Guard;
+            // a loop with a yield (EmitYieldLoopBody): where the body leaves after its yield, with the outcome for the generic
+            // loop in YieldOutcome, and the BlockParam its yields reuse; null for any other loop
+            internal MSA.LabelTarget YieldExit;
+            internal MSA.ParameterExpression YieldOutcome;
+            internal MSA.ParameterExpression YieldBfc;
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
             Func<string, JT> ivarProfile, Func<string, string> attrProfile,
             Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, RubyScope constantScope, ReceiverHints hints,
-            RefinementActivation/*!*/ refinements, out List<JitLoopSlot> slots, out bool canDeopt, out JitLoopFacts facts, long epoch = 0) {
+            RefinementActivation/*!*/ refinements, out List<JitLoopSlot> slots, out bool canDeopt, out JitLoopFacts facts, long epoch = 0,
+            MSA.ParameterExpression yieldBlock = null) {
 
             slots = null;
             canDeopt = false;
@@ -389,6 +401,7 @@ namespace IronRuby.Runtime.Jit {
             for (bool arrayLocals = true; ; arrayLocals = false) {
                 c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantScope);
                 c._compileEpoch = epoch;
+                c._yieldBlock = yieldBlock;
                 c._hints = hints;
                 c._refinements = refinements;
                 c._noArrayLocals = !arrayLocals;
@@ -428,6 +441,9 @@ namespace IronRuby.Runtime.Jit {
             facts.UndoMark = c._undoMark;
             facts.Arrays = c._arrayLoads;
             facts.Guard = c._loopGuard;
+            facts.YieldExit = c._yieldExit;
+            facts.YieldOutcome = c._yieldOutcome;
+            facts.YieldBfc = c._yieldBfc;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
             // before anything observable, so it does not make an impure body unspecializable.
@@ -2108,7 +2124,8 @@ namespace IronRuby.Runtime.Jit {
             var test = EmitCondition(node.Condition);
             if (!node.IsWhileLoop) { test = Ast.Not(test); }
             JT ignored;
-            var body = EmitRegion(node.Statements, out ignored);
+            int yieldIndex = (node == _loop && _yieldBlock != null) ? node.GetYieldIndex() : -1;
+            var body = (yieldIndex >= 0) ? EmitYieldLoopBody(node.Statements, yieldIndex) : EmitRegion(node.Statements, out ignored);
             var result = _breakValue;
             _breakLabel = savedBreak;
             _continueLabel = savedContinue;
@@ -2153,6 +2170,112 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Loop(iteration, exit, cont),
                 result
             );
+        }
+
+        /// <summary>
+        /// The body of an outlined loop with a yield (stage 3a of Docs/jit-resume-deopt.md): the statements before the yield, the
+        /// yield, the statements after it (the tail). Before the yield nothing observable has happened in the iteration, so a deopt
+        /// there restores the iteration's snapshot and the generic loop runs the iteration again, as in any outlined loop. The
+        /// yield is the iteration's effect: from then on the iteration is not run again. After it the copy goes on only if the
+        /// block did not jump (`break', a `return' or `retry' aimed at the caller) and nothing the copy was built on changed and
+        /// nothing is traced (G: the code epoch, TracePoint.ActiveEvents); otherwise, and when a statement of the tail deopts
+        /// (its locals put back as they were right after the yield), it leaves with an OsrYieldOutcome and the generic loop runs
+        /// the tail and goes on at its head (WhileLoopExpression.MakeYieldHandBack). The tail itself must not deopt after an
+        /// effect of its own, which the generic tail would repeat.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitYieldLoopBody(Statements/*!*/ statements, int yieldIndex) {
+            PushScope();
+            var before = new List<MSA.Expression>();
+            for (int i = 0; i < yieldIndex; i++) {
+                JT ignored;
+                before.Add(Emit(statements[i], out ignored));
+            }
+            bool pureBefore = _pure, canDeoptBefore = _canDeopt;
+
+            var yieldCall = (YieldCall)statements[yieldIndex];
+            var args = new List<MSA.Expression>();
+            if (yieldCall.Arguments != null) {
+                foreach (var arg in yieldCall.Arguments.Expressions) {
+                    JT at;
+                    args.Add(Coerce(Emit(arg, out at), at, JT.Obj));
+                }
+            }
+
+            _pure = true;
+            _canDeopt = false;
+            var tail = new List<MSA.Expression>();
+            for (int i = yieldIndex + 1; i < statements.Count; i++) {
+                JT ignored;
+                tail.Add(Emit(statements[i], out ignored));
+            }
+            if (_canDeopt && !_pure) { throw Bail("a deopt after an effect in the statements after a yield"); }
+            bool tailCanDeopt = _canDeopt;
+            // the iteration's own rule is the statements' before the yield: the yield and its tail answer for themselves
+            _pure = pureBefore;
+            _canDeopt = canDeoptBefore;
+            var declared = PopScope();
+
+            if (_yieldExit == null) {
+                _yieldExit = Ast.Label("#yield-exit");
+                _yieldOutcome = Ast.Parameter(typeof(Osr.OsrYieldOutcome), "#yield-outcome");
+                _yieldBfc = Ast.Parameter(typeof(BlockParam), "#yield-bfc");
+            }
+
+            // the locals as they are right after the yield, for a tail that deopts: every slot the body binds, the tail's too
+            var after = new List<MSA.ParameterExpression>();
+            var takeAfter = new List<MSA.Expression>();
+            var restoreAfter = new List<MSA.Expression>();
+            foreach (var slot in _slots) {
+                var v = Ast.Parameter(slot.Variable.Type, slot.Variable.Name + "#after-yield");
+                after.Add(v);
+                takeAfter.Add(Ast.Assign(v, slot.Variable));
+                restoreAfter.Add(Ast.Assign(slot.Variable, v));
+                if (slot.Assigned != null) {
+                    var a = Ast.Parameter(typeof(bool), slot.Variable.Name + "#after-yield-set");
+                    after.Add(a);
+                    takeAfter.Add(Ast.Assign(a, slot.Assigned));
+                    restoreAfter.Add(Ast.Assign(slot.Assigned, a));
+                }
+            }
+            declared.AddRange(after);
+
+            MSA.Expression yieldValue;
+            var procSelf = Ast.Call(typeof(RubyOps).GetMethod("GetProcSelf"), _yieldBlock);
+            switch (args.Count) {
+                case 0: yieldValue = Ast.Call(typeof(RubyOps).GetMethod("Yield0"), _yieldBlock, procSelf, _yieldBfc); break;
+                case 1: yieldValue = Ast.Call(typeof(RubyOps).GetMethod("Yield1"), args[0], _yieldBlock, procSelf, _yieldBfc); break;
+                case 2: yieldValue = Ast.Call(typeof(RubyOps).GetMethod("Yield2"), args[0], args[1], _yieldBlock, procSelf, _yieldBfc); break;
+                case 3: yieldValue = Ast.Call(typeof(RubyOps).GetMethod("Yield3"), args[0], args[1], args[2], _yieldBlock, procSelf, _yieldBfc); break;
+                case 4: yieldValue = Ast.Call(typeof(RubyOps).GetMethod("Yield4"), args[0], args[1], args[2], args[3], _yieldBlock, procSelf, _yieldBfc); break;
+                default:
+                    yieldValue = Ast.Call(typeof(RubyOps).GetMethod("YieldN"), Ast.NewArrayInit(typeof(object), args), _yieldBlock, procSelf, _yieldBfc);
+                    break;
+            }
+            var value = Ast.Parameter(typeof(object), "#yielded");
+            declared.Add(value);
+
+            var parts = new List<MSA.Expression>(before);
+            // as the generic yield: the BlockParam first (no block given raises here, before the arguments), then the call
+            parts.Add(Ast.Assign(_yieldBfc, Ast.Call(typeof(RubyOps).GetMethod("ReuseBfcForYield"), _yieldBfc, _yieldBlock)));
+            parts.Add(Ast.Assign(value, yieldValue));
+            parts.Add(Ast.IfThen(Ast.Call(JitRuntime.M("YieldJumped"), _yieldBfc),
+                Ast.Block(Ast.Assign(_yieldOutcome, Ast.New(typeof(Osr.OsrYieldOutcome).GetConstructor(new[] { typeof(BlockParam), typeof(object) }), _yieldBfc, value)),
+                    Ast.Goto(_yieldExit))));
+            parts.Add(Ast.IfThen(Ast.Call(JitRuntime.M("YieldWorldChanged"), Ast.Constant(_compileEpoch)),
+                Ast.Block(Ast.Assign(_yieldOutcome, Ast.Field(null, typeof(Osr.OsrYieldOutcome).GetField("RunTail"))), Ast.Goto(_yieldExit))));
+            if (tail.Count > 0) {
+                MSA.Expression tailBlock = Ast.Block(typeof(void), tail);
+                if (tailCanDeopt) {
+                    if (takeAfter.Count > 0) { parts.Add(Ast.Block(typeof(void), takeAfter)); }
+                    var restore = new List<MSA.Expression>(restoreAfter);
+                    restore.Add(Ast.Assign(_yieldOutcome, Ast.Field(null, typeof(Osr.OsrYieldOutcome).GetField("RunTail"))));
+                    restore.Add(Ast.Goto(_yieldExit));
+                    tailBlock = Ast.TryCatch(tailBlock, Ast.Catch(typeof(JitDeoptException), Ast.Block(typeof(void), restore)));
+                }
+                parts.Add(tailBlock);
+            }
+            parts.Add(Ast.Constant(null, typeof(object)));
+            return Ast.Block(typeof(object), declared, parts);
         }
 
         /// <summary>

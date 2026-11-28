@@ -428,6 +428,24 @@ namespace IronRuby.Runtime.Jit {
             return Osr.OsrLoopSite.Retry;
         }
 
+        /// <summary>
+        /// After a yield in an outlined loop (JitCompiler.EmitYieldLoopBody): whether the block left by a jump - `break', or a
+        /// `return' or `retry' aimed at the caller - which the generic loop's post-yield test (MethodYield) turns into what the
+        /// generic yield does.
+        /// </summary>
+        public static bool YieldJumped(BlockParam/*!*/ bfc) {
+            return bfc.ReturnReason != BlockReturnReason.Undefined;
+        }
+
+        /// <summary>
+        /// After a yield in an outlined loop: whether something the copy was built on changed while the block ran (a method or
+        /// a constant: the code epoch it was compiled at moved) or a TracePoint is on, either of which the statements after the
+        /// yield must see as the generic code would (OsrYieldOutcome.RunTail).
+        /// </summary>
+        public static bool YieldWorldChanged(long epoch) {
+            return RubyUtils.CodeEpoch != epoch || TracePoint.ActiveEvents != 0;
+        }
+
         /// <summary>An entry guard of an outlined loop did not hold; hand the loop back.</summary>
         public static object OsrGuardFailed(string/*!*/ what) {
             if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: {0}", what); }

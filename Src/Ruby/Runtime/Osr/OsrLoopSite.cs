@@ -36,6 +36,28 @@ using IronRuby.Runtime.Jit;
 
 namespace IronRuby.Runtime.Osr {
     /// <summary>
+    /// What a compiled copy of a loop with a yield in its body answers after the yield, when it does not go on itself
+    /// (stage 3a of Docs/jit-resume-deopt.md, IR_OSR_YIELD): the copy has written its locals into the tuples, and the generic
+    /// loop finishes the iteration - the statements after the yield - and goes on at its head (WhileLoopExpression). With
+    /// <see cref="Bfc"/> set, the block left by a jump (`break', a `return' or `retry' aimed at the caller), and the generic
+    /// loop first makes the post-yield test the generic yield makes (MethodYield), which may return from the method with
+    /// <see cref="Result"/>. Without it, the copy saw the world change after the yield (a method or constant redefined, a
+    /// TracePoint enabled) or a statement after the yield deopted, and the generic loop runs those statements as written.
+    /// </summary>
+    public sealed class OsrYieldOutcome {
+        public readonly BlockParam Bfc;
+        public readonly object Result;
+
+        /// <summary>The statements after the yield are the generic loop's to run.</summary>
+        public static readonly OsrYieldOutcome/*!*/ RunTail = new OsrYieldOutcome(null, null);
+
+        public OsrYieldOutcome(BlockParam bfc, object result) {
+            Bfc = bfc;
+            Result = result;
+        }
+    }
+
+    /// <summary>
     /// One per `while' loop in the compiled tree, shared by every execution of that loop.
     /// </summary>
     public sealed class OsrLoopSite {
@@ -103,7 +125,7 @@ namespace IronRuby.Runtime.Osr {
             return (s != null && Int64.TryParse(s, out v) && v > 0) ? v : 2000;
         }
 
-        internal static int Specialized, Retired, Entered, Deopts, StaleRebuilds, Kept;
+        internal static int Specialized, Retired, Entered, Deopts, StaleRebuilds, Kept, YieldJumps, YieldTails;
         internal static long CompileTicks;
 
         /// <summary>
@@ -130,6 +152,9 @@ namespace IronRuby.Runtime.Osr {
         internal Dictionary<int, int> TupleArgIndex;
         // Where in the argument array the loop's self is; -1 if it is not passed.
         internal int SelfArgIndex = -1;
+        // Where in the argument array the method's block is, for a loop with a yield the generic loop can finish an iteration
+        // of (WhileLoopExpression.YieldIndex, OsrYieldOutcome); -1 if it is not passed, and the copy then declines the yield.
+        internal int BlockArgIndex = -1;
         // Where in the argument array the loop's RubyScope is: its constants resolve in it, and its
         // refinements resolve the copy's operators; -1 if it is not passed.
         internal int ScopeArgIndex = -1;
@@ -208,7 +233,14 @@ namespace IronRuby.Runtime.Osr {
                     if (++_refinementRebuilds > MaxRefinementRebuilds) { Retire(); } else { Rebuild(); }
                     return Retry;
                 }
-                if (!ReferenceEquals(result, Retry)) { return result; }
+                if (!ReferenceEquals(result, Retry)) {
+                    var outcome = result as OsrYieldOutcome;
+                    if (outcome != null) {
+                        // not a failure: the generic loop finishes the iteration after the yield (WhileLoopExpression.MakeYieldHandBack)
+                        if (outcome.Bfc != null) { YieldJumps++; } else { YieldTails++; }
+                    }
+                    return result;
+                }
 
                 if (RubyUtils.IsSafePointRequested) {
                     // Not a failure: the copy stopped at an iteration boundary because a
@@ -295,7 +327,7 @@ namespace IronRuby.Runtime.Osr {
                 long start = Stopwatch.GetTimestamp();
                 try {
                     JitLoopGuard guard;
-                    var typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex, out guard, LongRuns, InLightFrame, DeadAtExit);
+                    var typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex, out guard, LongRuns, InLightFrame, DeadAtExit, BlockArgIndex);
                     _guard = guard;
                     _typed = typed;
                 } catch (Exception e) {
@@ -332,8 +364,8 @@ namespace IronRuby.Runtime.Osr {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[osr] specialized={0} retired={1} entries={2} deopts={3} stale={4} kept={5} compile={6:F1}ms",
-                    Specialized, Retired, Entered, Deopts, StaleRebuilds, Kept, CompileTicks * 1000.0 / Stopwatch.Frequency);
+                Console.Error.WriteLine("[osr] specialized={0} retired={1} entries={2} deopts={3} stale={4} kept={5} yield-jumps={6} yield-tails={7} compile={8:F1}ms",
+                    Specialized, Retired, Entered, Deopts, StaleRebuilds, Kept, YieldJumps, YieldTails, CompileTicks * 1000.0 / Stopwatch.Frequency);
             };
         }
     }
