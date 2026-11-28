@@ -158,6 +158,24 @@ p $w
         }
 
         /// <summary>
+        /// A top-level alias that redefines a method warns once, though a hosted top level makes it in two
+        /// modules, main's singleton class and Object (RubyOps.AliasMethod).
+        /// </summary>
+        public void AliasTopLevelWarnsOnce1() {
+            TestOutput(@"
+$w = []
+def Warning.warn(m, **) = $w << m.lines.first[/:(\d+: warning: .*)/, 1]
+def m; end
+def n; end
+alias m n
+def o; end
+p $w
+", @"
+[""6: warning: method redefined; discarding old m""]
+", 0, 1);
+        }
+
+        /// <summary>
         /// Alias (unlike undef) looks up the method in Object.
         /// </summary>
         public void AliasMethodLookup1() {

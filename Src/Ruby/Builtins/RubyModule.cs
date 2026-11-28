@@ -2342,9 +2342,17 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public void AddMethodAlias(string/*!*/ newName, string/*!*/ oldName) {
+            AddMethodAlias(newName, oldName, true);
+        }
+
+        /// <param name="warn">
+        /// False for the second of two modules one `alias' is made in (a hosted top level's, RubyOps.AliasMethod): MRI has
+        /// one module there, and one warning.
+        /// </param>
+        public void AddMethodAlias(string/*!*/ newName, string/*!*/ oldName, bool warn) {
             // `alias foo foo' discards nothing: the entry stays the same body (and, aliased, `def foo'
             // after it does not warn either)
-            if (newName != oldName) {
+            if (warn && newName != oldName) {
                 WarnMethodRedefinition(newName);
             }
 

@@ -867,6 +867,7 @@ namespace IronRuby.Tests {
 
                 AliasMethodLookup1,
                 AliasRedefinitionWarningLine1,
+                AliasTopLevelWarnsOnce1,
                 AliasMethodLookup3,
                 
                 UndefMethodLookup1,

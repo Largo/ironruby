@@ -1813,7 +1813,8 @@ namespace IronRuby.Runtime {
             if (mirror != null) {
                 bool inOwner = owner.ResolveMethod(oldName, VisibilityContext.AllVisible).Found;
                 if (!inOwner || mirror.ResolveMethod(oldName, VisibilityContext.AllVisible).Found) {
-                    mirror.AddMethodAlias(newName, oldName);
+                    // the warning, if any, is the owner's alone when the owner has the alias too
+                    mirror.AddMethodAlias(newName, oldName, !inOwner);
                 }
                 if (!inOwner) {
                     return;
