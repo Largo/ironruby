@@ -1907,6 +1907,39 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/lightlambda (2026-11-28) - a lambda literal in a branch no longer keeps its method out of light frames** - not
+  gated. Chosen by the census of 50b07b5 + 8092170: LambdaDefinition, 73 methods, the next light-frame refusal after
+  the `$~` family.
+  - Why it had the scope: no reason but the filter's - `IsScopeFree` had no case for a LambdaDefinition (`->(x) { }`;
+    `lambda { }` is a call with a literal block, light already). A lambda literal is a literal block made into a lambda
+    (BlockDefinition.Transform: InstantiateLambda / DefineLambda over the scope variable, which the rewriter makes the
+    scope made on demand when the body has literal blocks), so it is made as a block literal's Proc is. Its `return`,
+    `next` and `break` leave the lambda (its own frame's LambdaUnwinder filter), not the method's frame; its arity is
+    the lambda's; kept past the return, it holds the scope it was made over, made by then.
+  - Measured first, with every lambda literal let in (`Util/bench/lambda-shapes.rb`, callgrind, off / on): a method
+    whose lambda is made on no call (`rare`) 2,572 / 2,161 (0.840), on one call in eight (`branch`) 2,902 / 2,615
+    (0.901), but on every call (`always`, called there) 3,594 / 3,746 (1.042) and returned (`kept`) 3,697 / 3,820
+    (1.033): the scope is made either way, later and dearer - the literal-block story. So only a lambda the method
+    does not make on every call lets it in (`HasUnconditionalLambda`): not one in a statement of the body or its ensure
+    clause, a condition, the left of `&&`, `||`, `||=`, a `case` value or a loop body; one in the body of an `if`,
+    `unless`, `when` or `else`, either side of `?:`, the right of `&&`, `||`, `||=`, or a rescue clause does. Switch:
+    `IR_LIGHT_LAMBDA=0`.
+  - Census (Src/StdLib + AWFY, 28,377 methods): light frames 27,291 -> 27,310 (+19), none down, the JIT's counts
+    unchanged. 47 methods stay out as "LambdaDefinition made on every call" (+61 if they were let in, at 1.03-1.04).
+  - Instructions as built (callgrind, off / on): rare 0.846, branch 0.901, always and kept 1.000 (refused), size
+    1.001. Time (`ab.rb -r 10`, load about 1): rare 0.66, branch 0.64, always 0.98, kept 1.10, size 0.75 - all
+    overlapping (spreads 16-85% on shapes of a few ns), so the clock says nothing here.
+  - Checks: the new `Util/light-lambda-matrix.rb` (return, next and break in a lambda, return from a block in a lambda
+    and from a lambda in a loop, a lambda kept past its method and called after, arity errors, optional/rest/keyword/
+    block parameters, binding, eval and local_variables in a lambda, self, `__method__`, block_given?, yield and
+    `defined?(yield)` in one, super in one, curry, arity, parameters, lambda?, `lambda(&proc)`, a lambda made only on a
+    rare path, lambdas made in a loop, nested, `&->(){}`, raise, threads, recursion; each method on every path and in a
+    branch, the branch taken and not), light-entry, hot-shapes, block-pass and jit: CRuby's output in the six gate
+    modes and with the switch off, on both trees (35 same). ruby/spec language/lambda, core/proc, core/kernel/lambda:
+    334 examples, no failures on either. IronRuby.Tests (Debug): the new Method_LightFrameLambda1 and 164 tests named
+    for blocks, lambdas, procs, closures, yield, return, break and next pass with the switch on and off; the whole
+    suite was refused by the session's permission check and not run.
+
 - **perf/sinkcarrier (2026-11-28) - the frame's own sink carries a match sink's `$~`: `IR_LIGHT_MATCH_SINK` on by
   default (gap 16, the `$~` family)** - not gated. perf/lightmatch (below) was sound but off: its hand-over (a stack
   of sink scopes per thread, entered, left and taken on every call, with a fault block in the rule) cost about what

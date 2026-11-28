@@ -619,6 +619,11 @@ namespace IronRuby.Compiler.Ast {
         internal static readonly bool LightKeywordSplatEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_KEYWORD_SPLAT") != "0";
 
         /// <summary>
+        /// IR_LIGHT_LAMBDA=0 keeps every method with a lambda literal (`->(x) { }') out of light frames (see IsScopeFree).
+        /// </summary>
+        internal static readonly bool LightLambdaEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_LAMBDA") != "0";
+
+        /// <summary>
         /// IR_LIGHT_MEMBER_OPASSIGN=0 keeps a method with `recv.m op= v' (`o.x += 1', `o.x ||= v', `self.x &&= v'; a
         /// MemberAssignmentExpression) out of light frames, as it was: it is a read of m, the operator and a write of m=, three
         /// calls like those of `o.x = o.x + 1', which a light frame takes, and a hidden CLR variable for the receiver.
@@ -697,6 +702,68 @@ namespace IronRuby.Compiler.Ast {
             public override bool Enter(LambdaDefinition/*!*/ node) { Found = true; return false; }
             public override bool Enter(MethodDefinition/*!*/ node) { return false; }
             public override bool Enter(MethodCall/*!*/ node) { Found |= MatchObserverMethods.Contains(node.MethodName); return !Found; }
+        }
+
+        // Set while the body of a method none of whose lambda literals is on the path every call takes is checked
+        // (IsBodyScopeFree): a lambda literal does not then keep it out of light frames.
+        [ThreadStatic]
+        private static bool t_conditionalLambdas;
+
+        /// <summary>
+        /// Whether a lambda literal of the method is made on every call that returns normally: one in a statement of the body or
+        /// its ensure clause, in a condition, the left of `&&', `||' or `||=', the value of a `case' or the body of a loop.
+        /// Not one in a branch - the body of an `if', `unless', `when' or `else', either side of `?:', the right of `&&', `||' or
+        /// `||=', a rescue clause, a block. A light frame makes its scope when the literal runs (perf/lightlambda: a method that
+        /// makes its lambda on every call took 1.03-1.04 times the instructions light, one that makes it on no call 0.84).
+        /// </summary>
+        private bool HasUnconditionalLambda() {
+            var finder = new UnconditionalLambdaFinder();
+            foreach (var optional in _parameters.Optional) {
+                optional.Walk(finder);
+            }
+            finder.WalkBody(Body);
+            return finder.Found;
+        }
+
+        private sealed class UnconditionalLambdaFinder : Walker {
+            internal bool Found;
+
+            internal void WalkStatements(Statements statements) {
+                if (statements != null) {
+                    foreach (var statement in statements) {
+                        statement.Walk(this);
+                    }
+                }
+            }
+
+            internal void WalkBody(Body/*!*/ body) {
+                WalkStatements(body.Statements);
+                WalkStatements(body.EnsureStatements);
+            }
+
+            public override bool Enter(LambdaDefinition/*!*/ node) { Found = true; return false; }
+            public override bool Enter(BlockDefinition/*!*/ node) { return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { return false; }
+            public override bool Enter(Body/*!*/ node) { WalkBody(node); return false; }
+            public override bool Enter(IfExpression/*!*/ node) { node.Condition.Walk(this); return false; }
+            public override bool Enter(UnlessExpression/*!*/ node) { node.Condition.Walk(this); return false; }
+            public override bool Enter(ConditionalExpression/*!*/ node) { node.Condition.Walk(this); return false; }
+            public override bool Enter(AndExpression/*!*/ node) { node.Left.Walk(this); return false; }
+            public override bool Enter(OrExpression/*!*/ node) { node.Left.Walk(this); return false; }
+            public override bool Enter(RescueExpression/*!*/ node) { node.GuardedExpression.Walk(this); return false; }
+            public override bool Enter(CaseExpression/*!*/ node) {
+                if (node.Value != null) {
+                    node.Value.Walk(this);
+                }
+                return false;
+            }
+            public override bool Enter(SimpleAssignmentExpression/*!*/ node) {
+                if (node.Operation == Symbols.Or || node.Operation == Symbols.And) {
+                    node.Left.Walk(this);
+                    return false;
+                }
+                return true;
+            }
         }
 
         private static bool HasRegexLiteral(Expression target, Arguments arguments) {
@@ -855,12 +922,14 @@ namespace IronRuby.Compiler.Ast {
 
         // The body's statements and its rescue, else and ensure clauses are scope-free (blockLiterals: with literal blocks).
         private bool IsBodyScopeFree(bool blockLiterals) {
-            bool saved = t_matchSink;
+            bool saved = t_matchSink, savedLambdas = t_conditionalLambdas;
             t_matchSink = !blockLiterals && IsMatchSink();
+            t_conditionalLambdas = blockLiterals && LightLambdaEnabled && !HasUnconditionalLambda();
             try {
                 return FirstNotScopeFree(blockLiterals) == null && AreClausesScopeFree(Body, blockLiterals, null);
             } finally {
                 t_matchSink = saved;
+                t_conditionalLambdas = savedLambdas;
             }
         }
 
@@ -1023,16 +1092,23 @@ namespace IronRuby.Compiler.Ast {
             if (body == null || HasHandling(body) && !LightRescueEnabled) {
                 return "rescue, else or ensure (IR_LIGHT_RESCUE=0)";
             }
-            if (!IsBodyScopeFree(false)) {
-                var statement = FirstNotScopeFree(LightBlocksEnabled);
-                if (statement != null) {
-                    return String.Format("{0} at line {1}: {2}", statement.GetType().Name, statement.Location.Start.Line,
-                        WhyNotScopeFree(statement, LightBlocksEnabled));
+            // (with the lambda literals IsBodyScopeFree would let in)
+            bool savedLambdas = t_conditionalLambdas;
+            t_conditionalLambdas = LightBlocksEnabled && LightLambdaEnabled && !HasUnconditionalLambda();
+            try {
+                if (!IsBodyScopeFree(false)) {
+                    var statement = FirstNotScopeFree(LightBlocksEnabled);
+                    if (statement != null) {
+                        return String.Format("{0} at line {1}: {2}", statement.GetType().Name, statement.Location.Start.Line,
+                            WhyNotScopeFree(statement, LightBlocksEnabled));
+                    }
+                    var why = new StrongBox<string>();
+                    if (!AreClausesScopeFree(body, LightBlocksEnabled, why)) {
+                        return "rescue, else or ensure clause: " + why.Value;
+                    }
                 }
-                var why = new StrongBox<string>();
-                if (!AreClausesScopeFree(body, LightBlocksEnabled, why)) {
-                    return "rescue, else or ensure clause: " + why.Value;
-                }
+            } finally {
+                t_conditionalLambdas = savedLambdas;
             }
             if (IsLargeWithMultipleAssignment()) {
                 return "multiple assignment in a body of more than " + MaxMultipleAssignmentCalls + " calls";
@@ -1115,12 +1191,14 @@ namespace IronRuby.Compiler.Ast {
         // A statement of a block's body (BlockDefinition.IsLightCallBody): not one with exception handling, which the rewriter
         // takes only in a method's frame (LightFrameRewriter.Handling).
         internal static bool IsScopeFree(Expression/*!*/ node) {
-            bool saved = t_matchSink;
+            bool saved = t_matchSink, savedLambdas = t_conditionalLambdas;
             t_matchSink = false;
+            t_conditionalLambdas = false;
             try {
                 return IsScopeFree(node, false, null) && !HandlingFinder.Has(node);
             } finally {
                 t_matchSink = saved;
+                t_conditionalLambdas = savedLambdas;
             }
         }
 
@@ -1383,6 +1461,20 @@ namespace IronRuby.Compiler.Ast {
                         }
                     }
                     return true;
+                }
+                // `->(x) { }': a literal block made into a lambda (BlockDefinition.Transform), as `f { }' makes a Proc of one - over the
+                // scope, made on demand when the literal runs (blockLiterals, TransformLightFrame). Its `return' and `break' are the
+                // lambda's own (a LambdaUnwinder its frame catches), not this frame's. Only one the method makes on some calls and
+                // not others (HasUnconditionalLambda): one made on every call makes the scope on every call, later and dearer.
+                var lambda = node as LambdaDefinition;
+                if (lambda != null) {
+                    if (!LightLambdaEnabled) {
+                        return Refuse(why, "LambdaDefinition (IR_LIGHT_LAMBDA=0)");
+                    }
+                    if (!t_conditionalLambdas) {
+                        return Refuse(why, "LambdaDefinition made on every call");
+                    }
+                    return blockLiterals || Refuse(why, "LambdaDefinition");
                 }
                 var loop = node as WhileLoopExpression;
                 if (loop != null) {

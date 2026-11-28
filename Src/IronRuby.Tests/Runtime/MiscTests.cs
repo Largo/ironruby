@@ -8242,6 +8242,37 @@ puts refs.count { |r| r.IsAlive }
         }
 
         /// <summary>
+        /// IR_LIGHT_LAMBDA: a method whose lambda literals are in a branch runs in a light frame, which makes its scope when the
+        /// literal runs (MethodDefinition.HasUnconditionalLambda): the lambda's `return' is its own, it keeps the method's locals
+        /// past its return, and it checks its arity.
+        /// </summary>
+        public void Method_LightFrameLambda1() {
+            TestOutput(@"
+def pick(x) = x > 0 ? ->(y) { return y * x if y; :never } : x
+def counter(x)
+  if x
+    n = x
+    [-> { n += 1 }, -> { n }]
+  end
+end
+def arity(x) = x ? (l = ->(a, b) { a + b }; begin; l.(1); rescue ArgumentError => e; e.message; end) : nil
+p 30.times.map { |i| pick(i - 2) }.uniq.size, pick(3).(4), pick(-1)
+inc, get = counter(5)
+inc.(); inc.()
+p get.(), counter(nil), arity(1)
+p 40.times.map { |i| [pick(i + 1).(2), counter(i)[1].()] }.last
+", @"
+30
+12
+-1
+7
+nil
+""wrong number of arguments (given 1, expected 2)""
+[80, 39]
+");
+        }
+
+        /// <summary>
         /// `recv.m op= v' in a light frame (IR_LIGHT_MEMBER_OPASSIGN): the read of m, the operator and the write of m= are calls of
         /// the frame's light sites; the value is the right-hand side whatever m= returns; a private accessor on self; `&.'; binding.
         /// </summary>
