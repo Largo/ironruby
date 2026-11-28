@@ -1662,7 +1662,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     image; best-of-10 wall -2 to -11% and -0 to -14%. Not taken: the JIT's re-parses of start-up methods
     (2-3 ms of `-e 1`), and Kernel#require's first-call body compile (~10 ms, 4 ms of it the first
     def-body transform's cold path), the next leads.
-    2026-11-28, perf/requirecold (Landed, not gated): Kernel#require's first-call compile was
+    2026-11-28, perf/requirecold (Landed, gated 2026-11-28 (round 8's gate entry)): Kernel#require's first-call compile was
     already gone. perf/bootparse precompiled the kernel_require.rb eval, and with it the def bodies
     in it (`def body: transform` 9.0 ms -> 0 in `-e 1`). What was left to parse at start-up were
     module_evals (FileUtils' 92, which `require "irb"` loads; Date::Format::Bag's 22) and the
@@ -2308,6 +2308,57 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   the receivers that confirm (`EnterLightMethodWithBlock`, `CreateBfcForBlockNotKept`,
   `EnterLightMethodPassingBlock`), which must keep nothing.
 
+- **Gate of 2026-11-28 for round 8 of round thirty-seven** (perf/crubydiff's seventh round, perf/literalcode,
+  perf/lightlambda with the jitcalls and jitresume designs and two typed-body rejections, perf/jitoptimism,
+  perf/r2kflag, perf/kwsplatlight, perf/kwbind, perf/requirecold, perf/jitreparse (rejected), perf/kstring,
+  perf/kinteger, perf/havlakalloc, perf/intivar (rejected), perf/loopivar (off)): the branch
+  `claude/happy-gauss-95wm2j` at fcbc67b against master f81fc19, Release net10.0, four cores: **PASS**, with
+  no fix needed and one finding (below).
+  The merge itself: only the ledger conflicted; perf/jitbody's branch carried back perf/jitisa's and
+  perf/jitblockparam's entries from before they were marked gated, and the unmarked copies and an orphaned
+  jitisa header were dropped (fcbc67b). RubyCallFlags: HasMatchSink 4096 and HasRuby2KeywordsSplat 8192
+  (FlagsCount 14). ReflectionCache.Generated.cs is what ClassInitGenerator writes. No new DLR patch.
+  IronRuby.Tests (`parallel-tests.sh`, Debug): 1,423 tests, every one executed, none failed.
+  `gate-matrices.rb --all` in 8 modes (the six default ones; every round 8 switch that is on by default off
+  at once: IR_CALL_LINES, IR_JIT_OBJECT_OPS, IR_JIT_SCREEN_CALL, IR_JIT_SINK_BOXED, IR_KWREST_TAKE,
+  IR_LIGHT_LAMBDA, IR_LIGHT_STRAIGHT_LITERAL, IR_PLAIN_TO_S, IR_SCOPE_HELD_BLOCKS; and IR_LOOP_IVAR_WRITES=1,
+  which is off by default): 1,495 same, 136 baseline, 1 flaky, 16 DIFF, each explained: regexp-binary-ctype
+  prints what it printed at round 7, in every mode; string-race-matrix, compared over five runs of each tree
+  (rows not always ok 109 -> 87, lost writes 105 -> 0, no row failing only on the new build);
+  thread-backtrace's IR_LIGHT_FRAMES=0 run flaky (BASE's output twice alone), as at round 6.
+  A probe file for the round's behaviour changes and hot spots - a string instance_eval/class_eval sharing the
+  caller's `$~`, `$_` and `$1`; the line a call on a later line of a statement reports, by caller_locations
+  and by a backtrace; a fiber's own `$~`; a body that evaluates a literal block on every call (break, next,
+  an early return, a binding, a Proc kept past the method); a lambda literal in a branch (its return, kept
+  past the method, an arity error); to_i, empty? and ! of objects, hot, then the classes that must deopt;
+  `**rest` as the callee's own hash, a literal's mutated, `**h` keeping its default and
+  compare_by_identity; ruby2_keywords forwarding and into a Struct; Kernel#String and Integer(); a caller's
+  block held by its callee; a `while` loop writing ivars, with a frozen self and a raise mid-loop - prints
+  CRuby's output with the JIT on and off and with IR_LOOP_IVAR_WRITES=1; with the round's switches off only
+  the two line rows differ (IR_CALL_LINES=0 is the old lines). Master differs in 12 lines (the evals' and
+  the fiber's `$~`, the lines, `**h`'s default).
+  ruby/spec, all five suites (32,285 examples): no failure the known list does not name.
+  Census against master (Src/StdLib, Util/bench, AWFY): light frames 91.7% -> 82.5% (1,256 up, 3,938 down);
+  against round 7, 108 up and 4,082 down, every one of them perf/literalcode's (with
+  IR_LIGHT_STRAIGHT_LITERAL=0, 172 up and none down; the census names them "body needs its scope after the
+  rewrite", the change having no refusal of its own). Method JIT 476 up and 3 down against master, the 3
+  perf/jitoptimism's `x.call` refusals.
+  The finding: perf/literalcode is a trade the census shows and the clock barely does. AWFY 12, the switch
+  off against on: geomean 1.003; alone, five rounds in each order, on/off medians Richards 0.964, Havlak
+  0.955, Towers 1.037. Kept: nothing is slower beyond the noise, and its own shapes gain 8-12% a call. It
+  also bypassed perf/havlakalloc - a method with a scope converts its caller's literal for good in the
+  scope's own InitializeRfc - so Havlak's bytes are back at 1.7 GB; perf/nbody's heldrfc (round 9) makes the
+  two compose.
+  AWFY, 8 iterations: all fourteen verify. AWFY 12 in both orders: geomean new/base 0.927 and 0.905; Towers
+  1.078 and 1.074, then alone, five rounds in each order, medians 1.045 (base first) and 1.035 (new first),
+  rounds from 0.94 to 1.16: under 5% in both, but leaning slower since round 7 (1.068 and 1.035 there); a
+  lead, not a block. Alone medians new/base: Havlak 0.894 / 0.931, DeltaBlue 0.937 / 0.987, Richards
+  1.086 / 0.997 (0.995 over ten more rounds), CD 0.923 / 0.904. micro-table in both orders: `ivar_rw` 1.08
+  and 1.11, then ab.rb alone, 12 rounds, 1.02 with the rounds overlapping: noise; no other line more than 5%
+  slower in both.
+  Start-up on the R2R host, best of ten alternating, two runs, base -> new ms: `-e 1` 583 -> 508 and
+  596 -> 560, `gem --version` 630 -> 639 and 627 -> 619, `gem list` 1191 -> 975 and 1161 -> 1010,
+  `require "irb"` 1141 -> 982 and 1097 -> 969, irb 1+1 1261 -> 1155 and 1288 -> 1182: 0.82-1.01.
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
   design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple
@@ -2353,7 +2404,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   514 -> 475, `gem --version` 601 -> 591 and 584 -> 562, `gem list` 1043 -> 952 and 1040 -> 929,
   `require "irb"` 1100 -> 995 and 1080 -> 977, irb 1+1 1186 -> 1086 and 1167 -> 1075: 2-11% faster.
 
-- **perf/jitoptimism (2026-11-28, census and timed, not gated) - what the screen let through and the compiler declined**
+- **perf/jitoptimism (2026-11-28, census and timed, gated 2026-11-28 (round 8's gate entry)) - what the screen let through and the compiler declined**
   (switches `IR_JIT_OBJECT_OPS`, `IR_JIT_SCREEN_CALL`, `IR_JIT_SINK_BOXED`). Built on happy-gauss 348fde1 merged with
   perf/jitbody f1dc798. perf/jitisa left three new declines in app-shapes, methods `is_a?` used to keep out of the
   screen. Each was either taken by the compiler or refused up front:
@@ -2398,8 +2449,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
       basicobject/!, proc/call: no failures on either build.
     - IronRuby.Tests (Debug), all 1,403: PASSED.
 
-- **perf/lightlambda (2026-11-28) - a lambda literal in a branch no longer keeps its method out of light frames** - not
-  gated. Chosen by the census of 50b07b5 + 8092170: LambdaDefinition, 73 methods, the next light-frame refusal after
+- **perf/lightlambda (2026-11-28) - a lambda literal in a branch no longer keeps its method out of light frames** -
+  gated 2026-11-28 (round 8's gate entry). Chosen by the census of 50b07b5 + 8092170: LambdaDefinition, 73 methods, the next light-frame refusal after
   the `$~` family.
   - Why it had the scope: no reason but the filter's - `IsScopeFree` had no case for a LambdaDefinition (`->(x) { }`;
     `lambda { }` is a call with a literal block, light already). A lambda literal is a literal block made into a lambda
@@ -2433,7 +2484,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/kwbind (/perf-step, 2026-11-28) - a `**rest` parameter is the call's own keyword hash, the
   declared keywords taken out in place** (gap 38; switch `IR_KWREST_TAKE`, on unless `=0`). Built on
-  33818f7 (claude/happy-gauss-95wm2j) with d45083a0 merged.
+  33818f7 (claude/happy-gauss-95wm2j) with d45083a0 merged. Gated 2026-11-28 (round 8's gate entry).
   - **Profile** (clock, Release, ns; CRuby in brackets): `def kopt(k: 0)` called `(k: 1)` 44 [30],
     `def kreq(k:)` 44 [31] - the method JIT takes both, and what is left is the call (`pos(1)` 40
     [27]); so a declared-keywords-only callee already reads the call's pairs without paying for
@@ -2470,7 +2521,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 - **perf/kwsplatlight (/perf-frame, 2026-11-28) - `f(k: v, **h)` and `f(**a, **b)` in light frames;
   a Struct stores a ruby2_keywords Hash as given** (switch `IR_LIGHT_KEYWORD_SPLAT`, which already
   covered the lone `f(**h)`). Built on 33818f7 (claude/happy-gauss-95wm2j) with 78a731ca merged;
-  RubyCallFlags.HasRuby2KeywordsSplat moved to 8192 (FlagsCount 14) beside round 7's HasMatchSink.
+  RubyCallFlags.HasRuby2KeywordsSplat moved to 8192 (FlagsCount 14) beside round 7's HasMatchSink. Gated 2026-11-28 (round 8's gate entry).
   - **Census** (`Util/perf/census.rb -d`, Src/StdLib and Util/bench, 29,102 methods): light frames
     27,997 -> 28,017 (+20), every one refused before for `KeywordSplatMerge` (Pathname#glob,
     File.binwrite, Exception.__detailed__, mkmf's try_*, optparse's getopts, Prism's desugar
@@ -2510,7 +2561,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/r2kflag (2026-11-28) - a ruby2_keywords hash stays positional at a call with an explicit
   `**`, and at a library method's own call; `yield(*args)` makes it keywords; `**h` passes a dup**
-  (correctness, no switch). Built on aa82bf28 (claude/perf-lsite, which has f67ac44).
+  (correctness, no switch). Built on aa82bf28 (claude/perf-lsite, which has f67ac44). Gated 2026-11-28 (round 8's gate entry).
   - **What CRuby 4.0 does.** A marked hash ending a splatted list is made keywords only at a
     splat in Ruby source with no `**` (vm_caller_setup_arg_splat, a call without kw_splat):
     `g(*a, **{})`, `g(*a, **nil)`, `super(*a, **{})` keep it positional, the same object with its
@@ -2550,7 +2601,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     nothing to gain; only a #to_proc that changes `a` could tell.
 
 - **perf/kinteger (2026-11-28, on 33818f7 + 51f5637) - `Kernel#String` asks for #to_str as
-  rb_check_funcall does; `Integer("1234")` rejected, nothing to win** - not gated.
+  rb_check_funcall does; `Integer("1234")` rejected, nothing to win** - gated 2026-11-28 (round 8's gate entry).
   - Part 1 (correctness, from perf/kstring's leftovers): `__ir_check_to_str__` calls a private
     or protected #to_str, tries a #method_missing of the object's own when there is none
     (check_funcall_missing), takes any NoMethodError from it as "no conversion" unless the
@@ -2570,7 +2621,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `Array()` 68 against 40).
 
 - **perf/kstring (/perf-step, 2026-11-28, on 3faf3dc) - `Kernel#String` converts a plain object
-  by its #to_s from C# (`__ir_plain_to_s__`, `IR_PLAIN_TO_S`)** - clock only, not gated. For a
+  by its #to_s from C# (`__ir_plain_to_s__`, `IR_PLAIN_TO_S`)** - clock only, gated 2026-11-28 (round 8's gate entry). For a
   class with no #to_str (any visibility), the built-in respond_to?, respond_to_missing? and
   method_missing and a public #to_s - checked per class against the global method version -
   #to_s is called through a call site; anything else goes to `__ir_string__` as before.
@@ -2583,7 +2634,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - A private #to_str and a #method_missing for to_str, left at first, are called since
     perf/kinteger's first part, as MRI's rb_check_funcall calls them.
 
-- **perf/loopivar (/perf-step, 2026-11-28, not gated) - an outlined `while' loop may write self's
+- **perf/loopivar (/perf-step, 2026-11-28, gated 2026-11-28 (round 8's gate entry)) - an outlined `while' loop may write self's
   instance variables: OFF by default (`IR_LOOP_IVAR_WRITES=1`)**, on 4b928db (33818f7 merged with
   0bf3598). The OSR loop compiler bailed on `@x = v' ("instance variable write in an outlined loop")
   and the method JIT declines a method whose loop writes one ("a deopt after an effect").
@@ -2641,7 +2692,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     default since, block loops included.
 
 - **perf/havlakalloc 56526b1 c8010fb (round forty-one, 2026-11-28) - a light frame's scope holds its
-  block until it is parked, not for good (gap 25)** - not gated. Havlak allocated 1.77 GB per iteration;
+  block until it is parked, not for good (gap 25)** - gated 2026-11-28 (round 8's gate entry). Havlak allocated 1.77 GB per iteration;
   the allocation-tick probe gave method scopes 25%, `Object[]` 16%, Procs 14.5%, Range 6%, BlockParams 6%.
   Bytes per call of its hot helpers, method by method: a caller passing a literal to som.rb's
   `Vector#each` 374 B (its method scope, its Proc, a BlockParam, the Range), `SomSet#contains` 406,
@@ -2731,7 +2782,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   `require "irb"` 1029 -> 1005 and 984 -> 992, irb 1+1 1133 -> 1071 and 1065 -> 1066: level.
 
 - **perf/literalcode (round thirty-seven, 2026-11-28) - a body that evaluates a literal block on every call is not made a
-  light frame (gap 13)** - time, not gated. Asked to find the compiled code around a literal's instantiation (the 16-20 ns
+  light frame (gap 13)** - time, gated 2026-11-28 (round 8's gate entry). Asked to find the compiled code around a literal's instantiation (the 16-20 ns
   perf/stagea left unattributed), the round dumped `e1`'s expression tree and its JIT code. The call with a literal in a light
   frame does: the scope made on demand inside the literal's instantiation (`LightScopeInLoop` over `TakeParkedScope` and
   `ReuseParkedScopeLazy`, the register locals copied into a tuple first), `InitializeBlock`, a try/catch for `EvalUnwinder`
@@ -3691,7 +3742,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   (60) pass in five plain runs on base and five on new.
 
 - **perf/requirecold (2026-11-28) - module_evals in the startup library; eval texts that name the tree (gap 26)**
-  - not gated. Base 50b07b5 (claude/happy-gauss-95wm2j) merged with 516fb7c (perf/bootparse).
+  - gated 2026-11-28 (round 8's gate entry). Base 50b07b5 (claude/happy-gauss-95wm2j) merged with 516fb7c (perf/bootparse).
   The brief: Kernel#require's body, compiled at its first call (~10 ms on the R2R host before
   perf/bootparse, ~4 ms of it the cold path of the first def-body transform). Measured on the base
   (IR_PHASE_TIMES, R2R host): that compile is gone. The kernel_require.rb eval comes from the library
@@ -4273,7 +4324,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   both.
 
 - **perf/crubydiff (round thirty-seven, 2026-11-26) - differences from CRuby, not speed** - not
-  gated when merged; gated 2026-11-27 (round 5's gate entry), its third and fourth rounds 2026-11-28 (round 6's), its fifth and sixth 2026-11-28 (round 7's); one commit each, every one with CRuby 4.0's output as a registered IronRuby.Tests case.
+  gated when merged; gated 2026-11-27 (round 5's gate entry), its third and fourth rounds 2026-11-28 (round 6's), its fifth and sixth 2026-11-28 (round 7's), its seventh 2026-11-28 (round 8's); one commit each, every one with CRuby 4.0's output as a registered IronRuby.Tests case.
   - `Class#new` handed a library `initialize` (Struct's, Array's) the caller's scope, whose
     refinements then reached it: `Util/struct-matrix.rb`'s `UsingRefine.make` (after 200 calls, when
     the rule was compiled) and an Array subclass from the first call. The inner site now takes no scope
