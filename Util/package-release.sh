@@ -20,9 +20,11 @@
 # Being self-contained, it can be one composite ReadyToRun image of the framework and
 # IronRuby together, compiled with the startup profile Build/startup.mibc
 # (Util/make-startup-mibc.sh): the generic instantiations startup makes over framework
-# types are then precompiled too, so `ir -e 1` JITs ~140 methods instead of ~570 and
-# starts ~9% faster (0.94 -> 0.85 s), for ~10 MB more RSS and 107 MB instead of 95 MB
-# on disk. IR_COMPOSITE=0 builds the per-assembly images instead.
+# types are then precompiled too, so `ir -e 1` JITs ~130 methods instead of ~500 and
+# starts ~15% faster (450 -> 385 ms, with the startup library below), for 14 MB more on
+# disk than the per-assembly images. The R2R host of a Linux Release build
+# (Ruby.Console.csproj) is built the same way. IR_COMPOSITE=0 builds the per-assembly
+# images instead.
 # irubyc still needs the .NET SDK, as it does from a checkout.
 #
 # It needs what a normal build needs: ../dlr with Build/dlr-patches applied, and
@@ -222,6 +224,32 @@ if [ -f "$bin/IronRuby.Startup.dll" ]; then
     fi
   fi
   rm -rf "$check"
+fi
+
+# How much of startup the profile still covers: the methods `ir -e 1` JITs at Tier0 (generic instantiations and
+# framework methods the composite image lacks; not the dynamic methods of rules and lambdas). A Build/startup.mibc
+# made from the current code leaves ~40 on linux-x64, the 2 Nov one left ~100 by 26 Nov, none ~150: past 60 it is
+# worth regenerating (Util/make-startup-mibc.sh). Only a note: a stale profile costs speed, never correctness.
+if [ "${IR_COMPOSITE:-1}" != 0 ]; then
+  jitlog=$(mktemp)
+  jitpath=$jitlog
+  case "$RID" in win-*) jitpath=$(cygpath -w "$jitlog") ;; esac
+  status=0
+  DOTNET_JitStdOutFile="$jitpath" DOTNET_JitDisasmSummary=1 with_timeout 120 stage_ir -e 1 > /dev/null || status=$?
+  jitted=
+  # an empty log (a failed probe, or a runtime that ignores the knob) is no count, not a count of 0
+  if [ $status = 0 ] && grep -q "JIT compiled" "$jitlog"; then
+    jitted=$(grep "JIT compiled" "$jitlog" | grep -v "dynamicClass" | grep -c "Tier0" || true)
+  fi
+  rm -f "$jitlog"
+  if [ -z "$jitted" ]; then
+    startup_note "no Tier0 count for \`ir -e 1\`: the probe failed (exit $status) or wrote no JIT log"
+  else
+    startup_note "\`ir -e 1\` JITs $jitted methods at Tier0 (startup profile Build/startup.mibc of $(git -C "$IR_ROOT" log -1 --format=%cs -- Build/startup.mibc 2>/dev/null))"
+  fi
+  if [ -n "$jitted" ] && [ "$jitted" -gt 60 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::warning::$NAME: ir -e 1 JITs $jitted methods at Tier0; Build/startup.mibc looks stale (Util/make-startup-mibc.sh)"
+  fi
 fi
 
 # The archive carries Microsoft's runtime - .NET, and for Windows also the Windows

@@ -21,6 +21,8 @@ on:
     paths:
       - .github/workflows/release.yml
       - Util/package-release.sh
+      # the startup profile the archive's composite ReadyToRun image is compiled with
+      - Build/startup.mibc
       - Util/installer/**
       # the startup library every archive carries: its compiler, and the prelude it compiles most of
       - Util/aot/**

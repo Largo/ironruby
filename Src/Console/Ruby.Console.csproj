@@ -75,12 +75,12 @@
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
-  <!-- IronRubyStartupProfile=true (Util/package-release.sh) has crossgen2 compile with Build/startup.mibc, a profile of
-       the methods startup runs (Util/make-startup-mibc.sh). It pays off in a composite image of IronRuby and the
-       framework (PublishReadyToRunComposite, self-contained only), where the generic instantiations startup makes
-       over framework types become precompilable: `ir -e 1` then JITs ~140 methods instead of ~570 and runs 8% fewer
-       instructions than in the self-contained per-assembly R2R build. In the framework-dependent host it changes next
-       to nothing (1%), so the R2R host does not use it. -->
+  <!-- IronRubyStartupProfile=true (the R2R host below, Util/publish-r2r.sh, Util/package-release.sh) has crossgen2 compile
+       with Build/startup.mibc, a profile of the methods startup runs (Util/make-startup-mibc.sh). It pays off in a composite
+       image of IronRuby and the framework (PublishReadyToRunComposite, self-contained only), where the generic
+       instantiations startup makes over framework types become precompilable: `ir -e 1` then JITs ~130 methods instead of
+       ~500 and runs 15% fewer instructions than the framework-dependent per-assembly host. Without the framework in the
+       image it changes next to nothing (<1%), and so does a composite of IronRuby's assemblies alone. -->
   <ItemGroup Condition="'$(IronRubyStartupProfile)' == 'true' and Exists('$(MSBuildThisFileDirectory)..\..\Build\startup.mibc')">
     <PublishReadyToRunPgoFiles Include="$(MSBuildThisFileDirectory)..\..\Build\startup.mibc" />
   </ItemGroup>
@@ -117,7 +117,9 @@
     <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
   </ItemGroup>
   <!-- A Release build on Linux also produces the ReadyToRun host (Util/publish-r2r.sh), which ir.sh runs by default:
-       it starts about a third faster. The publish is a RuntimeIdentifier build of its own, so the target stays out of
+       it starts about a third faster. It is what Util/package-release.sh ships: self-contained, one composite ReadyToRun
+       image of IronRuby and the framework, compiled with the startup profile (above), which takes `ir -e 1` from ~450 to
+       ~385 ms and the tools ~10% (93 MB more on disk, ~25 s more to publish). The publish is a RuntimeIdentifier build of its own, so the target stays out of
        it, and IronRubyNestedR2R stops a publish from running it again. A failed publish only warns: the IL build is
        still good, and ir.sh does not pick a host older than the build.
 
@@ -140,7 +142,7 @@
     <PropertyGroup>
       <_IrR2RDir>$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)</_IrR2RDir>
       <_IrR2RNew>$(_IrR2RDir).new</_IrR2RNew>
-      <_IrR2RPublish>&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained false -f $(TargetFramework) -p:PublishReadyToRun=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(_IrR2RNew)&quot; -nologo</_IrR2RPublish>
+      <_IrR2RPublish>&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained true -f $(TargetFramework) -p:PublishReadyToRun=true -p:PublishReadyToRunComposite=true -p:IronRubyStartupProfile=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(_IrR2RNew)&quot; -nologo</_IrR2RPublish>
       <_IrR2RPublishExit>-1</_IrR2RPublishExit>
       <_IrStartupExit></_IrStartupExit>
     </PropertyGroup>
