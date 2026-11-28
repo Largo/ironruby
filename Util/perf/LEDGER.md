@@ -8107,6 +8107,18 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/jitcalls (2026-11-28) - general calls in typed bodies, the narrowest slice: designed and counted, not
+  built** (gap 1). The design and the counts are in `Docs/jit-resume-deopt.md`, "Stage 2 again". The slice sound in
+  one step is a typed body whose one general call is its last operation (nothing after it to deopt, re-check or
+  write back). Of the methods whose only screen refusal is one call, 3,574 are wrappers whose whole body is that call
+  (what a light frame already is: perf/jcall and perf/resume2 measured nothing there), 343 have a typed prefix before
+  it, 96 more follow it only with literals or reads. AWFY's among them are `run_task`, `add_constraint`,
+  `set_parent`, `Dictionary#resize`, `Queens#queens`; Richards' `queue_packet` is declined before its call by an
+  attribute write after an ivar write. The ceiling, `Util/bench/jit-resume2-shapes.rb` against CRuby 4.0:
+  `queue_packet` 1.00, `add_input` 0.99, `schedule` 1.12 (a call in a loop), `find_task` 1.60 (a raise guard, no call).
+  Next on gap 1: a call into a typed body from a loop the typed body owns (`-X:JITCalls` on other receivers, with
+  stage 3's resume), not another slice of stage 2.
+
 - **perf/jiteqq (2026-11-28) - `C === x` (Module#===, a constant receiver) in a typed body; `respond_to?(:lit)`
   counted: built, census-measured, nothing hot moved, not kept.** From the census of 33818f7 + 5b98b17, where
   `MethodCall ===` refuses 304 methods first (426 at all, 170 alone). By receiver (prism over each refused method's

@@ -2,7 +2,7 @@
 
 Status: stage 1 is implemented behind `-X:JITResume` (off by default; `Src/Ruby/Runtime/Jit/JitResume.cs`,
 `JitCompiler.Resume.cs`, matrix section 11 of `Util/jit-matrix.rb`), narrowed as its section says; the rest
-is design only, including stage 3a at the end (a yield in an outlined loop, gap 18), whose matrix is
+is design only, including a second look at stage 2 (round thirty-seven: the slices counted, not built) and stage 3a at the end (a yield in an outlined loop, gap 18), whose matrix is
 `Util/yield-loop-matrix.rb`. It answers gap 1 of `Util/perf/LEDGER.md`
 ("Calls of other methods from hot bodies"): `CallSite.Target` is 24-32% of every benchmark,
 and Richards, Towers, DeltaBlue, Bounce and CD's `tree_insert` all wait on one rule of the
@@ -378,6 +378,85 @@ the `while` statement with `#resume` clear, and the generic code evaluates the c
 the first's index, which would run an iteration whose condition nobody evaluated. Then
 `-X:JITResume` on by default, after a full sweep and the benchmark suite, if stages 1-4
 measured as faster.
+
+## Stage 2 again (round thirty-seven, 2026-11-28): what a general call needs, the slices, their reach
+
+Asked again after perf/jiteach and perf/jiteqq: both found that taking one more construct past the screen only moves
+a method to its next refusal, which is usually an ordinary call. So: what would a typed body need to make a call of
+any method, and is there a slice of that which is sound in one step and reaches something hot? This section answers
+from the code as it stands and from counts; nothing was built.
+
+### What a general call needs
+
+A call of an arbitrary method is an effect that can do anything: redefine methods, reassign constants, enable a
+TracePoint, write the caller's locals through a binding, raise, re-enter the method. Four things follow.
+
+- **Its result.** `Obj`, always: no profile of a callee's result makes a typed value without a guard, and a guard
+  after the call is a deopt after an effect. Code after it that consumes the value takes it as an object (the
+  self-guarded tail of stage 1, or nothing speculative at all).
+- **A deopt after it.** It must never re-run the call. Restarting the generic body does (that is the current rule's
+  whole reason), so a deopt after a call must continue in generic code: a per-operation fallback (A) where the
+  operation's result is an object, or a resume at the next statement boundary with the frame state written into the
+  scope (B, stage 3) where it is typed or the world changed. Until B exists, nothing that can deopt may follow a
+  call.
+- **What it invalidates.** The entry checked the method version, the constant version and tracing once, on the way
+  in. After a call every one may have moved: each later speculative operation re-checks what it depends on itself
+  (A's rule: `GlobalMethodVersion`, the constant version, `TracePoint.ActiveEvents`), or the body is handed to the
+  resumable generic body at the next statement (B). Self's class and the shape of its instance variables can change
+  too (`extend`, `instance_variable_set`, `remove_instance_variable`), which the typed body's unguarded ivar slots
+  assume; an ivar read after a call has to be the generic read or a re-guarded one.
+- **Exceptions and frames.** The callee's backtrace must show this method at the call's line, once: stage 1's
+  `JitResumeInfo.Slow` (a lambda named as the generic body's frame, keeping the line in `PrecompiledFrames` while the
+  call runs) does that without a frame on the fast path. A `rescue` around the call is the generic body's; a typed body
+  with one around a call is declined. The callee may need the caller's scope (a protected or missing method, a refined
+  name, a library method that reads it): the light-scope site answers `LightScopeRequired` and the call is made again
+  through the full site with the scope made once, with the method's block in it (`CreateMethodScopeLazy`, which takes
+  the block off the reusable list), in the light frame's try/filter/finally so `return` from a proc made there and
+  LocalJumpError after the method returned are right. Once that scope exists the locals live in it (see "Once the
+  scope exists"): the call that made it must be the last thing the typed body does, or the body resumes (B).
+
+### The narrowest slice that is sound now
+
+A typed body whose one general call is its **last** operation: the call's result is the method's value, nothing
+after it can deopt or read a local, so nothing has to be resumed, re-checked or written back; a scope the call makes
+is made with the final values of the locals. Everything above reduces to: stage 1's fallback site as the primary
+path, the light frame's try/filter/finally, `blk` into the scope, the stack check, the line for the backtrace.
+Slightly wider and as sound: the call followed only by things that speculate on nothing and read no local (a
+literal, `self`, an instance variable read whose slot is re-guarded).
+
+### Reach, counted before building
+
+From the census of 33818f7 + c0c3335 (`census.rb -l -a`, Src/StdLib and AWFY, 28,377 methods), the methods whose one
+and only screen refusal is a `MethodCall`, each def read with prism:
+
+| Where the refused call is | Methods |
+|---|---|
+| the body's last statement, the name nowhere else, and the body that one statement (a wrapper: `def a(x) = b(x)`) | 3,574 |
+| the last statement, after a prefix of 1 / 2 / 3 or more statements | 219 / 81 / 43 |
+| the last statement, but the same name called elsewhere in the body too | 142 |
+| followed only by a literal, self or a local or instance variable read | 96 |
+| not a statement of the body (inside a condition, an argument, a loop) | 5,736 |
+
+A wrapper's typed body would be the call and nothing else: what the generic light frame already is, a site and no
+scope (perf/jcall and perf/resume2 measured exactly that and found nothing). What could gain is the 343 with a typed
+prefix. Among AWFY's: Richards' `run_task` and DeltaBlue's `AbstractConstraint#add_constraint` (a prefix of self
+calls), `queue_packet` (its prefix writes `@queue_count` and then two attributes of another object: a deopt after an
+effect, declined by the slice before its call is reached), Havlak's `SimpleLoop#set_parent`, SOM's
+`Dictionary#resize`, `Queens#queens`, the harnesses' loops. And the ceiling, `Util/bench/jit-resume2-shapes.rb` by
+clock against CRuby 4.0 (`ab.rb -r 5`, load 1.6-2.2): `queue_packet` 1.00, `add_input` 0.99 - already level, nothing
+for any form of this to win - `schedule` 1.12 (a `while` whose body calls `t.step`: a call in a loop, which the slice
+does not take) and `find_task` 1.60 (an element read and `raise ... if t.nil?`: no general call at all).
+
+### So
+
+Not built. The tail slice is sound and wide on paper, but it is perf/jcall's shape with the frame cost gone, and its
+methods are either wrappers (nothing to gain) or ones already at CRuby's speed on the measured shapes; the time left
+in gap 1's shapes is in a loop of calls (`schedule`) and in a raise guard (`find_task`). What would move `schedule` is
+not a general call from a typed body but a call *into* a typed body: `t.step` on a receiver whose class the profile
+saw, entering the callee's typed body directly with unboxed arguments (`-X:JITCalls` for other receivers than self,
+the callee's own deopts absorbed at the boundary, stage 4), inside a loop the typed body owns - which needs stage 3's
+resume for the loop as soon as the callee is not known pure. That, or stage 3 itself, is the next step on this gap;
+another slice of stage 2 is not.
 
 ## Stage 3a: a yield in an outlined loop (gap 18)
 
