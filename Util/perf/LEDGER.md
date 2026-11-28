@@ -8949,3 +8949,24 @@ What to take from it:
   Off by default (`IR_FORWARD_REST=1` turns it on); `Util/forward-rest-matrix.rb` pins the readers.
   A question for any change that lets two frames share what Ruby copies: list every way the frame can
   be read after the call - eval by any name, binding by any route, TracePoint - before the walk.
+
+### Caught by the gate (round thirty-seven, round 6)
+
+- **A method table read outside the class hierarchy lock** - perf/havlak2, before it merged into master.
+  `JitStub.IsLeafMethodOfSomeClass` moved onto `ClassesDefining`, which takes the lock and lets it go
+  before it returns, and then read each class's method table (`TryGetDefinedMethod`) outside it;
+  `AgreedAccessorVariable`'s strict test did the same. The Release build, which every matrix runs, does
+  not check the lock; the Debug build's `RequiresClassHierarchyLock` assertion aborted 11 IronRuby.Tests
+  processes (the TLS, socket and Integer_FDivCoerced1 tests among them). Fixed in f67ac44. The
+  experiment had run its matrices and specs, and IronRuby.Tests only by name: the full suite on a Debug
+  build is the check that reads the locking assertions, and is now asked of every round that touches the
+  JIT or lookup code.
+- **A `case` over Symbol literals dispatched as one over Strings** - perf/json, before it merged into
+  master. `CaseExpression.TryMakeStringDispatch` accepted `comparison as StringLiteral`, and a
+  `SymbolLiteral` is a `StringLiteral` in the AST: `case "all" when :all` ran the `:all` arm, and
+  `Matrix#each("all")` returned instead of raising ArgumentError (three library/matrix specs, the sweep).
+  Fixed in 540bdb0 (CaseEquals4; case-string-matrix's Symbol section). The experiment's matrix had 786
+  rows and missed it twice over: the dispatch runs only on a method's first, uncompiled calls (the method
+  JIT then takes the method, and tests for a Symbol first), and it stands aside once the runtime has a
+  refinement, which the matrix made before most of its rows. A matrix for a fast path that only cold
+  code takes has to call each case cold, on a fresh method, before anything that disables the path.

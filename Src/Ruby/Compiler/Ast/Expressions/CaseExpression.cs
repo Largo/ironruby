@@ -147,8 +147,9 @@ namespace IronRuby.Compiler.Ast {
                     return null;
                 }
                 foreach (var comparison in _whenClauses[i].Comparisons) {
+                    // a SymbolLiteral is a StringLiteral too, and `:all === "all"' is false: Strings only
                     var literal = comparison as StringLiteral;
-                    if (literal == null) {
+                    if (literal == null || literal is SymbolLiteral) {
                         return null;
                     }
                     var str = literal.GetMutableString();

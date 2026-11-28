@@ -210,5 +210,22 @@ true
 false
 ");
         }
+
+        /// <summary>
+        /// A `case' whose `when's are Symbol literals is not one over Strings: a SymbolLiteral is a StringLiteral in the AST, and
+        /// CaseExpression's String dispatch (CaseStringSite) took `when :all' for `when "all"', so `case "all"' ran the :all arm
+        /// (Matrix#each("all") returned instead of raising ArgumentError; round 6's gate). The answers are CRuby's.
+        /// </summary>
+        public void CaseEquals4() {
+            TestOutput(@"
+def k(c) = (case c when :all then 1 when :diagonal then 2 else :none end)
+def m(c) = (case c when :all then 1 when 'all' then 2 else :none end)
+r = nil
+50.times { r = [k(:all), k('all'), k('diagonal'), k(nil), m(:all), m('all'), m('x')] }
+p r
+", @"
+[1, :none, :none, :none, 1, 2, :none]
+");
+        }
     }
 }
