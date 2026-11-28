@@ -4414,6 +4414,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   `instance_method`, `super` from a subclass, `Enumerable.instance_method(:find).bind_call(ary)`);
   a method parked around `h.find { }` on a Hash, which is still Enumerable's and keeps no Proc,
   until its slot gives up (`ParkedScopeSlot.MaxFailures`).
+  Since taken for #downto by perf/permute (2026-11-27, see Landed): with ParkedScopeSlot.Deeper serving each level of a
+  recursion (IR_PARKED_DEPTH), Permute's time went to 0.933 where `[BlockNotKept]` alone was level; #upto stays off.
 
 - **perf/iter (round thirty-seven, 2026-11-26) - a block that holds a block literal reuses its scope
   and the literal's Proc (gaps 13 and 6)** - instructions and bytes, gated 2026-11-27 (round 5's gate entry). A block whose
