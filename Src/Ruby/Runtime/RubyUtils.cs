@@ -39,6 +39,29 @@ namespace IronRuby.Runtime {
     using EvalEntryPointDelegate = Func<RubyScope, object, RubyModule, Proc, object>;
 
     public static class RubyUtils {
+        /// <summary>
+        /// A Float as C's "%-.10g" prints it, which MRI's rb_out_of_long and friends use in "float %s out of range of
+        /// integer": "Inf", "-Inf", "NaN", "3000000000", "9.223372037e+18", "1e+30".
+        /// </summary>
+        public static string/*!*/ FormatFloatG10(double d) {
+            if (Double.IsNaN(d)) {
+                return "NaN";
+            }
+            if (Double.IsInfinity(d)) {
+                return d > 0 ? "Inf" : "-Inf";
+            }
+            if (d == 0) {
+                return (1 / d < 0) ? "-0" : "0";
+            }
+            // the decimal exponent of d rounded to 10 significant digits decides between %e and %f, as in C
+            string e = d.ToString("E9", System.Globalization.CultureInfo.InvariantCulture);
+            int exponent = Int32.Parse(e.Substring(e.IndexOf('E') + 1), System.Globalization.CultureInfo.InvariantCulture);
+            if (exponent < -4 || exponent >= 10) {
+                return d.ToString("0.#########e+00", System.Globalization.CultureInfo.InvariantCulture);
+            }
+            return d.ToString("0." + new string('#', Math.Max(0, 9 - exponent)), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         #region Threads
 
         /// <summary>

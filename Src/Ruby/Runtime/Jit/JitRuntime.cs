@@ -616,7 +616,11 @@ namespace IronRuby.Runtime.Jit {
                 var resolved = Resolve(cls, name, publicOnly);
                 if (!resolved.Found) { return null; }
                 var reader = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo;
-                return (reader != null) ? reader.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, false);
+                if (reader != null) {
+                    // an attr_reader is a C method to TracePoint's :c_call, which a read of the variable would not report
+                    return TracePoint.CCallTracing ? null : reader.InstanceVariableName;
+                }
+                return TrivialAccessorVariable(cls, resolved.Info, false);
             }
 
             /// <summary>
@@ -627,7 +631,10 @@ namespace IronRuby.Runtime.Jit {
                 var resolved = Resolve(cls, name, publicOnly);
                 if (!resolved.Found) { return null; }
                 var writer = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeWriterInfo;
-                return (writer != null) ? writer.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, true);
+                if (writer != null) {
+                    return TracePoint.CCallTracing ? null : writer.InstanceVariableName;
+                }
+                return TrivialAccessorVariable(cls, resolved.Info, true);
             }
 
             /// <summary>

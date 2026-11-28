@@ -2,7 +2,7 @@
 #
 # Regenerates Src/Libraries/Builtins/InternalMethods.Generated.cs: the core methods CRuby
 # itself writes in Ruby (kernel.rb, numeric.rb, ... compiled into the interpreter), with the
-# "<internal:...>" file Method#source_location names for each.
+# "<internal:...>" file and line Method#source_location names for each.
 #
 # Run it with CRuby 4.0 - the oracle - from the root of the source tree:
 #
@@ -27,6 +27,7 @@
 abort "run this with CRuby 4.0, not #{RUBY_ENGINE} #{RUBY_VERSION}" unless RUBY_ENGINE == "ruby" && RUBY_VERSION.start_with?("4.0")
 
 entries = {}
+lines = {}
 signatures = {}
 ObjectSpace.each_object(Module) do |mod|
   name = mod.name
@@ -38,6 +39,7 @@ ObjectSpace.each_object(Module) do |mod|
       next unless location && location[0].start_with?("<internal:")
       next unless owner.instance_method(meth).owner == owner
       entries["#{name}#{sep}#{meth}"] = location[0]
+      lines["#{name}#{sep}#{meth}"] = location[1]
       um = owner.instance_method(meth)
       signatures["#{name}#{sep}#{meth}"] = "#{um.arity}|" + um.parameters.map { |param| param.join(" ") }.join(",")
     end
@@ -54,6 +56,10 @@ out = +<<~HEADER
           internal static readonly Dictionary<string, string>/*!*/ SourceFiles = new Dictionary<string, string> {
 HEADER
 entries.sort.each { |key, file| out << "            { #{key.dump}, #{file.dump} },\n" }
+out << "        };\n\n"
+out << "        // The line of each in that file.\n"
+out << "        internal static readonly Dictionary<string, int>/*!*/ SourceLines = new Dictionary<string, int> {\n"
+lines.sort.each { |key, line| out << "            { #{key.dump}, #{line} },\n" }
 out << "        };\n\n"
 out << "        // Method#arity and #parameters of each, as \"arity|kind name,kind name\".\n"
 out << "        internal static readonly Dictionary<string, string>/*!*/ Signatures = new Dictionary<string, string> {\n"

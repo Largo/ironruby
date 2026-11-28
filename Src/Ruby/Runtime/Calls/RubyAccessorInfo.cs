@@ -84,7 +84,9 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
-            if (!(target is IRubyObject)) {
+            // CRuby's attr methods are C methods, reported as :c_call/:c_return; the dispatcher reports nothing,
+            // so a site bound while c_call is traced takes the rule (switching tracing rebinds every site)
+            if (!(target is IRubyObject) || TracePoint.CCallTracing) {
                 return null;
             } 
             
@@ -105,6 +107,9 @@ namespace IronRuby.Runtime.Calls {
                     AstUtils.Box(args.TargetExpression),
                     AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
                 ));
+                if (TracePoint.CCallTracing) {
+                    metaBuilder.Result = RubyLibraryMethodInfo.AddCallTracing(this, metaBuilder.Result, args, name);
+                }
             }
         }
 
@@ -123,7 +128,9 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
-            if (!(target is IRubyObject)) {
+            // CRuby's attr methods are C methods, reported as :c_call/:c_return; the dispatcher reports nothing,
+            // so a site bound while c_call is traced takes the rule (switching tracing rebinds every site)
+            if (!(target is IRubyObject) || TracePoint.CCallTracing) {
                 return null;
             } 
             
@@ -144,6 +151,9 @@ namespace IronRuby.Runtime.Calls {
                     AstUtils.Convert(args.ContextScopeExpression, typeof(RubyScope)),
                     AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
                 ));
+                if (TracePoint.CCallTracing) {
+                    metaBuilder.Result = RubyLibraryMethodInfo.AddCallTracing(this, metaBuilder.Result, args, name);
+                }
             }
         }
 

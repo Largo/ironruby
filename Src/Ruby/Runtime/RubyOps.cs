@@ -5783,7 +5783,7 @@ namespace IronRuby.Runtime {
             try {
                 return checked((int)value);
             } catch (OverflowException) {
-                throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", value));
+                throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", RubyUtils.FormatFloatG10(value)));
             }
         }
 

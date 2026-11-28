@@ -139,9 +139,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("unbind")]
         public static UnboundMethod/*!*/ Unbind(RubyMethod/*!*/ self) {
+            // a Method made of a `public :m' entry unbinds to the inherited body, owner and all, as MRI's does
             return new UnboundMethod(
                 self.IsMethodMissing ? self.MethodMissingOwner : self.GetTargetClass(),
-                self.Name, self.Info, self.IsMethodMissing
+                self.Name, self.Info.ForwardedBody ?? self.Info, self.IsMethodMissing
             );
         }
 
@@ -185,7 +186,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source_location")]
         public static RubyArray GetSourceLocation(RubyMethod/*!*/ self) {
-            return self.IsMethodMissing ? null : UnboundMethod.GetSourceLocation(self.Info);
+            return self.IsMethodMissing ? null : UnboundMethod.GetSourceLocation(self.Info, self.Name);
         }
 
         [RubyMethod("parameters")]
