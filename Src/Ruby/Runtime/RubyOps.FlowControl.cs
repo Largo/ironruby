@@ -36,17 +36,38 @@ namespace IronRuby.Runtime {
         public static RuntimeFlowControl/*!*/ CreateRfcForMethod(Proc proc) {
             if (proc != null) {
                 if (proc.Kind == ProcKind.Block) {
-                    proc.ConvertAsFrame();
+                    if (HeldMethodBlocksEnabled) {
+                        // The method's scope holds the block, as a light frame's does once it is made (Proc.HeldFlag): reusable
+                        // again if the scope is parked (EndPark), which a method that names its block or calls super never is.
+                        proc.ConvertAsLightFrame();
+                        proc.HoldForScope();
+                    } else {
+                        proc.ConvertAsFrame();
+                    }
                     return proc;
                 }
                 // A block another method passed on (Proc.PassHeldFlag): this method's scope holds it and may keep it, and may pass
-                // it on to a receiver that confirms the pass - which must not make it reusable again.
-                proc.ClearReusable();
+                // it on to a receiver that confirms the pass - which must not make it reusable again. So the scope holds it
+                // (Proc.HeldFlag), which only the parking of this scope releases (EndPark: nothing kept the scope); a method that
+                // names its block or calls super is never parked, and keeps it not reusable for good.
+                if (HeldMethodBlocksEnabled) {
+                    proc.ConfirmPass();
+                    proc.HoldForScope();
+                } else {
+                    proc.ClearReusable();
+                }
             }
             return InactiveRfc;
         }
 
         private static readonly RuntimeFlowControl/*!*/ InactiveRfc = new RuntimeFlowControl();
+
+        /// <summary>
+        /// IR_HELD_METHOD_BLOCKS=0: a Ruby method with a scope converts a literal block for good (ConvertAsFrame), as it did, rather
+        /// than hold it until its scope is parked (see CreateRfcForMethod). A method that evaluates a literal block on every call
+        /// has its scope made at entry since round thirty-seven's perf/literalcode, and its caller could then never park.
+        /// </summary>
+        internal static readonly bool HeldMethodBlocksEnabled = Environment.GetEnvironmentVariable("IR_HELD_METHOD_BLOCKS") != "0";
 
         [Emitted]
         public static void EnterLoop(RubyScope/*!*/ scope) {

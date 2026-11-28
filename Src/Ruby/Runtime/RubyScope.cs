@@ -1674,7 +1674,29 @@ namespace IronRuby.Runtime {
             _definitionName = definitionName;
             _blockParameter = blockParameter;
 
-            InitializeRfc(blockParameter);
+            InitializeMethodRfc(blockParameter);
+        }
+
+        /// <summary>
+        /// InitializeRfc of a method's scope: the literal block given to the call is converted with this scope as its frame, and,
+        /// unless IR_HELD_METHOD_BLOCKS=0, held by it rather than made not reusable for good (Proc.HeldFlag): EndPark releases it
+        /// when it parks the scope, which proves that nothing kept the scope or a Proc of it - and a method that names its block
+        /// or calls super has no parking slot. A method that evaluates a literal block on every call has its scope made at entry
+        /// (perf/literalcode), so a caller that gives it a literal could otherwise never park.
+        /// </summary>
+        private void InitializeMethodRfc(Proc proc) {
+            if (proc != null) {
+                if (proc.Kind == ProcKind.Block) {
+                    InitializeRfc(proc);
+                    if (RubyOps.HeldMethodBlocksEnabled) {
+                        proc.HoldForMethodScope();
+                    }
+                } else if (RubyOps.HeldMethodBlocksEnabled) {
+                    // a block another method passed on: held by this scope as in RubyOps.CreateRfcForMethod
+                    proc.ConfirmPass();
+                    proc.HoldForScope();
+                }
+            }
         }
 
         #region Parked scopes (RubyOps.CreateMethodScopeParked)
@@ -1706,7 +1728,7 @@ namespace IronRuby.Runtime {
                 _activeFlowControlScope = rfc.IsActiveMethod ? rfc : this;
             } else {
                 _activeFlowControlScope = this;
-                InitializeRfc(blockParameter);
+                InitializeMethodRfc(blockParameter);
             }
         }
 

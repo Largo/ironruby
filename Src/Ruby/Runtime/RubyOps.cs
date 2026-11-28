@@ -423,7 +423,7 @@ namespace IronRuby.Runtime {
                 }
                 var methodScope = (RubyMethodScope)scope;
                 // nothing kept the scope (BeginPark) nor a Proc of it (StageParkedProc): nor the block it held (Proc.HeldFlag)
-                methodScope.BlockParameter?.ReleaseHold();
+                methodScope.BlockParameter?.ReleaseHold(methodScope);
                 methodScope.ClearCallState();
                 parked.Scope = methodScope;
                 parked.ThreadId = Environment.CurrentManagedThreadId;
