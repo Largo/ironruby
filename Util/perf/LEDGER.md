@@ -8107,6 +8107,27 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/jiteach (2026-11-28) - a typed body that takes `recv.each { }`, `recv.map { }` and `n.times { }` as a
+  loop: screened, not built.** Chosen from the census of 33818f7 + a22b068, where `MethodCall each` refuses 716
+  methods first and `map` 402, with "alone" counts of 567 and 301. Those counts are the screen's first refusal:
+  it stops at the call and never walks the block, so they say nothing about the block bodies. The step measured
+  them before writing an emitter. A screen-only change (IR_JIT_EACH; JitScreen.WalkCall walked a literal block of
+  at most one plain parameter as a `while` body, `break` and bare `next` the loop's) moved 2 methods off `never`
+  (`HTTPPool#setup_queue`, AWFY's `inner_benchmark_loop`, both `times`). With the block's own locals let in too
+  (the screen's `DefinitionLexicalDepth == _scopeDepth` tests widened to the blocks' depths), 87 of 28,377: never
+  21,724 -> 21,637, every one to `maybe`, none to `compiles`; 3 AWFY methods went the other way (DeltaBlue's
+  `Variable#remove_constraint`, Havlak's `SimpleLoop#add_node` and `#add_child_loop`, maybe -> never, not
+  chased). In AWFY the iterators that matter are not these: the benchmarks iterate over SOM's own `Vector#each`
+  (`each (self)`) and `each_index`, and only `Queens#place_queen` (`times`) and the harness's loop would pass. In
+  app-shapes' run 2 of the 922 methods it called changed, both to `maybe`. What keeps the rest out is inside the
+  blocks: ordinary calls the typed body cannot make (it takes operators, attribute reads, type tests and leaf
+  methods it can inline). An emitter (guarded Array/Integer receiver and unredefined iterator, a loop by index
+  re-reading the length, `break` with its value, `next`, the map result, block-local variables fresh per
+  iteration, the backtrace's `block in` and iterator frames, deopt only before the first effect) would serve
+  about 90 methods at best, so it was not written. Not worth trying again until the typed body can make
+  general calls; the block loop the generic code already runs in place (BlockLoopSite) is what these
+  methods have.
+
 - **perf/stagea (round thirty-seven, 2026-11-28) - stage A of `Docs/block-calling-convention.md`, a narrow
   literal given to a `[BlockNotKept]` iterator as a block descriptor: simulated, not built** (gap 13).
   Before the matrix or the compiler work, the harness (`IronRuby.Tests /blockcost`, now with bytes per
