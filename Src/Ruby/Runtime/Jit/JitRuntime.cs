@@ -524,15 +524,8 @@ namespace IronRuby.Runtime.Jit {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object GetIVar(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
             object value;
-            if (self is RubyObject obj) {
-                var data = obj._instanceData;
-                if (RubyOps.TryReadCached(data, site, out value)) {
-                    return value;
-                }
-                // a raw object's read (RubyInstanceData, "Float locations"), as RubyOps.GetInstanceVariable's
-                if (RubyOps.TryReadCachedRaw(data, site, out value)) {
-                    return value;
-                }
+            if (self is RubyObject obj && RubyOps.TryReadCached(obj._instanceData, site, out value)) {
+                return value;
             }
             return GetIVarUncached(context, self, site);
         }
@@ -960,7 +953,7 @@ namespace IronRuby.Runtime.Jit {
             int count = site.Shape.Count;
             var result = new object[Math.Max(count, obj.ImmediateClass.InstanceVariableCapacity) + 1];
             // born raw if its class's instances get their Floats promoted (RubyInstanceData, "Float locations")
-            result[0] = obj.ImmediateClass.BornRaw ? (site.Shape.RawTwin ?? site.Shape) : site.Shape;
+            result[0] = obj.ImmediateClass.FloatsRaw ? (site.Shape.RawTwin ?? site.Shape) : site.Shape;
             return result;
         }
 
@@ -1188,8 +1181,7 @@ namespace IronRuby.Runtime.Jit {
                     // a race the generic code has too (the rollback would then undo it)
                     log.ReplacedFloat(data, variable.Name, location.Value);
                 } else {
-                    // a raw Integer is logged boxed, as WriteSelfAttr logs it
-                    log.Replaced(data, variable.Name, RubyInstanceData.ValueOf(old));
+                    log.Replaced(data, variable.Name, old);
                 }
                 if (RubyInstanceData.TryWriteFloat(slots, shape, index, value)) {
                     return;
@@ -1207,159 +1199,6 @@ namespace IronRuby.Runtime.Jit {
             }
             // the slots moved under the write: make it again where they are now
             data.SetInstanceVariable(variable.Name, value);
-        }
-
-        // ---- Integer instance variables stored raw (RubyInstanceData, "Float locations") -----------
-        // An Integer the typed code holds as an int or a long is stored raw in an IntLocation as a Float
-        // is in a FloatLocation: GuardInt / GuardLong of GetIVar / ReadSelfAttr become these, which read
-        // a raw Integer without boxing it and deopt on the values the guards deopt on, and a store of an
-        // int or a long is SetIVarLong / WriteAttrLong. IR_RAW_INTS=0: the compiler emits neither.
-
-        /// <summary>GuardLong(GetIVar(...)) without boxing a raw Integer (JitCompiler.GuardIVarRead).</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static long GetIVarLong(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
-            if (self is RubyObject obj) {
-                var data = obj._instanceData;
-                if (data != null) {
-                    object[] slots = data._ivars;
-                    var entry = site.Cache;
-                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        // a box first: a plain object's read is the shape compare and GuardLong's test,
-                        // as before. A location is only ever in a raw array, so its type says it all.
-                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (slot is int) {
-                            return (int)slot;
-                        }
-                        if (slot is IntLocation location) {
-                            return location.Value;
-                        }
-                    }
-                }
-            }
-            return GetIVarLongSlow(context, self, site);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static long GetIVarLongSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
-            // the site's second shape (RubyOps.TryReadCachedLong), then the object read
-            long value;
-            if (self is RubyObject obj && RubyOps.TryReadCachedLong(obj._instanceData, site, out value)) {
-                return value;
-            }
-            return GuardLong(GetIVar(context, self, site));
-        }
-
-        /// <summary>GuardInt(GetIVar(...)) without boxing a raw Integer (JitCompiler.GuardIVarRead).</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int GetIVarInt(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
-            if (self is RubyObject obj) {
-                var data = obj._instanceData;
-                if (data != null) {
-                    object[] slots = data._ivars;
-                    var entry = site.Cache;
-                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (slot is int) {
-                            return (int)slot;
-                        }
-                        // a raw Integer past an Int32 is one the generic code holds as an Int64: GuardInt's deopt
-                        if (slot is IntLocation location && location.Value == (int)location.Value) {
-                            return (int)location.Value;
-                        }
-                    }
-                }
-            }
-            return GetIVarIntSlow(context, self, site);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int GetIVarIntSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
-            long value;
-            if (self is RubyObject obj && RubyOps.TryReadCachedLong(obj._instanceData, site, out value) && value == (int)value) {
-                return (int)value;
-            }
-            return GuardInt(GetIVar(context, self, site));
-        }
-
-        /// <summary>GuardLong(ReadSelfAttr(...)) without boxing a raw Integer (JitCompiler.GuardIVarRead).</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static long ReadSelfAttrLong(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass)) {
-                var data = obj._instanceData;
-                if (data != null) {
-                    object[] slots = data._ivars;
-                    var entry = site.Variable.Cache;
-                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (slot is int) {
-                            return (int)slot;
-                        }
-                        if (slot is IntLocation location) {
-                            return location.Value;
-                        }
-                    }
-                }
-            }
-            return ReadSelfAttrLongSlow(context, self, site);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static long ReadSelfAttrLongSlow(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            long value;
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedLong(obj._instanceData, site.Variable, out value)) {
-                return value;
-            }
-            return GuardLong(ReadSelfAttr(context, self, site));
-        }
-
-        /// <summary>GuardInt(ReadSelfAttr(...)) without boxing a raw Integer (JitCompiler.GuardIVarRead).</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int ReadSelfAttrInt(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass)) {
-                var data = obj._instanceData;
-                if (data != null) {
-                    object[] slots = data._ivars;
-                    var entry = site.Variable.Cache;
-                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (slot is int) {
-                            return (int)slot;
-                        }
-                        if (slot is IntLocation location && location.Value == (int)location.Value) {
-                            return (int)location.Value;
-                        }
-                    }
-                }
-            }
-            return ReadSelfAttrIntSlow(context, self, site);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int ReadSelfAttrIntSlow(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            long value;
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedLong(obj._instanceData, site.Variable, out value)
-                && value == (int)value) {
-                return (int)value;
-            }
-            return GuardInt(ReadSelfAttr(context, self, site));
-        }
-
-        /// <summary>SetIVar of an Integer the body holds as an int or a long.</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void SetIVarLong(RubyContext/*!*/ context, object self, long value, InstanceVariableSite/*!*/ site) {
-            if (self is RubyObject obj && RubyOps.TryWriteCachedLong(obj._instanceData, value, site, obj.ImmediateClass)) {
-                return;
-            }
-            SetIVarUncached(context, self, IntLocation.Box(value), site);
-        }
-
-        /// <summary>WriteAttr of an Integer the body holds as an int or a long.</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void WriteAttrLong(RubyContext/*!*/ context, object self, long value, SelfAttrSite/*!*/ site) {
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryWriteCachedLong(obj._instanceData, value, site.Variable, obj.ImmediateClass)) {
-                return;
-            }
-            WriteAttrUncached(context, self, IntLocation.Box(value), site);
         }
 
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):

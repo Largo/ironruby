@@ -102,8 +102,7 @@ namespace IronRuby.Runtime.Jit {
             // An Integer written as an Int32 and as an Int64 is one Ruby class in two representations: held in one long,
             // and stored through NarrowLong, which boxes a value that fits an Int32 as the Int32 the generic body stores.
             // A Float and an Integer, or a number and an object, are not widened: a Float is stored raw (SetIVarDouble)
-            // and an Integer raw too (SetIVarLong) or boxed, and one typed local cannot say which of the two classes the
-            // variable holds.
+            // and an Integer boxed, and one typed local cannot say which of the two classes the variable holds.
             if (vt == JT.Int && _sinkWide != null && _sinkWide.Contains(name)) {
                 v = Coerce(v, JT.Int, JT.Lng);
                 vt = JT.Lng;
@@ -228,8 +227,6 @@ namespace IronRuby.Runtime.Jit {
                 }
                 storeOf[s] = (s.Type == JT.Dbl)
                     ? Ast.Call(JitRuntime.M("SetIVarDouble"), Ast.Constant(_context), _self, s.Value, site)
-                    : (RawInts && IsInteger(s.Type))
-                    ? Ast.Call(JitRuntime.M("SetIVarLong"), Ast.Constant(_context), _self, Coerce(s.Value, s.Type, JT.Lng), site)
                     : Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(s.Value, s.Type, JT.Obj), site);
             }
             var stores = new List<MSA.Expression>();
@@ -277,7 +274,7 @@ namespace IronRuby.Runtime.Jit {
         /// could read a held-back variable, of self or of an object that is self, and compiles the body without.
         /// </summary>
         private static readonly HashSet<string>/*!*/ _sinkSafeHelpers = new HashSet<string> {
-            "GetIVar", "GetIVarDouble", "GetIVarSpeculateDouble", "GetIVarInt", "GetIVarLong", "GuardInt", "GuardLong", "GuardDouble", "SpeculateDouble", "StringLength", "StringIndex", "StringEqualsLiteral", "StringEqualsString", "CaseString",
+            "GetIVar", "GetIVarDouble", "GetIVarSpeculateDouble", "GuardInt", "GuardLong", "GuardDouble", "SpeculateDouble", "StringLength", "StringIndex", "StringEqualsLiteral", "StringEqualsString", "CaseString",
             // Integer arithmetic that deopts on overflow, a zero divisor or a shift it cannot make
             "AddInt", "SubInt", "MulInt", "DivInt", "ModInt", "ShrInt", "AddLong", "SubLong", "MulLong", "DivLong", "ModLong",
             "ShlLong", "ShrLong", "AbsLong", "MathSqrt",

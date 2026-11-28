@@ -4776,9 +4776,10 @@ t('fl: to Integer by the typed code') { o = FlObj.new; o.sp_fl_put(1.5); [o.get_
 # which keeps the method JIT from compiling `read' here at all.
 
 # ---------------------------------------------------------------- 21. Integer instance variables stored raw
-# As section 19, for an Integer the typed code holds as an int or a long: `@n = i', `@n op= i',
-# `o.n = i' store it into an IntLocation (JitRuntime.SetIVarLong, WriteAttrLong), and its guarded
-# Integer reads (GuardInt, GuardLong) read the location raw. A value past a long is a Bignum, boxed.
+# As section 19, for an Integer the typed code holds as an int or a long. perf/intivar (commit
+# 58013a9, taken out again: Util/perf/LEDGER.md, Rejected) stored it into an IntLocation from
+# `@n = i', `@n op= i' and `o.n = i' and read it raw behind GuardInt and GuardLong; the rows stay
+# for the next attempt. A value past a long is a Bignum, boxed.
 # The writers end with a read: a write that is a method's value is stored boxed, its box returned.
 class InObj
   attr_accessor :w

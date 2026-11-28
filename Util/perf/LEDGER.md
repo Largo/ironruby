@@ -689,6 +689,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    generic read of a raw object is a call (about 3 ns) because putting it into the
    inlined read cost every program 2-4% (see "Caught by the measurement (round
    sixteen)").
+   Round perf/intivar (2026-11-28) stored the Integer variables raw too: rejected, Bounce
+   31% slower and nothing faster by clock (see Rejected).
    Round thirty-eight looked at the 152 MB (see Landed, perf/nbody): 608 bytes per
    `advance`, of which a method scope (160), two Procs (2 x 80) and two BlockParams
    (2 x 48) were made on every call because a block literal with a literal nested in
@@ -1925,7 +1927,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   osr-array, hot-shapes, jit, jit-calls and ivar matrices in every mode and with each switch off:
   PASS; block-scope-reuse-race 10 of 10 as CRuby; spec/core/integer, core/proc and language
   block/yield/break as on the base. Left: the `@count` boxes (an Integer instance variable is held
-  boxed, raw only for Floats) and the locals tuple per scoped call.
+  boxed, raw only for Floats) and the locals tuple per scoped call. (perf/intivar then tried raw Integer variables:
+  rejected; `permute` is not typed code, so they would not have reached `@count` anyway.)
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
@@ -7389,6 +7392,63 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/intivar (/perf-step, 2026-11-28) - Integer instance variables stored raw in the typed
+  code, as Float ones are: Bounce 31% slower by clock, nothing else faster** (switch `IR_RAW_INTS`;
+  the implementation is commit 58013a9, the next commit takes its runtime part out again; on
+  0af3c4f, which is f67ac44 merged with ae0f0c6).
+  - **How common, and what it costs.** AWFY's Integer `@x op= ...` writes: Permute `@count`
+    (in `permute`, which the JIT refuses: `downto`), DeltaBlue `@current_mark` and Towers
+    `@moves_done` (the method's value), Storage `@count`, Havlak `@loop_counter`, Json `@index`,
+    Richards `@hold_count` and `@queue_count` (`queue_packet` refused), Bounce `@x`/`@y` and
+    som.rb's Random#next `@seed`. Only a few are in methods the JIT types: Random#next (values up to
+    65,535, a box per call; Storage calls it per Array), Ball#bounce (positions below the cache),
+    Richards `hold_self`. A write inside a loop is compiled by neither tier ("instance variable write
+    in an outlined loop" for OSR, "a deopt after an effect" for the method JIT), so `while ...;
+    @n += 1; ...; end` stays generic. A GC allocation-tick probe put boxed Int32 at 20% of Permute's
+    ticks, 16% of Richards', 7% of Bounce's, 6% of Queens' (most of them from the generic `+`,
+    not from the write). app-shapes.rb has none (its counters are Hash values); the stdlib has
+    61 `@x += 1` sites. Cost in typed code: `def inc = (@count += 1; nil)` at 5,000 allocates 24
+    bytes per call (the Int32 box; `Ast.Convert`, not the cache, for an int), Random#next 48.
+  - **What it did.** An IntLocation (a long and a cached box) in the raw shapes Float locations use
+    (RubyInstanceData, "Float locations"): SetIVarLong/WriteAttrLong store it, GetIVarInt/Long and
+    ReadSelfAttrInt/Long read it raw and deopt where GuardInt/GuardLong would, ValueOf boxes it for
+    everything else; a typed store over an Int32/Int64 promotes the object and makes its class
+    born raw (RubyClass.FloatsRaw renamed BornRaw), a Bignum stays boxed. A write that is the
+    method's value stays boxed (its box is the return value). Bytes per call
+    (`Util/bench/intivar-shapes.rb`): counter 40 -> 16, Random#next 87 -> 64, `o.w = o.w + 1` 40 -> 16.
+    alloc.rb: Json 26.9 -> 22.2 MB, Richards 0.70 -> 0.65, DeltaBlue 14.5 -> 14.0, Bounce 5.47 -> 6.18
+    (an IntLocation for each new Ball's variable), the rest equal. Then a value the small-integer cache
+    boxes was stored as that box, never as a location (Bounce 38.3 -> 32.7 KB per `benchmark`).
+  - **Why not.** By clock (ab.rb, 5 rounds, against the switch off): counter 0.91, attr 0.89,
+    Random#next 0.93 (overlap); but a generic read of a born-raw object 1.14, a typed write and
+    read of a small value 1.11, Ball#bounce 1.16 (overlap), the control 1.06 (overlap). AWFY, 10
+    alternating rounds of the same build with the switch off and on: **Bounce 36,702 -> 48,136 us
+    (1.31, no overlap)**, DeltaBlue 1.022, Json 1.024, Richards 0.995, Permute 0.998, Queens 1.002
+    (all overlap). Bounce makes 100 Balls an iteration; some get a velocity past the cache, which
+    makes the class born raw, and then every Ball's typed writes take the raw path - under
+    callgrind about 37 instructions more a write: TryWriteCachedLong, TryWriteLong and SetIVarLong
+    are calls, as GetIVar, TryReadCached and GuardInt are (nothing is inlined into the JIT's
+    dynamic methods). Not making a class born raw for an Integer was worse (Bounce 418 -> 819 us
+    an iteration: a Move per Ball, and two shapes at each site). Putting the raw read into the
+    inlined generic `@x` read (as the attr_reader dispatcher has it) is what round sixteen found
+    cost every program 2-4% ("Caught by the measurement (round sixteen)"). So a raw Integer saves a
+    24-byte box (about 3 ns) per typed write past the cache, and costs every other access to the
+    objects of its class more than that.
+  - **What would make it pay**: Integer ivar writes in compiled loops (both tiers refuse them
+    today), and the ivar helpers inlined into the typed code. Then retry from 58013a9.
+  - **Checks** (on the implementation before its last two changes - the inline store of a cached
+    value and `is` back in ValueOf - which were then only timed; all passed, the rows kept): `Util/ivar-matrix.rb` and `Util/jit-matrix.rb`
+    (section 21) Integer rows (cache, Int32, Int64 and Bignum ranges, type changes, identity and
+    hash, YAML, Marshal, inspect, instance_variable_get/set, remove, freeze, dup/clone,
+    make_shareable, binding, a subclass with more variables, promotion with plain and born-raw
+    objects at one site, growth and removal in the raw tree, too complex, two threads) print CRuby's
+    output on the base and on 58013a9; gate-matrices (ivar, jit, jit-calls, jit-scan, loop-exit,
+    osr-array, hot-shapes, marshal, block-loop, parked-scope, struct) in every mode and with
+    `IR_RAW_INTS=0`: PASS; `Util/ivar-stress.rb` (typed Integer updates added to its promotion
+    part) OK four times; spec core/kernel instance_variable_*, instance_variables,
+    remove_instance_variable, dup, clone, freeze, inspect, core/basicobject, core/marshal and
+    language/variables as on the base; IronRuby.Tests (Debug) PASSED.
 
 - **perf/dotsfwd (/perf-frame, 2026-11-27) - `...` forwarding without the rest Array: stopped
   before building, the forwarded values are reachable after the call** (no code; on bbe4b1a,

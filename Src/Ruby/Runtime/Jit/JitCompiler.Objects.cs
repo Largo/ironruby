@@ -1972,10 +1972,6 @@ namespace IronRuby.Runtime.Jit {
                     // a Float stored raw (RubyInstanceData, "Float locations")
                     ? Ast.Call(JitRuntime.M("WriteAttrDouble"), Ast.Constant(_context), receiverTemp, valueTemp,
                         Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true)))
-                    : (RawInts && IsInteger(valueType))
-                    // an Integer stored raw too
-                    ? Ast.Call(JitRuntime.M("WriteAttrLong"), Ast.Constant(_context), receiverTemp, Coerce(valueTemp, valueType, JT.Lng),
-                        Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true)))
                     : Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
                         Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
                 valueTemp
@@ -2201,7 +2197,7 @@ namespace IronRuby.Runtime.Jit {
             switch (t) {
                 case JT.Int: return e;
                 case JT.Lng: return Coerce(e, JT.Lng, JT.Int);
-                case JT.Obj: _canDeopt = true; return GuardIVarRead("GuardInt", e);
+                case JT.Obj: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardInt"), e);
                 default: throw Bail("Array index of type " + t);
             }
         }

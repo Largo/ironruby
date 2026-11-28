@@ -53,57 +53,6 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
-    /// An Integer instance variable stored raw, as <see cref="FloatLocation"/> a Float: see
-    /// RubyInstanceData, "Float locations". It holds an Integer the typed code carries as an int or a
-    /// long; a Bignum is never in one. Only ever in a slot array, never handed out as a value.
-    /// </summary>
-    internal sealed class IntLocation {
-        internal long Value;
-
-        // The box the generic reads last handed out, as FloatLocation's: so that a value read many
-        // times between two raw writes is boxed once. The raw writes never touch it.
-        private object _box;
-
-        internal IntLocation(long value) {
-            Value = value;
-        }
-
-        internal object/*!*/ Boxed {
-            get {
-                long value = Value;
-                if (IsCached(value)) {
-                    // the small-integer cache: what the generic body would have stored
-                    return Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.Int32ToObject((int)value);
-                }
-                object box = Volatile.Read(ref _box);
-                if (box != null && (box is int ? (int)box : (long)box) == value) {
-                    return box;
-                }
-                box = Box(value);
-                Volatile.Write(ref _box, box);
-                return box;
-            }
-        }
-
-        /// <summary>
-        /// A value the small-integer cache has a box for: storing it boxed costs nothing, so it is
-        /// never what makes a location (RubyInstanceData.TryWriteLong).
-        /// </summary>
-        internal static bool IsCached(long value) {
-            return value >= -100 && value < 1000;
-        }
-
-        /// <summary>
-        /// An Integer the typed code holds as a long, as the generic code holds it: an Int32 if it
-        /// fits (JitRuntime.NarrowLong's representation rule), else an Int64.
-        /// </summary>
-        internal static object/*!*/ Box(long value) {
-            return (value >= Int32.MinValue && value <= Int32.MaxValue)
-                ? Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.Int32ToObject((int)value) : (object)value;
-        }
-    }
-
-    /// <summary>
     /// Stores the per-instance data that all Ruby objects need (frozen?, instance_variables, etc)
     /// Stored in a lookaside weak hashtable for types that don't implement IRubyObject (i.e. .NET types).
     /// </summary>
@@ -164,11 +113,7 @@ namespace IronRuby.Runtime {
     ///
     /// A slot may hold a <see cref="FloatLocation"/> instead of a value: a Float stored raw, so that
     /// the typed code of the method JIT and the loop tiers, which carries Floats as doubles, updates
-    /// one without boxing it (JitRuntime.SetIVarDouble and the other *Double helpers). An Integer the
-    /// typed code carries as an int or a long is stored raw the same way, in an <see cref="IntLocation"/>
-    /// (JitRuntime.SetIVarLong and the *Int and *Long reads; IR_RAW_INTS=0 leaves Integers boxed):
-    /// what is said here of a FloatLocation and a Float holds of an IntLocation and an Integer that
-    /// fits a long, and a long field is as atomic as a double one on the platforms named below.
+    /// one without boxing it (JitRuntime.SetIVarDouble and the other *Double helpers).
     ///
     /// Rawness belongs to the shape. Every shape has a raw twin (<see cref="InstanceVariableShape.RawTwin"/>:
     /// same names, same slots, IsRaw), every transition from a raw shape leads to a raw shape, and a
@@ -183,9 +128,8 @@ namespace IronRuby.Runtime {
     /// boxing a location's Float - the same box again while the value has not changed.
     ///
     /// Policy: a typed store promotes the object when it overwrites a slot that already holds a Float
-    /// (an Integer, for an Integer store: the variable is being updated); a store that adds the
-    /// variable or replaces anything else stores a box, so values set once (constructors) never
-    /// cost a Move and a location.
+    /// (the variable is being updated); a store that adds the variable or replaces anything else
+    /// stores a box, so Floats set once (constructors) never cost a Move and a location.
     ///
     /// In a raw array the first raw store into a slot allocates its location and later ones write its
     /// field; every other write stores the value itself, which replaces the location (a type change
@@ -287,13 +231,12 @@ namespace IronRuby.Runtime {
         #region Instance Variables: layout
 
         /// <summary>
-        /// The value a slot holds: the slot itself, or the Float of a <see cref="FloatLocation"/> or the
-        /// Integer of an <see cref="IntLocation"/>, boxed.
+        /// The value a slot holds: the slot itself, or the Float of a <see cref="FloatLocation"/>, boxed.
         /// </summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal static object ValueOf(object slot) {
-            // inlined into every cached read: two exact type checks, and the boxing out of line
-            return (slot is FloatLocation || slot is IntLocation) ? BoxedValueOf(slot) : slot;
+            // inlined into every cached read: a type check, and the boxing out of line
+            return (slot is FloatLocation) ? BoxedValueOf(slot) : slot;
         }
 
         /// <summary>
@@ -307,8 +250,7 @@ namespace IronRuby.Runtime {
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static object BoxedValueOf(object slot) {
-            var location = slot as FloatLocation;
-            return (location != null) ? location.Boxed : ((IntLocation)slot).Boxed;
+            return ((FloatLocation)slot).Boxed;
         }
 
         /// <summary>
@@ -463,7 +405,7 @@ namespace IronRuby.Runtime {
 
                 var slots = new object[s.Length];
                 for (int i = 1; i <= shape.Count; i++) {
-                    // a FloatLocation (IntLocation) is the original's: the copy gets the value boxed
+                    // a FloatLocation is the original's: the copy gets the Float boxed
                     var value = ValueOf(shape, s[i]);
                     var state = value as IPerObjectState;
                     slots[i] = state != null ? state.CopyFor(copy) : value;
@@ -702,7 +644,7 @@ namespace IronRuby.Runtime {
                 if (s.Length == 1) {
                     // the first variable: nothing to copy, nobody writing
                     Debug.Assert(index == 1);
-                    if (hintClass != null && hintClass.BornRaw) {
+                    if (hintClass != null && hintClass.FloatsRaw) {
                         // born raw: its class's instances get their Floats promoted
                         next = next.RawTwin ?? next;
                     }
@@ -782,8 +724,8 @@ namespace IronRuby.Runtime {
                 // born raw if and only if its class's instances get their Floats promoted: the site's
                 // Next may be of either tree, since a site sees the instances of several classes
                 var next = entry.Next;
-                if (ownerClass != null && ownerClass.BornRaw != next.IsRaw) {
-                    next = (ownerClass.BornRaw ? next.RawTwin : next.PlainTwin) ?? next;
+                if (ownerClass != null && ownerClass.FloatsRaw != next.IsRaw) {
+                    next = (ownerClass.FloatsRaw ? next.RawTwin : next.PlainTwin) ?? next;
                 }
                 first[0] = next;
                 first[1] = value;
@@ -826,12 +768,12 @@ namespace IronRuby.Runtime {
             RubyClass ownerClass) {
             Debug.Assert(!shape.IsRaw);
             if (GetSlot(s, index) is double) {
-                var raw = TryPromote(s, shape, index, new FloatLocation(value));
+                var raw = TryPromote(s, shape, index, value);
                 if (raw != null) {
-                    if (ownerClass != null && !ownerClass.BornRaw) {
+                    if (ownerClass != null && !ownerClass.FloatsRaw) {
                         // its later instances are born raw and need no Move (a Move's process-wide
                         // barrier costs a few hundred ns)
-                        ownerClass.BornRaw = true;
+                        ownerClass.FloatsRaw = true;
                     }
                     return raw;
                 }
@@ -840,73 +782,6 @@ namespace IronRuby.Runtime {
             }
             SetSlot(s, index, value);
             return (ShapeOf(s) == shape) ? shape : null;
-        }
-
-        /// <summary>
-        /// <see cref="TryWriteFloat"/> of an Integer the typed code holds as a long (an int widened):
-        /// into the variable's <see cref="IntLocation"/>, or a new one - unless the slot has none and the
-        /// value is one the small-integer cache boxes, which is stored boxed: a short-lived object whose
-        /// variables stay small (AWFY's Bounce makes thousands) would pay a location for nothing.
-        /// </summary>
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-        internal static bool TryWriteLong(object[]/*!*/ slots, object shape, int index, long value) {
-            Debug.Assert(((InstanceVariableShape)shape).IsRaw);
-            var location = GetSlot(slots, index) as IntLocation;
-            if (location != null) {
-                location.Value = value;
-            } else {
-                SetSlot(slots, index, IntLocation.IsCached(value)
-                    ? Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.Int32ToObject((int)value) : new IntLocation(value));
-            }
-            return ShapeOf(slots) == shape;
-        }
-
-        /// <summary>
-        /// <see cref="TryWriteFloatPlain"/> of an Integer the typed code holds as a long: a slot that
-        /// holds an Integer already (an Int32 or an Int64, not a Bignum) gets its object promoted when the
-        /// value would need a box of its own (see <see cref="TryWriteLong"/>), every other one gets the
-        /// Integer boxed as the generic code boxes it.
-        /// </summary>
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        internal InstanceVariableShape TryWriteLongPlain(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, long value,
-            RubyClass ownerClass) {
-            Debug.Assert(!shape.IsRaw);
-            object old = GetSlot(s, index);
-            if ((old is int || old is long) && !IntLocation.IsCached(value)) {
-                var raw = TryPromote(s, shape, index, new IntLocation(value));
-                if (raw != null) {
-                    if (ownerClass != null && !ownerClass.BornRaw) {
-                        ownerClass.BornRaw = true;
-                    }
-                    return raw;
-                }
-                return null;
-            }
-            SetSlot(s, index, IntLocation.Box(value));
-            return (ShapeOf(s) == shape) ? shape : null;
-        }
-
-        /// <summary>
-        /// The Integer a slot holds - raw in an <see cref="IntLocation"/> or boxed as an Int32 or an
-        /// Int64 - for the typed code's reads; false if it holds anything else (a Bignum included).
-        /// </summary>
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-        internal static bool TryReadLong(object slot, out long value) {
-            var location = slot as IntLocation;
-            if (location != null) {
-                value = location.Value;
-                return true;
-            }
-            if (slot is int) {
-                value = (int)slot;
-                return true;
-            }
-            if (slot is long) {
-                value = (long)slot;
-                return true;
-            }
-            value = 0;
-            return false;
         }
 
         private static int _Promotions;
@@ -922,14 +797,14 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Makes the object raw: a Move (under lock(this), the old array retired as for any Move) to a
         /// new array whose element 0 is the raw twin of <paramref name="shape"/>, the slots copied after
-        /// the barrier and <paramref name="location"/> (a new FloatLocation or IntLocation) stored at
-        /// <paramref name="index"/> before the array is published. A FloatLocation is therefore never in an array
+        /// the barrier and <paramref name="value"/> stored at <paramref name="index"/> in a new
+        /// FloatLocation before the array is published. A FloatLocation is therefore never in an array
         /// whose element 0 is not raw: a reader of the old array sees the old shape and the old values,
         /// and a writer that stored into the old array is copied or meets Moved and redoes its write.
         /// Null if it did not happen: no raw twin, or <paramref name="s"/> is not the current array of
         /// that shape any more.
         /// </summary>
-        private InstanceVariableShape TryPromote(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, object/*!*/ location) {
+        private InstanceVariableShape TryPromote(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, double value) {
             var raw = shape.RawTwin;
             if (raw == null) {
                 return null;
@@ -940,7 +815,7 @@ namespace IronRuby.Runtime {
                 }
                 var slots = new object[s.Length];
                 Array.Copy(s, 1, slots, 1, shape.Count);
-                slots[index] = location;
+                slots[index] = new FloatLocation(value);
                 slots[0] = raw;
                 if (!Publish(s, slots)) {
                     throw Assert.Unreachable;

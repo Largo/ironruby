@@ -1,6 +1,6 @@
-# Integer instance variables stored raw (perf/intivar; RubyInstanceData, "Float locations"): what the
-# typed code's writes and reads of an Integer variable cost, and what raw storage costs the generic
-# code that reads the same objects. Format of Util/perf/ab.rb: `<shape> <ns> ns <checksum>` per shape;
+# Integer instance variables stored raw (perf/intivar, commit 58013a9, taken out again: Util/perf/LEDGER.md,
+# Rejected): what the typed code's writes and reads of an Integer variable cost, and what raw storage
+# costs the generic code that reads the same objects. IR_RAW_INTS exists only in that commit. Format of Util/perf/ab.rb: `<shape> <ns> ns <checksum>` per shape;
 # shape names as arguments, N from the environment. BYTES=1 (IronRuby only): bytes allocated per
 # operation instead of ns. INSTR=1 (ab.rb -i): instructions per operation as well.
 #

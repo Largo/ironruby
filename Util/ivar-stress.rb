@@ -67,7 +67,7 @@ class PBase
   def ga = @a
   def gb = @b
   def setb(d) = (@b = d * 1.0)
-  def setbi(i) = (@b = i + 1; nil)           # an Integer stored raw (perf/intivar)
+  def setbi(i) = (@b = i + 1; nil)           # a typed Integer store (perf/intivar stored it raw)
 end
 def p_upd(o) = (o.a = o.a + 1.0)
 def i_upd(o) = (o.a = o.a + 1; nil)

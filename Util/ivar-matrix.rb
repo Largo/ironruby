@@ -170,9 +170,10 @@ t("fl promote: dup, clone, Marshal of raw objects") do
 end
 
 # ---------------------------------------------------------------- Integer variables stored raw
-# The method JIT stores an Integer it holds as an int or a long raw (RubyInstanceData, "Raw
-# locations"), as it does a Float: a counter's `@n += 1' then updates the variable in place. An
-# Integer past a long, or anything else, is stored boxed, and nothing below may tell the two apart.
+# perf/intivar stored an Integer the method JIT holds as an int or a long raw, as a Float is
+# (commit 58013a9; taken out again, Util/perf/LEDGER.md, Rejected): a counter's `@n += 1' then
+# updated the variable in place. An Integer past a long, or anything else, was stored boxed, and
+# nothing below may tell the two apart. The rows stay for the next attempt.
 # (The writers end with a read: a write that is a method's value is stored boxed, its box returned.)
 
 class InRaw
