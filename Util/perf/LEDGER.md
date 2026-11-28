@@ -1444,6 +1444,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `Vector#each` costs 3-4% more instructions per call than the scope-ful one did.
     Round forty-two took the first of those (see Landed, perf/namedblock): a block that a
     method only passes on stays reusable. Havlak 1.33 -> 1.17 GB an iteration.
+    Round forty-three found both undone by round thirty-seven's perf/literalcode, merged
+    with them: it takes a method that evaluates a literal block on every call out of light
+    frames (`Vector#each`, `has_some` and their callers), and a method with a scope converted
+    its caller's literal for good, so at fcbc67b Havlak was back at 1.70-1.79 GB. Now a
+    method's scope holds the block as a light frame's does (see Landed, perf/heldrfc):
+    1.18 GB.
 26. **Start-up: `gem` and `irb` answer in 0.7 to 2.2 s, CRuby in 0.1 to 0.2** (the one
     thing that has to stay fast while the tiers stay on by default, and it is not fast).
     2026-11-18, a7060a27, the ReadyToRun host (`IR_CONFIG=R2R`, what `ir.sh` runs when
@@ -2026,6 +2032,43 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
+
+- **perf/heldrfc 708f407 (round forty-three, 2026-11-28) - a method's scope holds its caller's literal
+  block until it is parked (gap 25)** - not gated. At fcbc67b (rounds seven and eight merged) Havlak
+  allocated 1.79 GB an iteration again, method scopes 24% and Procs 13% as before perf/havlakalloc: round
+  thirty-seven's perf/literalcode (`2eda4af`, "a body that evaluates a literal block on every call is not a
+  light frame") made `Vector#each`, `has_some` and every method that calls them with a literal methods
+  with a scope made at entry (`IR_LIGHT_FRAMES=why`: "body needs its scope after the rewrite"), and a method
+  with a scope converted its caller's literal for good - not at the call site's CreateRfcForMethod, which
+  these calls do not go through, but in the scope's own InitializeRfc (Kind = Proc, the scope its frame,
+  never inactive again). Found by the GC allocation-tick probe and by printing what refused each park.
+  Now a method's scope converts the literal as before but marks it reusable and held
+  (`RubyMethodScope.InitializeMethodRfc`, `Proc.HoldForMethodScope`; CreateRfcForMethod likewise), and
+  EndPark releases the hold and drops the Proc's frame when it parks the scope (`Proc.ReleaseHold(scope)`)
+  - perf/havlakalloc's proof, which holds for a method with a scope as for a light frame: a method that
+  names its block or calls super has no parking slot, and parking means nothing captured the scope nor kept
+  a Proc of it. A block another method passed on (perf/namedblock) that reaches a method with a scope is
+  held by it the same way instead of being cleared for good. Switch: IR_HELD_METHOD_BLOCKS=0.
+  Census (Src/StdLib + AWFY, 28,378 methods): 0 methods changed - light frames 82.7%, JIT compiles 12.0%,
+  maybe 11.5%, never 76.6% on both (a runtime change); perf/literalcode had taken light frames from 94.7%.
+  Bytes (alloc.rb against 2e96b84, perf/namedblock merged with fcbc67b): Havlak 1,697,532,242 ->
+  1,180,852,612 (0.70), DeltaBlue 14,605,880 -> 9,664,089 (0.66), Towers 135 -> 15 KB, the rest level;
+  geomean 0.808. Per call (probe): callers of `Vector#each` 383 -> 135 B, of `SomSet#each` 382 -> 134,
+  of `contains` 414 -> 166, `find_set` 470 -> 222. Time, ten alternating AWFY processes each (a run or two
+  of Havlak gave no figure), medians: against the base Havlak 0.961, DeltaBlue 0.972, CD 1.010 (ranges
+  overlapping); in one tree with the switch off and on Havlak 0.934.
+  Checks: Util/held-block-matrix.rb's callees are methods with a scope now, and it catches a release
+  without the proof (the hold released when a callee fails to park: three rows wrong, a kept binding's
+  `yield` meeting a parked caller); a hold that is only a reuse flag is not caught there, since the
+  Proc's frame (the callee's scope) keeps it active until the park in that path. held-block,
+  passed-block, parked-scope, block-pass, block-given, nested-proc, jit-blockparam, light-entry,
+  hot-shapes, block-scope-reuse, super-light, loop-exit in the gate's six modes and
+  IR_HELD_METHOD_BLOCKS=0: 84 same. ruby/spec language/block, yield, break, send, def, core/proc,
+  core/binding, core/kernel/block_given: as on the base (send's one known `into`/`to` error on both).
+  IronRuby.Tests, Debug net10.0: 1,424 tests, none failed or flaky, as on the base. No AWFY benchmark fails.
+  For the gate: perf/literalcode and perf/havlakalloc were each measured without the other; with this
+  they compose (a method with a scope made at entry, parked, whose callers park too). The frame a held
+  Proc keeps until the park (its converter, the callee's scope) is dropped only by that scope's park.
 
 - **perf/namedblock 4e87b11 977e047 (round forty-two, 2026-11-28) - a named block that a method only
   passes on stays reusable (gap 25)** - not gated. `def each(&b) = @items.each(&b)` (som.rb's `SomSet#each`,
