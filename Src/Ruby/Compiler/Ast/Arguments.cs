@@ -60,7 +60,18 @@ namespace IronRuby.Compiler.Ast {
 
         #region Transform to Call/Yield Expression
 
+        // A `**' among the arguments (see RubyCallFlags.HasRuby2KeywordsSplat).
+        private bool HasKeywordSplat() {
+            foreach (var expression in _expressions) {
+                if (expression is KeywordArgumentSplat) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         internal void TransformToCall(AstGenerator/*!*/ gen, CallSiteBuilder/*!*/ siteBuilder) {
+            siteBuilder.HasExplicitKeywords = HasKeywordSplat();
             bool fresh;
             siteBuilder.SplattedArgument = TransformToCallInternal(gen, siteBuilder, out fresh);
             siteBuilder.SplattedArgumentIsFresh = fresh;
@@ -69,6 +80,12 @@ namespace IronRuby.Compiler.Ast {
         internal MSA.Expression/*!*/ TransformToYield(AstGenerator/*!*/ gen, MSA.Expression/*!*/ bfcVariable, MSA.Expression/*!*/ selfExpression) {
             var args = new List<MSA.Expression>();
             var splatted = TransformToCallInternal(gen, args, out _);
+            // `yield(*args)' makes a ruby2_keywords hash ending the list keyword arguments again, as a call's splat does
+            // (RubyCallFlags.HasRuby2KeywordsSplat) - and as there, not when a `**' is given as well (CRuby 4.0). It did not,
+            // and a block taking `*a, **k' got the marked hash in a.
+            if (splatted != null && !HasKeywordSplat()) {
+                splatted = Methods.SplatRuby2Keywords.OpCall(AstUtils.Convert(splatted, typeof(IList)));
+            }
             // `yield x, **h': whether x may be auto-splatted depends on h being given at all (RubyOps.YieldKeywordSplat1)
             if (args.Count == 1 && _expressions.Length == 2 && _expressions[1] is KeywordArgumentSplat) {
                 return Methods.YieldKeywordSplat1.OpCall(

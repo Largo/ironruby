@@ -621,11 +621,14 @@ namespace IronRuby.Builtins {
             // MRI 1.9.2 doesn't do so though (see http://redmine.ruby-lang.org/issues/show/3792).
 
             // the block a symbol proc is called with goes on to the method it invokes:
-            // [1, 2].map(&:foo) { ... } passes the block through to #foo
+            // [1, 2].map(&:foo) { ... } passes the block through to #foo. Keywords too: the proc keeps them in its rest list as a
+            // marked hash (Ruby2Keywords, below), which this site makes keywords again, as a Ruby splat site does - the one site
+            // a library method makes that does (RubyCallFlags.HasRuby2KeywordsSplat).
             var site = CallSite<Func<CallSite, object, object, Proc, object, object>>.Create(
                 RubyCallAction.Make(
                     scope.RubyContext, methodName,
-                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
+                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock |
+                        RubyCallFlags.HasRuby2KeywordsSplat)
                 )
             );
 

@@ -2191,6 +2191,124 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
   base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
 
+- **perf/kwbind (/perf-step, 2026-11-28) - a `**rest` parameter is the call's own keyword hash, the
+  declared keywords taken out in place** (gap 38; switch `IR_KWREST_TAKE`, on unless `=0`). Built on
+  33818f7 (claude/happy-gauss-95wm2j) with d45083a0 merged.
+  - **Profile** (clock, Release, ns; CRuby in brackets): `def kopt(k: 0)` called `(k: 1)` 44 [30],
+    `def kreq(k:)` 44 [31] - the method JIT takes both, and what is left is the call (`pos(1)` 40
+    [27]); so a declared-keywords-only callee already reads the call's pairs without paying for
+    them, and the round's first candidate has nothing to win. A callee with `**o` is what pays:
+    `krest(k:, **o)` 165 [80], `onlyrest(**o)` 155 [89] - the JIT's screen rejects them
+    (KeywordArgumentsTest; JitKeywords leaves out a Match that accepts a rest). Of `onlyrest`'s
+    155: the caller's keyword hash ~43 (`poh({k: 1})` 83 against `pos` 40), the callee ~72 - its
+    prologue, and RubyOps.MakeKeywordRest's copy of the hash without the declared keywords.
+  - **What changed.** MakeKeywordRest takes the call's hash itself when it is one a keyword call
+    made (marked, a plain Hash, not frozen, no bucket array yet - CreateKeywordArguments' layout):
+    Hash.TryRemoveKeywordsInPlace slides the undeclared entries down over the declared ones, and the
+    marks come off. Every marked hash is made for one call (MakeKeywordArgumentsHash, `**h`'s copy,
+    the ruby2_keywords copies, a library's own; probed: a hash a library method stores, `[].push(k:
+    1)`, comes out unmarked), and the prologue has read the declared keywords before it binds the
+    rest, so nothing else sees the hash change. PassOnKeywordRest already copies when rest is the
+    given hash (zsuper), and eval('super') reads rest.
+  - **Clock** (`ab.rb -r 8`, ns; CRuby / `IR_KWREST_TAKE=0` / on): `krest(k: 1)` 66.6 / 143.7 /
+    108.0 (0.75), with an extra key 83.7 / 154.9 / 120.0 (0.77), `onlyrest(k: 1)` 76.6 / 140.0 /
+    99.7 (0.71), `krest_u` (reads o) 72.3 / 147.4 / 127.9 (0.87, overlapping); the controls
+    unchanged within their spreads.
+  - **Checks.** IronRuby.Tests Method_KeywordRestTakeover1 (CRuby 4.0's output: the caller's `**h`
+    untouched, each call's own o, send, Method#call, a proc, zsuper and eval('super') after o
+    changed, default and compare_by_identity kept, a frozen `**h`, no keywords, non-Symbol keys).
+    New rows in Util/kwsplat-forward-matrix.rb (the same, plus method_missing, define_method,
+    ruby2_keywords). kwsplat-forward, keyword-light, keyword-rest-light, kw-prologue, splat-pass,
+    kwrest-call, light-entry and hot-shapes: same as CRuby in default, `IR_KWREST_TAKE=0`,
+    `IR_LIGHT_KEYWORD_SPLAT=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` (48 of
+    48). Specs language/keyword_arguments, def, send, super, method, core/hash and
+    core/kernel/send as on the base build. IronRuby.Tests in full (Debug): PASSED, 1,418.
+  - **Left.** Still ~1.5x CRuby: the caller's keyword hash, and the interpreted prologue of a
+    method the JIT declines. Next: let JitKeywords take a Match that accepts a rest, binding the
+    rest with the same take-over.
+
+- **perf/kwsplatlight (/perf-frame, 2026-11-28) - `f(k: v, **h)` and `f(**a, **b)` in light frames;
+  a Struct stores a ruby2_keywords Hash as given** (switch `IR_LIGHT_KEYWORD_SPLAT`, which already
+  covered the lone `f(**h)`). Built on 33818f7 (claude/happy-gauss-95wm2j) with 78a731ca merged;
+  RubyCallFlags.HasRuby2KeywordsSplat moved to 8192 (FlagsCount 14) beside round 7's HasMatchSink.
+  - **Census** (`Util/perf/census.rb -d`, Src/StdLib and Util/bench, 29,102 methods): light frames
+    27,997 -> 28,017 (+20), every one refused before for `KeywordSplatMerge` (Pathname#glob,
+    File.binwrite, Exception.__detailed__, mkmf's try_*, optparse's getopts, Prism's desugar
+    compilers, Tempfile.create, Net::IMAP...); JIT verdicts unchanged; no method still refused
+    for it first.
+  - **Why it was refused.** IsScopeFree had no case for the node the bridge makes of a `**h`
+    beside other keywords (KeywordSplatMerge), and its helpers (RubyOps.MergeKeywordSplat,
+    MergeKeywordHash) take the scope - for its runtime only, as the lone splat's helpers do, which
+    IR_LIGHT_KEYWORD_SPLAT already let through. Now the node is scope-free when its parts are (the
+    temporaries are locals; the `hash.merge(h || {})` that converts anything but a Hash or nil is
+    a call like any other), and the two helpers are in the rewriter's runtime-only list.
+  - **Clock** (`ab.rb -r 8`, Release, ns; CRuby / `IR_LIGHT_KEYWORD_SPLAT=0` / on): `g(k: 1, **o)`
+    188 / 419 / 370, with no keywords 153 / 292 / 252, `g(**o, **o)` 212 / 429 / 377,
+    `g(k: a, **o)` 200 / 424 / 380; `def w(**o) = g(**o)` (light already; the switch turns it
+    off too) 148 / 344 / 304, empty 160 / 202 / 163. Still twice CRuby: the merge's hash and the
+    callee's `k:, **o` binding, not the frame.
+  - **Struct.** `Struct.new(:x, :y).new(1, h)`, h ruby2_keywords-marked: a Hash value goes to
+    the prelude's __struct_initialize_slow__, whose `__struct_initialize__(*args)` made it
+    keywords (a copy) - a Ruby splat without `**` (RubyCallFlags.HasRuby2KeywordsSplat). Its three
+    stores splat with `**nil` now, which passes nothing and leaves the values as they came, as
+    MRI's C rb_struct_initialize_m does. IronRuby.Tests Struct_Ruby2KeywordsHash1 (CRuby's
+    output).
+  - **Not done.** An empty `**e` with a default gives a `**k` callee `{}`; CRuby gives it a dup
+    of e (default 7), through procs and send too but not Method#call. IronRuby passes nothing for
+    any empty `**`; matching needs an empty keyword hash that every binder drops for a callee
+    without `**k` - not a contained change.
+  - **Checks.** kwsplat-forward (new rows: merged keywords, `**nil` and to_hash in a merge,
+    non-Symbol keys, keys with a Ruby #hash, deep recursion, errors in a merge's operand),
+    keyword-light, keyword-rest-light, splat-pass, kwrest-call, anon-forward, block-pass,
+    light-entry, hot-shapes, struct and hash-struct matrices: same as CRuby in default,
+    `IR_LIGHT_KEYWORD_SPLAT=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`, and
+    `IR_KWSPLAT_BY_REFERENCE=0` but for its known row. A backtrace probe showed IronRuby's top
+    frame for a #to_hash TypeError in a merge is Hash#merge (CRuby: the method) in every mode,
+    frames off too - before this change as well; the row checks the method is in the backtrace.
+    Specs language/keyword_arguments, send, def, super and core/struct as on the base build.
+    IronRuby.Tests in full (Debug): PASSED, 1,417 tests.
+
+- **perf/r2kflag (2026-11-28) - a ruby2_keywords hash stays positional at a call with an explicit
+  `**`, and at a library method's own call; `yield(*args)` makes it keywords; `**h` passes a dup**
+  (correctness, no switch). Built on aa82bf28 (claude/perf-lsite, which has f67ac44).
+  - **What CRuby 4.0 does.** A marked hash ending a splatted list is made keywords only at a
+    splat in Ruby source with no `**` (vm_caller_setup_arg_splat, a call without kw_splat):
+    `g(*a, **{})`, `g(*a, **nil)`, `super(*a, **{})` keep it positional, the same object with its
+    mark, and a C method passing its arguments on (Class#new to #initialize, a Method's proc,
+    Kernel#send, Proc#call) passes them as they came. `yield(*args)` converts as `f(*args)` does.
+    `**h` alone gives the callee a dup of h: its default, default proc and compare_by_identity
+    come along, to a `**r` (minus the declared keywords) and to a positional parameter alike.
+  - **What IronRuby did.** Every splatted call converted the marked hash (MetaObjectBuilder.
+    AddSplattedArgumentTest, ArgsBuilder, RubyOverloadResolver, RubyMethodGroupBase,
+    LibraryDispatcher), library sites included; `yield(*args)` never did (a block taking
+    `*a, **k` got the hash in `a`; language/keyword_arguments' "yield(*ruby2_keyword_args)"
+    passed only because the lambda's own `target(*args, **kwargs)` converted it - wrongly); and
+    KeywordSplatArgument's copy dropped the default, default proc and identity comparison.
+  - **What changed.** RubyCallFlags.HasRuby2KeywordsSplat (4096; FlagsCount 13): set by
+    CallSiteBuilder on a splat site with no `**` among its arguments, read wherever the mark was
+    turned back into keywords - a compile-time property of the site, so the rules decide it and
+    no call pays for it (LibraryDispatcher keeps it in a field for ExpandSplat). Library-made
+    sites never set it, but Symbol#to_proc's. SuperCall's two keyword sites pass explicitly. Arguments.TransformToYield
+    converts the splat of a yield without `**` (RubyOps.SplatRuby2Keywords). Hash.
+    TryCopyAsKeywordArguments and KeywordSplatArgument's general copy keep the default, default
+    proc and comparer.
+  - **Checks.** IronRuby.Tests Method_Ruby2KeywordsExplicitSplat1 (CRuby 4.0's output; fails on
+    the base build). Util/kwsplat-forward-matrix.rb: its three rows that differed now match, and
+    new rows for yield, Method#to_proc, Class#new and send; with the splat, keyword and forwarding
+    matrices in every mode: same as CRuby (the one difference is `IR_KWSPLAT_BY_REFERENCE=0`'s known row). Specs language/keyword_arguments, send, def, super, method,
+    block, yield and core/kernel/send, core/module/ruby2_keywords, core/hash/ruby2_keywords_hash,
+    core/struct/new, core/method/to_proc, core/proc/ruby2_keywords as before. IronRuby.Tests in
+    full (Debug): PASSED, 1,403 tests. SymbolProcKeywords1 caught one library site that does convert:
+    Symbol#to_proc's (Proc.CreateMethodInvoker), whose proc keeps keywords marked in its rest list.
+  - **Clock** (`ab.rb -r 10`, Release, base aa82bf28): splat-shapes, delegate-shapes (`N=1000000`)
+    and yield splats (`yield(*a)` 65.7 / 67.6 ns, `yield(*a, **k)` 108.0 / 106.6) unchanged within
+    their spreads; no instruction counter in this container.
+  - **Left.** `Struct.new(:x, :y).new(1, h)` stores a copy of a marked h even without a splat
+    (StructOps; CRuby stores h). An empty `**e` with a default gives a `**k` callee `{}`, where
+    CRuby gives a dup of e (default 7). `f(*a, k: 1, &g)`: the call convention passes one
+    trailing list, so `[*a, kw]` is built before the block's #to_proc either way - one array,
+    nothing to gain; only a #to_proc that changes `a` could tell.
+
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,
   perf/arymin, perf/rescuelight and perf/splatpos with castcheck's, nilblock's and dotsfwd's findings,

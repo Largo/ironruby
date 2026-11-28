@@ -121,7 +121,7 @@ namespace IronRuby.Runtime.Calls {
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
             if (Context == null ||
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasFreshSplat | RubyCallFlags.HasLightScope | RubyCallFlags.HasMatchSink)) != 0 ||
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasFreshSplat | RubyCallFlags.HasLightScope | RubyCallFlags.HasMatchSink | RubyCallFlags.HasRuby2KeywordsSplat)) != 0 ||
                 Signature.HasSplattedArgument && Signature.HasRhsArgument) {
                 return null;
             }
@@ -378,7 +378,7 @@ namespace IronRuby.Runtime.Calls {
 
         private const RubyCallFlags SharableCallFlags = RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasRhsArgument |
             RubyCallFlags.HasBlock | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSourceBlock |
-            RubyCallFlags.HasLightScope | RubyCallFlags.HasFreshSplat;
+            RubyCallFlags.HasLightScope | RubyCallFlags.HasFreshSplat | RubyCallFlags.HasRuby2KeywordsSplat;
 
         private static readonly object _SharedRulesLock = new object();
         private SharedRule[] _sharedRules;

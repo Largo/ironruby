@@ -448,7 +448,8 @@ namespace IronRuby.Runtime.Calls {
                 var list = args.GetSplattedArgument();
                 keywords = (list.Count > 0) ? list[list.Count - 1] as Hash : null;
                 // a hash a ruby2_keywords method carries is turned back into keywords when splatted:
-                if (keywords == null || !keywords.IsKeywordArguments && !keywords.IsRuby2KeywordsHash) {
+                // (at a splat written in Ruby without a `**' only: RubyCallFlags.HasRuby2KeywordsSplat)
+                if (keywords == null || !keywords.IsKeywordArguments && !(keywords.IsRuby2KeywordsHash && args.Signature.HasRuby2KeywordsSplat)) {
                     return null;
                 }
             } else {
@@ -590,7 +591,7 @@ namespace IronRuby.Runtime.Calls {
                 var splatted = _args.GetSplattedMetaArgument();
                 int listLength;
                 _list = (IList)splatted.Value;
-                _metaBuilder.AddSplattedArgumentTest(_list, splatted.Expression, out listLength, out _listVariable);
+                _metaBuilder.AddSplattedArgumentTest(_list, splatted.Expression, _args.Signature.HasRuby2KeywordsSplat, out listLength, out _listVariable);
                 hash = (Hash)_list[listLength - 1];
             } else {
                 hash = (Hash)_args.GetSimpleArgument(_args.SimpleArgumentCount - 1);
@@ -731,7 +732,7 @@ namespace IronRuby.Runtime.Calls {
                     listVariable = splatTestedListVariable;
                     listLength = list.Count;
                 } else {
-                    metaBuilder.AddSplattedArgumentTest(list, splatted.Expression, out listLength, out listVariable);
+                    metaBuilder.AddSplattedArgumentTest(list, splatted.Expression, args.Signature.HasRuby2KeywordsSplat, out listLength, out listVariable);
                 }
                 listLength -= keywordArgumentCount;
 

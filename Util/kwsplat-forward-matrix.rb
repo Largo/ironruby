@@ -8,9 +8,9 @@
 #   IR_LIGHT_FRAMES=0 ./ir.sh Util/kwsplat-forward-matrix.rb > scoped.txt
 #   diff mri.txt on.txt && diff mri.txt scoped.txt
 #
-# Three probes differ from CRuby 4.0 on builds before and after this change and are kept to show it: a `**' copy loses
-# the hash's default proc, and a ruby2_keywords hash ends the list before an explicit empty `**' (CRuby passes it
-# positionally, flag and all; IronRuby's call sites take it as keywords whenever it is the last item splatted).
+# The ruby2_keywords probes and the default-proc one differed from CRuby 4.0 until a call with an explicit `**' stopped
+# making a marked hash keywords (RubyCallFlags.HasRuby2KeywordsSplat) and `**h' passed a dup of h (RubyOps.
+# KeywordSplatArgument).
 #
 # Each probe runs 3000 times (interpreted, then compiled) and prints every distinct answer once.
 
@@ -135,3 +135,65 @@ class SupE3 < SupP; def m(*, **) = [1].map { eval('super') }.first; end
 t("eval('super') from (a, *, d:)") { |i| SupE.new.m(1, 2, 3, d: 4) }
 t("eval('super') from (*, **)") { |i| i.even? ? SupE2.new.m(1, 2, k: 3) : SupE2.new.m }
 t("eval('super') in a block from (*, **)") { |i| SupE3.new.m(1, k: 2) }
+def y_splat(args) = yield(*args)
+def y_splat_kw(args) = yield(*args, **{})
+t("yield(*args) with a ruby2_keywords hash") { |i| y_splat([1, Hash.ruby2_keywords_hash({k: i % 2})]) { |*x, **k| [x, k] } }
+t("yield(*args, **{}) keeps it positional") { |i| r = y_splat_kw([1, Hash.ruby2_keywords_hash({k: 1})]) { |*x, **k| [x, k] }; [r, Hash.ruby2_keywords_hash?(r[0].last)] }
+t("yield(*args) to a lambda") { |i| y_splat([Hash.ruby2_keywords_hash({k: 1})], &->(*x, **k) { [x, k] }) }
+t("Method#to_proc and Class#new pass it on positional") do |i|
+  h = Hash.ruby2_keywords_hash({k: 1}); a = [1, h]; e = {}
+  c = Class.new { attr_reader :v; def initialize(*x, **k) = @v = [x, k] }
+  [method(:kwr).to_proc.call(*a, **e), c.new(*a, **e).v, send(:kwr, *a, **e)]
+end
+
+# ---------------------------------------------------------------- 7. keyword splats merged with other keywords, in light frames
+# (MethodDefinition.IsScopeFree takes a KeywordSplatMerge; IR_LIGHT_KEYWORD_SPLAT=0 refuses it)
+class KeyHash; attr_reader :n; def initialize(n) = @n = n; def hash = @n.hash; def eql?(o) = o.is_a?(KeyHash) && o.n == @n; end
+def mg_kw(**o) = kwr(k: 1, **o)
+def mg_two(a, **o) = kwr(**o, **a)
+def mg_after(**o) = kwr(**o, z: 9)
+def mg_lead(x, **o) = kwr(x, k: x, **o)
+t("k: 1, **o") { |i| i.even? ? mg_kw(z: i % 3) : mg_kw }
+t("k: 1, **o overriding k") { |i| mg_kw(k: 2) }
+t("**o, **a") { |i| mg_two({a: 1}, b: 2) }
+t("**o, **a, both empty") { |i| mg_two({}) }
+t("**o, **nil") { |i| mg_two(nil, b: 2) }
+t("**o, z: 9 after") { |i| mg_after(z: 1, y: 2) }
+t("positional and merged keywords") { |i| mg_lead(i % 2, q: 1) }
+t("merged **obj: to_hash") { |i| log = []; [mg_two(ToHash.new(log, {t: 1}), b: 2), log] }
+t("merged **obj: to_hash returning a non-Hash") { |i| (mg_two(BadHash.new, b: 2) rescue [$!.class, $!.message]) }
+t("merged **obj with no to_hash") { |i| (mg_two(Object.new) rescue [$!.class]) }
+t("merged non-Symbol keys") { |i| mg_two({"s" => 1}) }
+t("merged keys with a Ruby #hash") { |i| r = mg_two({KeyHash.new(1) => 1, KeyHash.new(1) => 2}); [r[0], r[1].size, r[1].values] }
+t("merged hash's default is not kept") { |i| r = mg_two(Hash.new(5).merge(a: 1)); [r[1].default, r[1].default_proc] }
+t("merged frozen hash") { |i| mg_two({a: 1}.freeze, b: 2) }
+def mg_deep(n, **o) = n == 0 ? o.size : mg_deep(n - 1, k: n, **o)
+t("deep recursion through a merged call") { |i| mg_deep(100, a: 1) }
+def mg_raise(**o) = kwr(k: 1, **o.fetch(:h))
+t("error raised inside a merge's operand") { |i| (mg_raise rescue [$!.class, $!.message]) }
+# (whether the merging method is in the backtrace: IronRuby's top frame is the Hash#merge #to_hash goes through, MRI's the method)
+t("backtrace of an error in a merged call") { |i| begin; mg_two(BadHash.new); rescue TypeError => e; e.backtrace_locations.map(&:label).include?("Object#mg_two"); end }
+
+# ---------------------------------------------------------------- 8. a **rest parameter is the call's own keyword hash (RubyOps.MakeKeywordRest,
+# IR_KWREST_TAKE): it must never be a hash the caller, or anything else, still holds
+def kt_mut(k: 0, **o) = (o[:added] = k; o.delete(:z); o)
+def kt_keep(**o) = ($kept ||= []) << o
+def kt_super_base(**o) = o
+class KtP; def m(k: 0, **o) = [k, o]; end
+class KtZ < KtP; def m(k: 0, **o) = (o[:local] = 1; super); end
+class KtE < KtP; def m(k: 0, **o) = (o[:local] = 1; eval('super')); end
+t("caller's **h is not the callee's o") { |i| h = {k: 1, z: 2}; r = kt_mut(**h); [r, h] }
+t("caller's **h, no declared keys") { |i| h = {z: 2}; r = kt_keep(**h); r[-1][:x] = 1; $kept = nil; h }
+t("literal keywords: o mutated, declared key gone") { |i| kt_mut(k: 3, z: 4, y: 5) }
+t("each call's o is its own") { |i| $kept = nil; a = kt_keep(a: 1)[-1]; b = kt_keep(a: 1)[-1]; a[:x] = 1; [a, b, a.equal?(b)] }
+t("o through send and method_missing") { |i| [send(:kt_mut, k: 1, z: 2, y: 3), MM.new.ghost(k: 1)] }
+t("o through Method#call and a proc") { |i| [method(:kt_mut).call(k: 1, y: 2), proc { |k: 0, **o| o[:p] = 1; o }.call(k: 1, y: 2)] }
+t("o through define_method") { |i| self.class.send(:define_method, :kt_dm) { |k: 0, **o| o[:d] = k; o } if i == 0; kt_dm(k: 2, y: 3) }
+t("zsuper after o changed") { |i| KtZ.new.m(k: 1, y: 2) }
+t("eval('super') after o changed") { |i| KtE.new.m(k: 1, y: 2) }
+t("o keeps compare_by_identity and default") { |i| h = Hash.new(5).compare_by_identity; h[:y] = 1; o = kt_keep(**h)[-1]; $kept = nil; [o.default, o.compare_by_identity?, o] }
+t("o from a frozen **h") { |i| h = {k: 1, y: 2}.freeze; [kt_mut(**h), h.frozen?] }
+ruby2_keywords def r2k_fwd_mut(*a) = kt_mut(*a)
+t("o from ruby2_keywords") { |i| r = r2k_fwd_mut(k: 1, y: 2); r }
+t("o when no keywords given") { |i| [kt_mut, kt_keep[-1].tap { $kept = nil }] }
+t("o with non-Symbol keys") { |i| kt_mut(**{"s" => 1, k: 2}) }

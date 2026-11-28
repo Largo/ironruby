@@ -195,6 +195,7 @@ namespace IronRuby.Compiler.Ast {
                 assignments.Add(Ast.Assign(targetTemp, AstUtils.Box(transformedTarget)));
 
                 var ordered = new CallSiteBuilder(gen, targetTemp, blockArgVariable);
+                ordered.HasExplicitKeywords = scratch.HasExplicitKeywords;
                 int index = 0;
                 foreach (var argument in scratch) {
                     // skip the scope, the instance and the block
