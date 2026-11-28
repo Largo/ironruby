@@ -612,7 +612,7 @@ namespace IronRuby.Runtime.Osr {
             statements.Add(new SimpleAssignmentExpression(counter, Literal.Integer(1, location),
                 kind == BlockLoopKind.DownTo ? "-" : "+", location));
 
-            return new WhileLoopExpression(condition, true, false, statements, location);
+            return new WhileLoopExpression(condition, true, false, statements, location) { IsBlockLoop = true };
         }
 
         /// <summary>

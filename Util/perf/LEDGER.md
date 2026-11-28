@@ -689,6 +689,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    generic read of a raw object is a call (about 3 ns) because putting it into the
    inlined read cost every program 2-4% (see "Caught by the measurement (round
    sixteen)").
+   Round perf/intivar (2026-11-28) stored the Integer variables raw too: rejected, Bounce
+   31% slower and nothing faster by clock (see Rejected).
    Round thirty-eight looked at the 152 MB (see Landed, perf/nbody): 608 bytes per
    `advance`, of which a method scope (160), two Procs (2 x 80) and two BlockParams
    (2 x 48) were made on every call because a block literal with a literal nested in
@@ -2369,6 +2371,61 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - A private #to_str and a #method_missing for to_str, left at first, are called since
     perf/kinteger's first part, as MRI's rb_check_funcall calls them.
 
+- **perf/loopivar (/perf-step, 2026-11-28, not gated) - an outlined `while' loop may write self's
+  instance variables: OFF by default (`IR_LOOP_IVAR_WRITES=1`)**, on 4b928db (33818f7 merged with
+  0bf3598). The OSR loop compiler bailed on `@x = v' ("instance variable write in an outlined loop")
+  and the method JIT declines a method whose loop writes one ("a deopt after an effect").
+  - **How common.** No AWFY loop stops first at the write: the OSR tier tried 17 AWFY loops and each
+    stops at a call before it (Richards' `schedule` loop, the one that writes `@current_task`, at
+    `is_task_holding_or_waiting`). app-shapes: 1 of the 53 loops tried (prettyprint.rb:292, a block
+    that also calls). So the target is the shape itself (`while i < n; @c += 1; i += 1; end`), not AWFY.
+  - **What it does.** `@x = v' / `@x op= v' in the outlined copy of a `while' is a logged store into
+    self's variable (JitCompiler.EmitLoopIVarWrite, JitRuntime.WriteSelfIVar: WriteSelfAttr's store
+    without the attr_writer check). It deopts before storing on what it cannot do without raising or
+    changing self's shape (self not a plain Ruby object, frozen, the variable not there yet, a full
+    log); a deopt later in the iteration takes the store back from the log and the generic code re-runs
+    the iteration from the loop's snapshot, so the writes the source makes are made once, in its order,
+    and a FrozenError or other exception comes from the iteration the source raises it in. Not the
+    brief's hold-back (store at the end of the iteration), which Sink.cs does for method bodies: a
+    thread racing a deopt can see the variable go back by one write and forward again, as it already
+    can for the Array and Hash stores and `o.x = v' the loop tier logs. A Float is stored boxed (a raw
+    store promotes the object and makes its class born raw: `n.times { @n += 1 }' on later objects of
+    that class ran 2x slower). Block loops (BlockLoopSite's `times'/`each' copies, marked
+    WhileLoopExpression.IsBlockLoop) still refuse the write: there the logged store was no faster than
+    the generic block call (`each { |x| @last = x }' 1.25x slower), and the counter step after the
+    block's last statement keeps it from going unlogged.
+  - **Numbers** (Util/bench/loopivar-shapes.rb, switch off -> on). Bytes per iteration: `@n += 1'
+    32.9 -> 24.0 (the Integer box left), a cached-value counter 16 -> 0, a Float 40 -> 24 (boxed), the
+    controls equal. Instructions (callgrind, before Floats were boxed and block loops excluded):
+    while_count 0.46, while_small 0.35, while_float 0.42, while_two 0.75, control 1.000. Clock
+    (ab.rb, 8 rounds, least): while_count 0.80 (overlap), while_small 0.57, while_float 0.77, while_two
+    0.97 (overlap), each_last 1.01, the control 1.06 (overlap) - **but times_count 1.39, no overlap**,
+    and that block loop compiles the same either way: run alone it is 30.6 against 29.9; run after
+    while_count's compiled loop 66-69 ns against 31, every time (taskset 2 CPUs, two rounds), and in
+    another run while_count itself was 47 against 30. Something the logged stores leave behind slows
+    the process's other code; not found (the per-thread JitUndoLog, long-lived and so in gen 2,
+    taking a young box reference on every store is a guess, not a finding). Hence off by default.
+    alloc.rb (switch on, block loops then included): flat (geomean 0.995, Richards -5%). AWFY, 10
+    alternating rounds, switch off/on, then with block loops included: Bounce 0.974, Richards 0.976,
+    Towers 0.964, DeltaBlue 0.945, all overlapping, as expected with no AWFY loop changed.
+  - **Checks**: `Util/loop-ivar-matrix.rb` (new: Integer, Float and String values, a read after a write
+    in the iteration, a variable not there yet, removed, Bignum growth, type changes, frozen before
+    the loop and at iteration k inside and outside a rescue, break and an exception after k writes,
+    a subclass's object and a singleton's, times and each blocks, Marshal/dup/inspect after, a reader
+    thread, a thread adding variables, a callee's instance_variable_set and freeze) prints CRuby's
+    output on the base and on the branch with the switch off and on (24 loops outlined, 22 deopts
+    taken back in the run with it on). gate-matrices (loop-ivar, ivar, loop-exit, osr-array, block-loop,
+    jit, hot-shapes, jit-scan, marshal) in every mode, run while the switch was on by default, and with
+    it off: PASS, twice (before and after block loops were excluded). `Util/ivar-stress.rb` gains a
+    part where eight threads count into their own variable of one object in a `while' and a block loop
+    while adding and removing others: OK with the switch off and on (17 loops outlined). spec
+    language/while, until, loop, variables, core/kernel instance_variable_set/get,
+    remove_instance_variable, core/integer/times, core/array/each: as on the base. IronRuby.Tests
+    (Debug, switch then on): PASSED.
+  - **Next**: find what slows the rest of the process (a longer run with the GC's event counters on
+    the two orders), then hold the stores back to the end of the iteration (Sink.cs's scheme per
+    iteration) so that they need no log at all, which also answers the racing reader.
+
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,
   perf/arymin, perf/rescuelight and perf/splatpos with castcheck's, nilblock's and dotsfwd's findings,
@@ -2923,7 +2980,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   osr-array, hot-shapes, jit, jit-calls and ivar matrices in every mode and with each switch off:
   PASS; block-scope-reuse-race 10 of 10 as CRuby; spec/core/integer, core/proc and language
   block/yield/break as on the base. Left: the `@count` boxes (an Integer instance variable is held
-  boxed, raw only for Floats) and the locals tuple per scoped call.
+  boxed, raw only for Floats) and the locals tuple per scoped call. (perf/intivar then tried raw Integer variables:
+  rejected; `permute` is not typed code, so they would not have reached `@count` anyway.)
 
 - **perf/sieve (2026-11-27, gated 2026-11-28 (round 6's gate entry)) - a block-local first assigned inside an `if` branch or a
   `while` body no longer keeps the block from being outlined** (switch `IR_BLOCK_LOOP_SCOPED`). AWFY
@@ -8637,6 +8695,62 @@ after master (#228 to #233) had been merged into both trees.
   Next lead instead: the cold path of the first top-level transform (4.1-4.8 ms for `-e 1`'s one-character
   script).
 
+- **perf/intivar (/perf-step, 2026-11-28) - Integer instance variables stored raw in the typed
+  code, as Float ones are: Bounce 31% slower by clock, nothing else faster** (switch `IR_RAW_INTS`;
+  the implementation is commit 58013a9, the next commit takes its runtime part out again; on
+  0af3c4f, which is f67ac44 merged with ae0f0c6).
+  - **How common, and what it costs.** AWFY's Integer `@x op= ...` writes: Permute `@count`
+    (in `permute`, which the JIT refuses: `downto`), DeltaBlue `@current_mark` and Towers
+    `@moves_done` (the method's value), Storage `@count`, Havlak `@loop_counter`, Json `@index`,
+    Richards `@hold_count` and `@queue_count` (`queue_packet` refused), Bounce `@x`/`@y` and
+    som.rb's Random#next `@seed`. Only a few are in methods the JIT types: Random#next (values up to
+    65,535, a box per call; Storage calls it per Array), Ball#bounce (positions below the cache),
+    Richards `hold_self`. A write inside a loop is compiled by neither tier ("instance variable write
+    in an outlined loop" for OSR, "a deopt after an effect" for the method JIT), so `while ...;
+    @n += 1; ...; end` stays generic. A GC allocation-tick probe put boxed Int32 at 20% of Permute's
+    ticks, 16% of Richards', 7% of Bounce's, 6% of Queens' (most of them from the generic `+`,
+    not from the write). app-shapes.rb has none (its counters are Hash values); the stdlib has
+    61 `@x += 1` sites. Cost in typed code: `def inc = (@count += 1; nil)` at 5,000 allocates 24
+    bytes per call (the Int32 box; `Ast.Convert`, not the cache, for an int), Random#next 48.
+  - **What it did.** An IntLocation (a long and a cached box) in the raw shapes Float locations use
+    (RubyInstanceData, "Float locations"): SetIVarLong/WriteAttrLong store it, GetIVarInt/Long and
+    ReadSelfAttrInt/Long read it raw and deopt where GuardInt/GuardLong would, ValueOf boxes it for
+    everything else; a typed store over an Int32/Int64 promotes the object and makes its class
+    born raw (RubyClass.FloatsRaw renamed BornRaw), a Bignum stays boxed. A write that is the
+    method's value stays boxed (its box is the return value). Bytes per call
+    (`Util/bench/intivar-shapes.rb`): counter 40 -> 16, Random#next 87 -> 64, `o.w = o.w + 1` 40 -> 16.
+    alloc.rb: Json 26.9 -> 22.2 MB, Richards 0.70 -> 0.65, DeltaBlue 14.5 -> 14.0, Bounce 5.47 -> 6.18
+    (an IntLocation for each new Ball's variable), the rest equal. Then a value the small-integer cache
+    boxes was stored as that box, never as a location (Bounce 38.3 -> 32.7 KB per `benchmark`).
+  - **Why not.** By clock (ab.rb, 5 rounds, against the switch off): counter 0.91, attr 0.89,
+    Random#next 0.93 (overlap); but a generic read of a born-raw object 1.14, a typed write and
+    read of a small value 1.11, Ball#bounce 1.16 (overlap), the control 1.06 (overlap). AWFY, 10
+    alternating rounds of the same build with the switch off and on: **Bounce 36,702 -> 48,136 us
+    (1.31, no overlap)**, DeltaBlue 1.022, Json 1.024, Richards 0.995, Permute 0.998, Queens 1.002
+    (all overlap). Bounce makes 100 Balls an iteration; some get a velocity past the cache, which
+    makes the class born raw, and then every Ball's typed writes take the raw path - under
+    callgrind about 37 instructions more a write: TryWriteCachedLong, TryWriteLong and SetIVarLong
+    are calls, as GetIVar, TryReadCached and GuardInt are (nothing is inlined into the JIT's
+    dynamic methods). Not making a class born raw for an Integer was worse (Bounce 418 -> 819 us
+    an iteration: a Move per Ball, and two shapes at each site). Putting the raw read into the
+    inlined generic `@x` read (as the attr_reader dispatcher has it) is what round sixteen found
+    cost every program 2-4% ("Caught by the measurement (round sixteen)"). So a raw Integer saves a
+    24-byte box (about 3 ns) per typed write past the cache, and costs every other access to the
+    objects of its class more than that.
+  - **What would make it pay**: Integer ivar writes in compiled loops (both tiers refuse them
+    today), and the ivar helpers inlined into the typed code. Then retry from 58013a9.
+  - **Checks** (on the implementation before its last two changes - the inline store of a cached
+    value and `is` back in ValueOf - which were then only timed; all passed, the rows kept): `Util/ivar-matrix.rb` and `Util/jit-matrix.rb`
+    (section 21) Integer rows (cache, Int32, Int64 and Bignum ranges, type changes, identity and
+    hash, YAML, Marshal, inspect, instance_variable_get/set, remove, freeze, dup/clone,
+    make_shareable, binding, a subclass with more variables, promotion with plain and born-raw
+    objects at one site, growth and removal in the raw tree, too complex, two threads) print CRuby's
+    output on the base and on 58013a9; gate-matrices (ivar, jit, jit-calls, jit-scan, loop-exit,
+    osr-array, hot-shapes, marshal, block-loop, parked-scope, struct) in every mode and with
+    `IR_RAW_INTS=0`: PASS; `Util/ivar-stress.rb` (typed Integer updates added to its promotion
+    part) OK four times; spec core/kernel instance_variable_*, instance_variables,
+    remove_instance_variable, dup, clone, freeze, inspect, core/basicobject, core/marshal and
+    language/variables as on the base; IronRuby.Tests (Debug) PASSED.
 - **perf/stagea (round thirty-seven, 2026-11-28) - stage A of `Docs/block-calling-convention.md`, a narrow
   literal given to a `[BlockNotKept]` iterator as a block descriptor: simulated, not built** (gap 13).
   Before the matrix or the compiler work, the harness (`IronRuby.Tests /blockcost`, now with bytes per
@@ -9086,6 +9200,8 @@ after master (#228 to #233) had been merged into both trees.
   cases (a `swap` on self redefined half way through a hot `downto`, a singleton `swap` on the
   receiver; CRuby's output on the unchanged build with the JIT on, off and without JIT calls) kept.
   What was learned is under gap 4.
+  Taken later for `downto` (perf/permute of 2026-11-27, Landed): with a parked scope per level of
+  recursion the saving covers the whole recursion, not one level, and Permute's time is 0.933.
 
 - **perf/lsite2 (/perf-step, 2026-11-26) - a light method that has made its scope late
   enters through a scoped twin from then on** (gap 16; switch `IR_LIGHT_TWIN`, `=verbose`
