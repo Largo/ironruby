@@ -6526,6 +6526,29 @@ nil
         }
 
         /// <summary>
+        /// A core method CRuby writes in Ruby is located where CRuby's is, file and line, whether IronRuby writes it in
+        /// its prelude (Kernel#then) or in C# (Integer#times).
+        /// </summary>
+        public void Method_InternalSourceLine1() {
+            TestOutput(@"
+require 'ruby4'
+p method(:then).source_location, method(:tap).source_location, 3.method(:times).source_location, Kernel.instance_method(:frozen?).source_location
+p method(:then).to_proc.source_location, Integer.instance_method(:times).source_location, [].method(:each).source_location
+p 3.method(:times).inspect, Kernel.instance_method(:then).inspect
+", @"
+[""<internal:kernel>"", 121]
+[""<internal:kernel>"", 89]
+[""<internal:numeric>"", 255]
+[""<internal:kernel>"", 67]
+[""<internal:kernel>"", 121]
+[""<internal:numeric>"", 255]
+nil
+""#<Method: Integer#times() <internal:numeric>:255>""
+""#<UnboundMethod: Kernel#then() <internal:kernel>:121>""
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the

@@ -1155,6 +1155,7 @@ namespace IronRuby.Tests {
                 Method_BindingNonRubyCaller1,
                 Method_UnbindForwarder1,
                 Method_ToProcSourceLocation1,
+                Method_InternalSourceLine1,
                 Method_OptionalAndKeywordParameters2,
                 Range_MinMaxInclude1,
                 Integer_StepMatchString1,

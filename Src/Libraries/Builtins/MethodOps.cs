@@ -186,7 +186,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source_location")]
         public static RubyArray GetSourceLocation(RubyMethod/*!*/ self) {
-            return self.IsMethodMissing ? null : UnboundMethod.GetSourceLocation(self.Info);
+            return self.IsMethodMissing ? null : UnboundMethod.GetSourceLocation(self.Info, self.Name);
         }
 
         [RubyMethod("parameters")]
