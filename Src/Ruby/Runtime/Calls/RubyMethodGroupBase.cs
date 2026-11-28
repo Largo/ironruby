@@ -578,7 +578,10 @@ namespace IronRuby.Runtime.Calls {
             int count = args.SimpleArgumentCount;
             IList list = null;
             if (args.Signature.HasSplattedArgument) {
-                list = RubyOps.SplatRuby2Keywords((IList)args.GetSplattedArgument());
+                list = (IList)args.GetSplattedArgument();
+                if (args.Signature.HasRuby2KeywordsSplat) {
+                    list = RubyOps.SplatRuby2Keywords(list);
+                }
                 count += list.Count;
             }
 
@@ -592,7 +595,7 @@ namespace IronRuby.Runtime.Calls {
             if (list != null && (keywordsDecide || !takes)) {
                 int listLength;
                 ParameterExpression listVariable;
-                metaBuilder.AddSplattedArgumentTest((IList)args.GetSplattedArgument(), args.GetSplattedMetaArgument().Expression, out listLength, out listVariable);
+                metaBuilder.AddSplattedArgumentTest((IList)args.GetSplattedArgument(), args.GetSplattedMetaArgument().Expression, args.Signature.HasRuby2KeywordsSplat, out listLength, out listVariable);
                 if (keywordsDecide && listLength > 0) {
                     Expression test = Methods.IsKeywordArgumentsHash.OpCall(
                         Ast.Call(listVariable, typeof(IList).GetMethod("get_Item"), AstUtils.Constant(listLength - 1))

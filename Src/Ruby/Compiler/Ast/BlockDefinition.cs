@@ -186,7 +186,8 @@ namespace IronRuby.Compiler.Ast {
             Environment.GetEnvironmentVariable("IR_PARKED_BLOCK_SCOPES") != "0";
 
         private ScopeBuilder/*!*/ DefineLocals(ScopeBuilder/*!*/ parentBuilder) {
-            return new ScopeBuilder(_definedScope.AllocateClosureSlotsForLocals(0), parentBuilder, _definedScope);
+            // a block's frame starts at its first line
+            return new ScopeBuilder(_definedScope.AllocateClosureSlotsForLocals(0), parentBuilder, _definedScope) { CurrentLine = Location.Start.Line };
         }
 
         internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {

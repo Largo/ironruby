@@ -1265,6 +1265,45 @@ namespace IronRuby.Compiler.Ast {
             return _sequencePointClearance;
         }
 
+        /// <summary>
+        /// IR_CALL_LINES=0: a call on a later line of a statement that spans lines reports the statement's first line, as
+        /// it used to (see AddCallLine).
+        /// </summary>
+        internal static readonly bool CallLines = Environment.GetEnvironmentVariable("IR_CALL_LINES") != "0";
+
+        /// <summary>The line the frame reports at the point being transformed (ScopeBuilder.CurrentLine); -1 if unknown.</summary>
+        internal int CurrentLine {
+            get { return CurrentScope.CurrentLine; }
+            set { CurrentScope.CurrentLine = value; }
+        }
+
+        /// <summary>
+        /// A call on a line other than the one the frame is at (a statement that spans lines: `[1,\n  eval(s)]'): MRI reports
+        /// a call at its own line - in its backtrace, caller, binding, an eval's file name - so the frame's line becomes the
+        /// call's before it and goes back to <paramref name="restoreLine"/> after it, for the code of the statement that
+        /// follows on that line (not when that is unknown, -1). A sequence point and a SourceLineMarker each, as a statement
+        /// has: the interpreter maps its instructions to the sequence points and pays nothing at run time, compiled code
+        /// stores the line in its frame record. A statement on one line has no call to mark.
+        /// </summary>
+        internal MSA.Expression/*!*/ AddCallLine(MSA.Expression/*!*/ call, int line, int restoreLine) {
+            if (_document == null) {
+                return call;
+            }
+            var loop = _currentLoop;
+            var loopLineVariable = (loop != null && loop.LoopLineScope == CurrentScope) ? loop.LoopLineVariable : null;
+            bool inEnsure = CurrentScope.EnsureDepth > 0;
+            var before = Ast.Block(Ast.DebugInfo(_document, line, 1, line, 1), SourceLineMarker.Create(line, loopLineVariable, inEnsure));
+            if (restoreLine <= 0) {
+                return Ast.Block(before, call);
+            }
+            var after = Ast.Block(Ast.DebugInfo(_document, restoreLine, 1, restoreLine, 1), SourceLineMarker.Create(restoreLine, loopLineVariable, inEnsure));
+            if (call.Type == typeof(void)) {
+                return Ast.Block(before, call, after);
+            }
+            var result = Ast.Variable(call.Type, "#callLine");
+            return Ast.Block(new[] { result }, before, Ast.Assign(result, call), after, result);
+        }
+
         internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location) {
             var loop = _currentLoop;
             return AddDebugInfo(expression, location, (loop != null && loop.LoopLineScope == CurrentScope) ? loop.LoopLineVariable : null);

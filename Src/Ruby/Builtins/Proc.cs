@@ -602,6 +602,33 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// Calls the proc as the root of a fiber: like #call, but the block's frame keeps its own $~ and $_ (the fiber's
+        /// root svar in MRI), as a thread's block does, instead of sharing the frame it was written in.
+        /// </summary>
+        public object CallAsRoot(object[]/*!*/ args) {
+            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            blockParam.IsThreadRoot = true;
+            try {
+                object result;
+                switch (args.Length) {
+                    case 0: result = RubyOps.Yield0(null, _self, blockParam); break;
+                    // as #call: a lambda does not splat its one argument
+                    case 1: result = (Kind == ProcKind.Lambda) ? RubyOps.YieldNoAutoSplat1(args[0], null, _self, blockParam) :
+                        RubyOps.Yield1(args[0], null, _self, blockParam); break;
+                    case 2: result = RubyOps.Yield2(args[0], args[1], null, _self, blockParam); break;
+                    case 3: result = RubyOps.Yield3(args[0], args[1], args[2], null, _self, blockParam); break;
+                    case 4: result = RubyOps.Yield4(args[0], args[1], args[2], args[3], null, _self, blockParam); break;
+                    default: result = RubyOps.YieldN(args, null, _self, blockParam); break;
+                }
+                return RubyOps.MethodProcCall(blockParam, result);
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
+        }
+
         public object CallN(Proc procArg, object[]/*!*/ args) {
             Debug.Assert(args.Length > 4);
             var blockParam = RubyOps.TakeBfcForProcCall(this);
@@ -661,11 +688,14 @@ namespace IronRuby.Builtins {
             // MRI 1.9.2 doesn't do so though (see http://redmine.ruby-lang.org/issues/show/3792).
 
             // the block a symbol proc is called with goes on to the method it invokes:
-            // [1, 2].map(&:foo) { ... } passes the block through to #foo
+            // [1, 2].map(&:foo) { ... } passes the block through to #foo. Keywords too: the proc keeps them in its rest list as a
+            // marked hash (Ruby2Keywords, below), which this site makes keywords again, as a Ruby splat site does - the one site
+            // a library method makes that does (RubyCallFlags.HasRuby2KeywordsSplat).
             var site = CallSite<Func<CallSite, object, object, Proc, object, object>>.Create(
                 RubyCallAction.Make(
                     scope.RubyContext, methodName,
-                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
+                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock |
+                        RubyCallFlags.HasRuby2KeywordsSplat)
                 )
             );
 

@@ -2649,9 +2649,14 @@ namespace IronRuby.Runtime {
             var source = dict as Hash;
             var copy = (source != null) ? source.TryCopyAsKeywordArguments(scope.RubyContext.EqualityComparer) : null;
             if (copy == null) {
-                copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
-                foreach (var entry in dict) {
-                    copy[entry.Key] = entry.Value;
+                if (source != null) {
+                    // a dup, as CRuby passes it: its comparer (compare_by_identity), default and default proc with it
+                    copy = new Hash(source);
+                } else {
+                    copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
+                    foreach (var entry in dict) {
+                        copy[entry.Key] = entry.Value;
+                    }
                 }
                 copy.IsKeywordArguments = true;
             }
@@ -2996,8 +3001,24 @@ namespace IronRuby.Runtime {
                 hash.IsKeywordArguments = false;
                 return hash;
             }
+            // The keywords a call passed are a hash made for that one call (see NormalizeRestKeywords), which the prologue has
+            // read the declared keywords from already: it becomes the **rest itself, the declared keys taken out in place,
+            // rather than a copy of it - one allocation and copy fewer for every keyword call into a method with **rest
+            // (gap 38). Not the runtime's shared, frozen empty hash, a subclass's, or one with buckets (made otherwise).
+            if (KwRestTakeEnabled && hash.IsKeywordArguments && hash.GetType() == typeof(Hash) && !hash.IsFrozen &&
+                hash.TryRemoveKeywordsInPlace(names)) {
+                hash.IsKeywordArguments = false;
+                hash.IsRuby2KeywordsHash = false;
+                return hash;
+            }
             return hash.CopyWithoutKeywords(names);
         }
+
+        /// <summary>
+        /// IR_KWREST_TAKE=0 makes a **rest parameter a copy of the call's keyword hash again, without the declared keywords,
+        /// instead of that hash itself (see MakeKeywordRest).
+        /// </summary>
+        internal static readonly bool KwRestTakeEnabled = Environment.GetEnvironmentVariable("IR_KWREST_TAKE") != "0";
 
         /// <summary>
         /// The argument a parameter of a method that declares no keyword parameters is about to

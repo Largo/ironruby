@@ -67,11 +67,14 @@ class PBase
   def ga = @a
   def gb = @b
   def setb(d) = (@b = d * 1.0)
+  def setbi(i) = (@b = i + 1; nil)           # a typed Integer store (perf/intivar stored it raw)
 end
 def p_upd(o) = (o.a = o.a + 1.0)
+def i_upd(o) = (o.a = o.a + 1; nil)
 PKINDS = [Float, Integer, NilClass]
 pwarm = Class.new(PBase)
 300.times { o = pwarm.new; p_upd(o); p_upd(o); o.setb(2.5); o.setb(3.5); o.ga; o.gb }
+300.times { |k| o = pwarm.new; o.a = k; i_upd(o); i_upd(o); o.setbi(k); o.setbi(k + 5000); o.ga; o.gb }
 # IronRuby's count of promotions (0 elsewhere, and on a build without it)
 def promotions
   return 0 unless defined?(System::Type)
@@ -96,8 +99,9 @@ prounds.times do |round|
           when 2 then o.a = 0.25
           when 3 then o.setb(0.5)
           else
-            p_upd(o) if o.a.is_a?(Float)
-            o.setb(i * 0.5)
+            a = o.a
+            if a.is_a?(Float) then p_upd(o) elsif a.is_a?(Integer) then i_upd(o) end
+            i.even? ? o.setb(i * 0.5) : o.setbi(i * 1000)
           end
           if i % 11 == 0
             name = :"@w#{t}_#{i % 3}"
@@ -342,6 +346,39 @@ THREADS.times do |t|
   got = [fs.instance_variable_get(:"@f#{t}"), fbodies[t].x]
   record.("final @f#{t}/x of body #{t} #{got.inspect}, owner last read #{flast[t].inspect}") unless got == flast[t]
 end
+
+# Loops that write instance variables (perf/loopivar: with IR_LOOP_IVAR_WRITES=1 the OSR tier outlines a `while' one, each store logged
+# and taken back by a deopt later in its iteration). Thread t runs a `while' loop and a block loop that count
+# into its own @l<t> of one shared object, while the others add and remove variables of that object (its
+# slots move under the stores) and read every @l<u>: a value read is an Integer no greater than its owner
+# has counted to, and each owner's final count is exactly the number of iterations it ran.
+class LoopW
+  THREADS.times do |t|
+    class_eval "def lw#{t}(n) = (i = 0; while i < n; @l#{t} += 1; i += 1; end; @l#{t})"
+    class_eval "def lb#{t}(n) = (n.times { @l#{t} += 1 }; @l#{t})"
+    class_eval "def lr#{t} = @l#{t}"
+  end
+end
+lw = LoopW.new
+THREADS.times { |t| lw.instance_variable_set(:"@l#{t}", 0) }
+LROUNDS = [ITERS / 5000, 4].max
+lthreads = THREADS.times.map do |t|
+  Thread.new do
+    total = 0
+    LROUNDS.times do |r|
+      total = lw.__send__(:"lw#{t}", 2000)
+      total = lw.__send__(:"lb#{t}", 2000)
+      u = (t + r) % THREADS
+      v = lw.__send__(:"lr#{u}")
+      record.("loop @l#{u} read #{v.inspect}") unless v.is_a?(Integer) && v >= 0 && v <= LROUNDS * 4000
+      name = :"@m#{t}_#{r % 4}"
+      lw.instance_variable_set(name, r)
+      lw.remove_instance_variable(name) if r.odd?
+    end
+    record.("loop @l#{t} ended at #{total}, counted #{LROUNDS * 4000}") unless total == LROUNDS * 4000
+  end
+end
+lthreads.each(&:join)
 
 if failures.empty?
   puts "OK (#{THREADS} threads x #{ITERS} iterations, #{objects.size} shared objects)"

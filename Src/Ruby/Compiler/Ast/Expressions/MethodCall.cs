@@ -67,6 +67,21 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
+            // MRI reports a call at its own line (that of its name): one on a line the frame is not at - a later line
+            // of a statement that spans lines - marks its line, and the frame's back after it (AstGenerator.AddCallLine).
+            // A line the frame may or may not be at (-1, after a nested statement) is left as it is.
+            int outer = gen.CurrentLine;
+            int line = CallLine;
+            if (!AstGenerator.CallLines || outer <= 0 || line == outer || !Location.IsValid) {
+                return TransformReadCall(gen);
+            }
+            gen.CurrentLine = line;
+            var call = TransformReadCall(gen);
+            gen.CurrentLine = outer;
+            return gen.AddCallLine(call, line, outer);
+        }
+
+        private MSA.Expression/*!*/ TransformReadCall(AstGenerator/*!*/ gen) {
             var literal = _target as StringLiteral;
             if (literal != null && _methodName == "freeze" && (Arguments == null || Arguments.IsEmpty) && Block == null) {
                 return literal.TransformReadFrozen(gen);
@@ -186,6 +201,7 @@ namespace IronRuby.Compiler.Ast {
                 assignments.Add(Ast.Assign(targetTemp, AstUtils.Box(transformedTarget)));
 
                 var ordered = new CallSiteBuilder(gen, targetTemp, blockArgVariable);
+                ordered.HasExplicitKeywords = scratch.HasExplicitKeywords;
                 int index = 0;
                 foreach (var argument in scratch) {
                     // skip the scope, the instance and the block

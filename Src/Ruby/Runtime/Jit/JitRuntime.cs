@@ -779,13 +779,30 @@ namespace IronRuby.Runtime.Jit {
             if (obj == null || (!site.IsBoundTo(obj.ImmediateClass) && !site.Bind(obj.ImmediateClass))) {
                 throw Deopt();
             }
+            WriteLoggedIVar(obj, value, site.Variable, log);
+        }
+
+        /// <summary>
+        /// `@x = v' in an outlined loop (JitCompiler.EmitLoopIVarWrite): WriteSelfAttr's store into self's variable,
+        /// with no writer method to check - the same undo log entry, and the same deopts before anything is written
+        /// (self not a plain Ruby object, frozen, the variable not there yet, a full log), so that a deopt later in
+        /// the iteration takes the write back and the generic code makes it once.
+        /// </summary>
+        public static void WriteSelfIVar(object self, object value, InstanceVariableSite/*!*/ site, JitUndoLog/*!*/ log) {
+            var obj = self as RubyObject;
+            if (obj == null) {
+                throw Deopt();
+            }
+            WriteLoggedIVar(obj, value, site, log);
+        }
+
+        private static void WriteLoggedIVar(RubyObject/*!*/ obj, object value, InstanceVariableSite/*!*/ variable, JitUndoLog/*!*/ log) {
             var data = obj._instanceData;
             if (data == null || data._frozen || log.IsFull) {
                 throw Deopt();
             }
             object[] slots = data._ivars;
             var shape = RubyInstanceData.ShapeOf(slots);
-            var variable = site.Variable;
             var entry = variable.Cache;
             int index;
             if (shape == entry.Shape && entry.Next == null) {
@@ -1216,6 +1233,18 @@ namespace IronRuby.Runtime.Jit {
             if (value == null) { return true; }
             if (value is bool) { return !(bool)value; }
             throw Deopt();
+        }
+
+        /// <summary>
+        /// `!x' of any x (JitCompiler.EmitNot): true, false and nil as NotBoolean, and anything else false - BasicObject#!,
+        /// rb_obj_not - once the site found x's class (its singleton class included) to resolve `!' to it; a class with a #!
+        /// of its own deopts.
+        /// </summary>
+        public static bool NotObject(RubyContext/*!*/ context, object value, KernelMethodSite/*!*/ site) {
+            if (value == null) { return true; }
+            if (value is bool) { return !(bool)value; }
+            if (!site.Resolves(ClassOf(context, value))) { throw Deopt(); }
+            return false;
         }
 
         // The guards are inlined into the body; the deopt is thrown out of line.

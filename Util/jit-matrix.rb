@@ -4774,3 +4774,74 @@ t('fl: to Integer by the typed code') { o = FlObj.new; o.sp_fl_put(1.5); [o.get_
 # In Util/jit-scan-matrix.rb, run the same way: its rows need String#length, #[] and #== to be the
 # library methods, and the sections above leave them aliased (13, and the redefinitions of section 3),
 # which keeps the method JIT from compiling `read' here at all.
+
+# ---------------------------------------------------------------- 21. Integer instance variables stored raw
+# As section 19, for an Integer the typed code holds as an int or a long. perf/intivar (commit
+# 58013a9, taken out again: Util/perf/LEDGER.md, Rejected) stored it into an IntLocation from
+# `@n = i', `@n op= i' and `o.n = i' and read it raw behind GuardInt and GuardLong; the rows stay
+# for the next attempt. A value past a long is a Bignum, boxed.
+# The writers end with a read: a write that is a method's value is stored boxed, its box returned.
+class InObj
+  attr_accessor :w
+  def initialize; @n = 0; @y = 1; @w = 0; end
+  def sp_in_add(d) = (@n += d; @n)
+  def sp_in_put(i) = (@n = i + 0; @n)
+  def sp_in_get = @n + 0
+  def sp_in_mul(k) = (@n = @n * k; @n)
+  def sp_in_idx(a) = a[@n]
+  def get_n = @n
+end
+def sp_in_attr(o, d) = (o.w = o.w + d; o.w)
+inobj = InObj.new
+warm { |i| inobj.sp_in_add(1); inobj.sp_in_put(i * 1000); inobj.sp_in_get; inobj.sp_in_mul(1); inobj.sp_in_idx([1, 2]); sp_in_attr(inobj, 1) }
+t('int: raw state seen by everything') do
+  o = InObj.new; o.sp_in_put(5000); 5.times { o.sp_in_add(1); sp_in_attr(o, 2000) }
+  [o.get_n, o.sp_in_get, o.instance_variable_get(:@n), o.w, o.instance_variables, o.instance_variable_defined?(:@n),
+   o.inspect.sub(/0x\h+/, ''), o.instance_variables.map { |v| o.instance_variable_get(v) }]
+end
+t('int: dup and clone get copies') do
+  o = InObj.new; o.sp_in_put(1500); o.sp_in_add(1); d = o.dup; c = o.clone
+  3.times { d.sp_in_add(1000); c.sp_in_add(2000) }
+  o.sp_in_add(25)
+  [o.get_n, d.get_n, c.get_n]
+end
+t('int: frozen refuses a raw store') do
+  o = InObj.new; o.sp_in_put(1500); o.sp_in_add(1); o.freeze
+  [(o.sp_in_add(1) rescue $!.class), (o.sp_in_put(2) rescue $!.class), (sp_in_attr(o, 1) rescue $!.class), o.get_n]
+end
+t('int: Marshal same bytes as boxed') do
+  o = InObj.new; o.sp_in_put(70_000); o.sp_in_add(1); g = InObj.new; g.instance_variable_set(:@n, 70_001)
+  m = Marshal.load(Marshal.dump(o))
+  [Marshal.dump(o) == Marshal.dump(g), m.get_n, m.instance_variables]
+end
+t('int: past an Int32, a long, and back') do
+  o = InObj.new; o.sp_in_put(2147483646); o.sp_in_add(1)
+  r = [o.sp_in_add(1), o.sp_in_add(1), o.get_n, o.sp_in_get, o.instance_variable_get(:@n)]
+  r << o.sp_in_mul(2**31) << o.sp_in_mul(2**31) << o.get_n.class << o.sp_in_add(1) << o.sp_in_get
+  o.sp_in_put(-5); r << o.sp_in_add(2**62) << o.sp_in_add(2**62) << o.sp_in_add(-(2**63)) << o.get_n
+end
+t('int: flip to nil, Float, String and back') do
+  o = InObj.new; o.sp_in_put(1500); o.sp_in_add(1)
+  r = []
+  o.instance_variable_set(:@n, nil); r << (o.sp_in_add(1) rescue $!.class) << o.get_n
+  o.instance_variable_set(:@n, 2.5); r << o.sp_in_add(1) << o.sp_in_get
+  o.instance_variable_set(:@n, 'str'); r << (o.sp_in_get rescue $!.class) << (o.sp_in_idx([1]) rescue $!.class)
+  o.sp_in_put(3000); r << o.sp_in_add(1) << o.get_n
+  o.sp_in_put(7500); o.instance_variable_set(:@n, 9); r << o.get_n << o.sp_in_add(1)
+  o.instance_variable_set(:@n, 10**30); r << o.sp_in_add(1) << (o.sp_in_idx([1]) rescue $!.class)
+  r
+end
+t('int: removed and re-added') do
+  o = InObj.new; o.sp_in_put(4500); o.sp_in_add(1)
+  r = [o.remove_instance_variable(:@n), o.instance_variables, (o.sp_in_get rescue $!.class), o.get_n]
+  o.sp_in_put(5500); r << o.instance_variables << o.get_n << o.sp_in_add(1)
+  o.remove_instance_variable(:@y); o.sp_in_add(1); r << o.instance_variables << o.get_n
+end
+t('int: identity and hash') do
+  o = InObj.new
+  [5, 999, 1000, 70_000, 2147483647, 2**40, -(2**40)].map do |v|
+    o.sp_in_put(v); o.sp_in_add(0); n = o.get_n
+    [n.equal?(o.get_n), n.object_id == v.object_id, n.hash == v.hash, { v => 1 }[n], n.eql?(v), o.instance_variable_get(:@n).equal?(n)]
+  end
+end
+t('int: as an index and a count') { o = InObj.new; o.sp_in_put(2); o.sp_in_add(1); [o.sp_in_idx([0, 1, 2, 3, 4]), 'ab' * o.get_n, Array.new(o.get_n, 0)] }

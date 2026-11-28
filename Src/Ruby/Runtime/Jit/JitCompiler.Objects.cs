@@ -1341,13 +1341,18 @@ namespace IronRuby.Runtime.Jit {
 
             string name = node.MethodName;
             if (args.Length == 0) {
-                if (name != "empty?" && ObservedType(node.Target) == typeof(MutableString)) {
+                if (ObservedType(node.Target) == typeof(MutableString) && (name != "empty?" || ObjectOps)) {
                     // `s.size', `s.length' on a parameter or instance variable the profile saw hold a String
                     // (Json's `s.size', `@input.length'): String#length, the characters in the String's
                     // encoding (JitRuntime.StringLength); a receiver that is not a plain String deopts.
                     var stringClass = KindClass(JitRuntime.KindString);
                     if (!IsPlainLibraryMethod(stringClass, name) || !IsPublic(stringClass, name)) {
                         throw Bail("String#" + name + " is not the built-in one");
+                    }
+                    if (name == "empty?") {
+                        // String#empty? (URI::Generic#set_port's `v.empty?'): no characters (JitRuntime.StringEmpty)
+                        type = JT.Bool;
+                        return Ast.Call(JitRuntime.M("StringEmpty"), recv);
                     }
                     type = JT.Int;
                     return Ast.Call(JitRuntime.M("StringLength"), recv);
@@ -1357,6 +1362,12 @@ namespace IronRuby.Runtime.Jit {
                 RequireCollectionReceiver(node.Target, arrays, hashes, name);
                 if (name == "empty?") {
                     type = JT.Bool;
+                    var stringClass = KindClass(JitRuntime.KindString);
+                    if (ObjectOps && ObservedType(node.Target) == MixedTypes && IsPlainLibraryMethod(stringClass, name) && IsPublic(stringClass, name)) {
+                        // a receiver the profile saw hold several types (a String, nil and an Integer in turn): a String
+                        // answers as StringEmpty does, an Array or a Hash as IsEmpty does (JitRuntime.IsEmptyOrString)
+                        return Ast.Call(JitRuntime.M("IsEmptyOrString"), recv, Ast.Constant(arrays), Ast.Constant(hashes));
+                    }
                     return Ast.Call(JitRuntime.M("IsEmpty"), recv, Ast.Constant(arrays), Ast.Constant(hashes));
                 }
                 type = JT.Int;

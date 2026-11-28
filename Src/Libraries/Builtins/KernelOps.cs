@@ -1757,6 +1757,72 @@ namespace IronRuby.Builtins {
                 Protocols.IsTrue(respondToSite.Target(respondToSite, obj, methodName));
         }
 
+        // IR_PLAIN_TO_S=0 sends every Kernel#String through the prelude's __ir_string__.
+        private static readonly bool _plainToS = Environment.GetEnvironmentVariable("IR_PLAIN_TO_S") != "0";
+
+        // Per class, held weakly, as IListOps.IsBuiltinMethod's: the method version at which the class was last found to
+        // convert plainly (see IsPlainToSClass). A class is not kept alive by having been asked about.
+        private static readonly ConditionalWeakTable<RubyClass, StrongBox<int>>/*!*/ _plainToSClasses =
+            new ConditionalWeakTable<RubyClass, StrongBox<int>>();
+
+        /// <summary>
+        /// Kernel#String's common case, what MRI's rb_String does in C for an object whose class has no #to_str: with the
+        /// built-in #respond_to? and #respond_to_missing?, rb_check_string_type finds nothing to call (rb_check_funcall
+        /// asks neither, and method_missing is not tried), and rb_convert_type calls the public #to_s. The prelude's
+        /// __ir_string__ answered the same through respond_to?, method(:respond_to?).owner, bind_call and __send__: 870 ns
+        /// for String(nil) against MRI's 100. Answers nil - nothing called - for any other class; a #to_s that gives
+        /// something else than a String is the TypeError rb_convert_type raises. Like MRI's, the call sees no refinement.
+        /// </summary>
+        [RubyMethod("__ir_plain_to_s__", RubyMethodAttributes.PrivateInstance)]
+        public static object PlainToS(UnaryOpStorage/*!*/ toSStorage, object self, object obj) {
+            var context = toSStorage.Context;
+            if (!_plainToS || !IsPlainToSClass(context, context.GetImmediateClassOf(obj))) {
+                return null;
+            }
+            var site = toSStorage.GetCallSite("to_s");
+            object converted = site.Target(site, obj);
+            if (converted is MutableString) {
+                return converted;
+            }
+            // MRI's conversion_mismatch names the class of what #to_s gave, nil's included ("gives NilClass")
+            string className = context.GetClassMessageName(obj);
+            throw RubyExceptions.CreateTypeError("can't convert {0} to String ({0}#to_s gives {1})", className,
+                context.GetClassMessageName(converted));
+        }
+
+        private static bool IsPlainToSClass(RubyContext/*!*/ context, RubyClass/*!*/ cls) {
+            int version = RubyModule.GlobalMethodVersion;
+            StrongBox<int> check;
+            if (_plainToSClasses.TryGetValue(cls, out check) && Volatile.Read(ref check.Value) == version) {
+                return true;
+            }
+            // to_str in any visibility: rb_check_funcall calls a private one too
+            // to_str in any visibility: rb_check_funcall calls a private one too; and a method_missing of the class's own is
+            // asked for to_str when the method is not there (check_funcall_missing)
+            if (cls.GetMethodLookup("to_str").Found ||
+                !IsKernelLibraryMethod(context, cls, "respond_to?") || !IsKernelLibraryMethod(context, cls, "respond_to_missing?") ||
+                !IsBuiltinMethodMissing(context, cls)) {
+                return false;
+            }
+            var toS = cls.GetMethodLookup("to_s");
+            if (!toS.Found || toS.Info.IsNotImplemented || toS.Visibility != RubyMethodVisibility.Public) {
+                return false;
+            }
+            _plainToSClasses.AddOrUpdate(cls, new StrongBox<int>(version));
+            return true;
+        }
+
+        private static bool IsBuiltinMethodMissing(RubyContext/*!*/ context, RubyClass/*!*/ cls) {
+            var method = cls.GetMethodLookup("method_missing");
+            return method.Found && method.Info is RubyLibraryMethodInfo &&
+                (ReferenceEquals(method.Info.DeclaringModule, context.BasicObjectClass) || ReferenceEquals(method.Info.DeclaringModule, context.KernelModule));
+        }
+
+        private static bool IsKernelLibraryMethod(RubyContext/*!*/ context, RubyClass/*!*/ cls, string/*!*/ name) {
+            var method = cls.GetMethodLookup(name);
+            return method.Found && method.Info is RubyLibraryMethodInfo && ReferenceEquals(method.Info.DeclaringModule, context.KernelModule);
+        }
+
         private static RubyMethodVisibility GetDefinedVisibility(RubyClass/*!*/ cls, string/*!*/ name) {
             var method = cls.GetMethodLookup(name);
             if (!method.Found) {

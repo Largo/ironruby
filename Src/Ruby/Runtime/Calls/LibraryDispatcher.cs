@@ -1217,6 +1217,10 @@ namespace IronRuby.Runtime.Calls {
         // The length of the splatted list a call passes (see TryCreate, TryCreateRubyCall), -1 if the site splats none.
         private int _splatCount = -1;
 
+        // The site makes a ruby2_keywords hash ending its list keywords again (RubyCallFlags.HasRuby2KeywordsSplat): ExpandSplat
+        // does as its rule does.
+        private bool _ruby2Keywords;
+
         // The arguments of a splatted call, the list's items in place of the list, as its rule makes them (MetaObjectBuilder.
         // AddSplattedArgumentTest, ArgsBuilder); null if the list is not of the length the rule was bound for.
         private object[] ExpandSplat(object[]/*!*/ args) {
@@ -1224,7 +1228,9 @@ namespace IronRuby.Runtime.Calls {
             if (list == null) {
                 return null;
             }
-            list = RubyOps.SplatRuby2Keywords(list);
+            if (_ruby2Keywords) {
+                list = RubyOps.SplatRuby2Keywords(list);
+            }
             if (list.Count != _splatCount) {
                 return null;
             }
@@ -1268,7 +1274,7 @@ namespace IronRuby.Runtime.Calls {
                 if (list == null || signature.HasRhsArgument) {
                     return null;
                 }
-                splatCount = RubyOps.SplatRuby2Keywords(list).Count;
+                splatCount = (signature.HasRuby2KeywordsSplat ? RubyOps.SplatRuby2Keywords(list) : list).Count;
                 argumentCount = count - 1 + splatCount;
             }
 
@@ -1296,6 +1302,7 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._context = targetClass.Context;
             dispatcher._rubyCall = plan;
             dispatcher._splatCount = splatCount;
+            dispatcher._ruby2Keywords = signature.HasRuby2KeywordsSplat;
             dispatcher._isRubyObject = isRubyObject;
             dispatcher._targetType = (target != null) ? target.GetType() : null;
             dispatcher._bool = (target is bool) ? (bool)target : false;
@@ -1409,7 +1416,9 @@ namespace IronRuby.Runtime.Calls {
                 if (list == null || signature.HasRhsArgument) {
                     return null;
                 }
-                list = RubyOps.SplatRuby2Keywords(list);
+                if (signature.HasRuby2KeywordsSplat) {
+                    list = RubyOps.SplatRuby2Keywords(list);
+                }
                 simpleCount = count - 1;
                 splatCount = list.Count;
                 var expanded = new object[simpleCount + splatCount];
@@ -1483,6 +1492,7 @@ namespace IronRuby.Runtime.Calls {
             dispatcher._context = targetClass.Context;
             dispatcher._plan = plan;
             dispatcher._splatCount = splatCount;
+            dispatcher._ruby2Keywords = signature.HasRuby2KeywordsSplat;
             dispatcher._hasBlock = signature.HasBlock;
             dispatcher._argTypes = argTypes;
             dispatcher._restricted = restricted;

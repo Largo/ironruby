@@ -343,6 +343,166 @@ end
         }
 
         /// <summary>
+        /// A call on a later line of a statement that spans lines reports its own line, as MRI's does - the line of its
+        /// name (a chained .m on the next line) - to caller, eval's file name, binding and a backtrace, and the call it is an
+        /// argument of goes back to its own; :line events are the statements' only.
+        /// </summary>
+        public void Backtrace_CallLine1() {
+            TestOutput(@"
+require 'ruby4'; def l = caller_locations(1, 1)[0].lineno
+def f(*a) = [l, *a]
+p [1,
+   l].last
+p f(1,
+    l)
+p f(
+  l,
+  2)
+p [3]
+  .map { l }
+  .first
+x = f(l,
+      f(l))
+p x
+p((l if
+   true))
+p [l, l,
+   l]
+y = [1, 2].map do |v|
+  v + l
+end
+p y
+p(f 1,
+  2)
+p [0].sum(
+  l)
+def k(&) = yield
+p k {
+  l
+}
+p k { l
+}
+r = [0]
+  .map { |_|
+    l
+  }
+p r
+def g(*) = caller_locations(1, 1)[0].lineno
+p g(1,
+    2)
+p g(1,
+    l)
+p g(
+  1)
+p [1]
+  .map { 2 }
+  .then { |*| g }
+a = [1]
+p a.push(l,
+         l).then { g }
+p g(g(
+  1), g)
+p(g(1) +
+  g(2))
+p(
+  g)
+z = g(l,
+  2); p z
+p eval(""__LINE__"",
+       nil)
+def h = binding
+b = [1,
+     h].last
+p b.source_location[1]
+class Object; def ln(*) = caller_locations(1, 1)[0].lineno; end
+p [1]
+  .ln
+p [1].
+  ln
+p [1]
+  .then { 1 }
+  .ln
+p 1 +
+  2.ln
+x = [1]
+x
+  .ln
+p x.ln(
+  1)
+p(x
+  .ln(2)
+  .ln)
+p x.
+  ln.ln
+p x&.
+  ln
+p [x.ln,
+   x
+   .ln]
+def m
+  x = [1,
+       l].last
+  y = [l,
+       l,
+       l]
+  x + y.size
+end
+lines = []
+tp = TracePoint.new(:line) { |t| lines << t.lineno if t.path == __FILE__ }
+tp.enable { m }
+p lines
+def boom = raise(""x"")
+def n
+  [1,
+   boom].last
+end
+begin; n; rescue => e; p e.backtrace_locations.first(2).map(&:lineno); end
+def q(a,
+      b = l)
+  b
+end
+p q(1)
+", @"
+5
+[3, 1, 7]
+[3, 9, 2]
+12
+[3, 14, [3, 15]]
+17
+[19, 19, 20]
+[23, 24]
+[3, 1, 2]
+28
+31
+33
+[37]
+41
+43
+45
+49
+52
+53
+111
+58
+59
+1
+63
+69
+71
+74
+77
+80
+84
+86
+88
+[89, 91]
+[102, 93, 95, 98]
+[104, 107]
+111
+");
+        }
+
+        /// <summary>
         /// Kernel#send and BasicObject#__send__ leave no frame of their own in a backtrace, with a String name too (as with a
         /// Symbol, whose call the binder makes in place); Kernel#public_send keeps its frame. LEDGER gap 27.
         /// </summary>
