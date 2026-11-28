@@ -423,6 +423,65 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// `x.is_a?(m)', `x.kind_of?(m)' (Kernel#is_a?: the ancestors of x's immediate class, its singleton class included),
+        /// or `x.instance_of?(m)' (x's class, not its singleton class), once the site found that class to resolve the name
+        /// to Kernel's method (JitCompiler.EmitTypeTest). A class that does not, and an m that is no module, deopt: the
+        /// generic call then raises NoMethodError or TypeError, calls method_missing or the method that replaced Kernel's,
+        /// or converts a CLR type group. The ancestors are walked on every test, as Kernel's method walks them: an include,
+        /// prepend or extend made after the site bound the class is seen whether or not it moved a method version.
+        /// </summary>
+        public static bool IsKindOf(RubyContext/*!*/ context, object value, object m, KernelMethodSite/*!*/ site, bool instanceOf) {
+            var module = m as RubyModule;
+            if (module == null) { throw Deopt(); }
+            if (!site.Resolves(ClassOf(context, value))) { throw Deopt(); }
+            return instanceOf ? module.Context.GetClassOf(value) == module : module.Context.IsKindOf(value, module);
+        }
+
+        /// <summary>
+        /// Which receiver classes resolve a name to one of the library methods given (KernelMethodSite.Resolves), each under the
+        /// global method version it was found at, for a few classes at once: a type test (`x.is_a?(C)') sees receivers of
+        /// several classes far more often than an identity test does. The entries are immutable and replaced whole, so a
+        /// thread reads an old one or a new one; a lost write only means a class is resolved again.
+        /// </summary>
+        public sealed class KernelMethodSite {
+            internal readonly string/*!*/ Name;
+            private readonly Calls.RubyMemberInfo[]/*!*/ _expected;
+            private const int Size = 4;
+            private readonly Entry[]/*!*/ _entries = new Entry[Size];
+            private int _next;
+
+            private sealed class Entry {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Entry(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+
+            internal KernelMethodSite(string/*!*/ name, Calls.RubyMemberInfo[]/*!*/ expected) {
+                Name = name;
+                _expected = expected;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal bool Resolves(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                for (int i = 0; i < Size; i++) {
+                    var e = System.Threading.Volatile.Read(ref _entries[i]);
+                    if (e != null && e.Class == cls && e.Version == version) { return true; }
+                }
+                return Bind(cls, version);
+            }
+
+            private bool Bind(RubyClass/*!*/ cls, int version) {
+                var resolved = cls.ResolveMethod(Name, Calls.VisibilityContext.AllVisible);
+                if (!resolved.Found || cls.GetMethodLookup(Name).Visibility != RubyMethodVisibility.Public || Array.IndexOf(_expected, resolved.Info) < 0) {
+                    return false;
+                }
+                System.Threading.Volatile.Write(ref _entries[(_next++ & 0x7fffffff) % Size], new Entry(cls, version));
+                return true;
+            }
+        }
+
+        /// <summary>
         /// `v == nil' (JitCompiler.EmitCollectionEqualsNil): false for an Array or a Hash itself (not a
         /// subclass; a singleton == is ruled out when compiling) when <paramref name="arrays"/> or
         /// <paramref name="hashes"/> says its == is the library one and nil has no to_ary or to_hash;

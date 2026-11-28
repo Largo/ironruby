@@ -864,7 +864,15 @@ namespace IronRuby.Runtime.Jit {
         private MSA.Expression/*!*/ EmitBody(out JT type) {
             var body = _ast.Body;
             if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
-                throw JitBailout.Instance;
+                // `def m ... rescue ... ensure ... end' (EmitExceptionBody); keyword defaults are statements of the body
+                if (_keywords != null) { throw Bail("rescue or ensure in a method with keywords"); }
+                var defaultsFirst = EmitOmittedDefaults();
+                var handled = FinishSunkStores(EmitExceptionBody(body, out type), ref type);
+                if (defaultsFirst != null) {
+                    defaultsFirst.Add(handled);
+                    handled = Ast.Block(ClrType(type), defaultsFirst);
+                }
+                return handled;
             }
             if (_keywords != null) {
                 // the keyword prologue is what the entry did; the parameters hold its result
@@ -1047,6 +1055,162 @@ namespace IronRuby.Runtime.Jit {
                 (Array.IndexOf(_paramNames, local.Name) >= 0 || IsOmittedOptional(local.Name));
         }
 
+        /// <summary>
+        /// The method's statements, the last of which makes its value: what the analyses of "the body's last statement" and "a
+        /// statement of the body itself" look at (held-back writes, the last store). Null when the method body has rescue, else
+        /// or ensure clauses (EmitExceptionBody): an else or ensure clause comes after the last statement, and the clauses may
+        /// make the value.
+        /// </summary>
+        private Statements MethodStatements {
+            get {
+                if (_ast == null) { return null; }
+                var body = _ast.Body;
+                return (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) ? null : body.Statements;
+            }
+        }
+
+        // IR_JIT_RESCUE=0 turns EmitExceptionBody off
+        internal static readonly bool RescueBodies = Environment.GetEnvironmentVariable("IR_JIT_RESCUE") != "0";
+
+        /// <summary>
+        /// `begin ... rescue ... else ... ensure ... end' whose protected part the typed body runs without raising: its code
+        /// calls only helpers that throw nothing but a deopt (RaiseFreeChecker), and has no call, loop or fallback, so no
+        /// safe point either, where a Thread#raise or a Timeout could land. Nothing it does can then be rescued: an exception
+        /// it would raise in the generic body - an overflow into a Bignum, a `raise', a nil receiver - is a deopt here, and
+        /// the generic body runs the call again from the top, rescue clauses and all, as for any deopt (allowed only before
+        /// anything observable, _deoptAfterEffect). So the rescue clauses are not emitted, the else clause follows the
+        /// statements, and the ensure clause follows them both: the order of a run in which nothing is raised. That run leaves
+        /// $! as it found it (Body.LazyErrinfo; with it off the generic body stores back the value it read) and has no frame
+        /// whose InRescue matters. With an ensure clause, the else clause must raise nothing either (the ensure runs after
+        /// what it raises), and no return, break, next, redo or retry may leave any of the three (a jump would skip the
+        /// ensure, which here is no finally). A deopt passes the ensure clause by without running it: the generic body
+        /// runs it, once.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitExceptionBody(Body/*!*/ body, out JT type) {
+            if (!RescueBodies) { throw Bail("rescue or ensure (IR_JIT_RESCUE=0)"); }
+            if (_loop != null) { throw Bail("rescue or ensure in an outlined loop"); }
+            bool hasEnsure = body.EnsureStatements != null;
+            if (hasEnsure && JumpsThroughEnsure(body)) { throw Bail("a jump through an ensure clause"); }
+
+            JT bodyType;
+            var statements = EmitStatements(body.Statements, out bodyType);
+            RequireRaiseFree(statements, "the protected part");
+            type = bodyType;
+            if (bodyType == JT.Never) { return statements; }
+
+            MSA.Expression value = statements;
+            if (body.ElseStatements != null) {
+                JT elseType;
+                var elseValue = EmitStatements(body.ElseStatements, out elseType);
+                if (hasEnsure) { RequireRaiseFree(elseValue, "the else clause"); }
+                type = elseType;
+                value = Ast.Block(ClrType(elseType), statements, elseValue);
+                if (elseType == JT.Never) { return value; }
+            }
+            if (!hasEnsure) { return value; }
+
+            JT ensureType;
+            var ensure = EmitStatements(body.EnsureStatements, out ensureType);
+            var result = Ast.Variable(ClrType(type), "#begin");
+            return Ast.Block(ClrType(type), new[] { result }, Ast.Assign(result, value), ensure, result);
+        }
+
+        // A return, break, next, redo or retry in a begin with an ensure clause, which the typed body does not take (JitScreen too).
+        internal static bool JumpsThroughEnsure(Body/*!*/ body) {
+            return body.EnsureStatements != null && JumpFinder.Has(body);
+        }
+
+        private void RequireRaiseFree(MSA.Expression/*!*/ code, string/*!*/ part) {
+            var checker = new RaiseFreeChecker();
+            checker.Visit(code);
+            if (checker.Obstacle != null) { throw Bail(part + " may raise: " + checker.Obstacle); }
+        }
+
+        // return, break, next, redo or retry in the statements, else or ensure clause of a begin (not in its rescue clauses,
+        // which the typed body does not emit)
+        private sealed class JumpFinder : Walker {
+            private bool _found;
+
+            internal static bool Has(Body/*!*/ body) {
+                var finder = new JumpFinder();
+                finder.WalkAll(body.Statements);
+                finder.WalkAll(body.ElseStatements);
+                finder.WalkAll(body.EnsureStatements);
+                return finder._found;
+            }
+
+            private void WalkAll(Statements statements) {
+                if (statements == null) { return; }
+                foreach (var statement in statements) { statement.Walk(this); }
+            }
+
+            public override bool Enter(ReturnStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(BreakStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(NextStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(RedoStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(RetryStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { return false; }
+        }
+
+        /// <summary>
+        /// What the protected part of a begin may call (EmitExceptionBody): the helpers that run no Ruby code and throw nothing
+        /// but a deopt - the ones a body that holds its writes back may call (JitCompiler.Sink.cs) and the deopting reads and
+        /// identity tests - and the body of an inlined callee, which is held to the same. Not a callee's delegate (a bound or
+        /// self-call), a dynamic site, a fallback, a loop's safe point, a construction or a try.
+        /// </summary>
+        private static readonly HashSet<string>/*!*/ _raiseFreeHelpers = new HashSet<string> {
+            "IsIdentical", "IsNil", "CollectionEqualsNil", "IndexInt", "IndexLong", "IndexObj", "IndexIntChecked", "IndexLongChecked",
+            "IndexObjChecked", "HashKeyInt",
+        };
+
+        private sealed class RaiseFreeChecker : MSA.ExpressionVisitor {
+            internal string Obstacle;
+
+            protected override MSA.Expression VisitMethodCall(MSA.MethodCallExpression node) {
+                var m = node.Method;
+                if (Obstacle == null && !IsRaiseFree(m)) {
+                    Obstacle = "a call of " + m.DeclaringType.Name + "." + m.Name;
+                }
+                return base.VisitMethodCall(node);
+            }
+
+            private static bool IsRaiseFree(System.Reflection.MethodInfo/*!*/ m) {
+                if (m.DeclaringType == typeof(JitRuntime)) { return _sinkSafeHelpers.Contains(m.Name) || _raiseFreeHelpers.Contains(m.Name); }
+                return m == _absLong || m == _absDouble || m == _booleanToObject || m == IsTrueMethod;
+            }
+
+            protected override MSA.Expression VisitInvocation(MSA.InvocationExpression node) {
+                // an inlined callee's lambda is visited with it; a delegate is a body this one does not see
+                if (Obstacle == null && !(node.Expression is MSA.LambdaExpression)) { Obstacle = "an invoked body"; }
+                return base.VisitInvocation(node);
+            }
+
+            protected override MSA.Expression VisitTry(MSA.TryExpression node) {
+                if (Obstacle == null) { Obstacle = "a try"; }
+                return base.VisitTry(node);
+            }
+
+            protected override MSA.Expression VisitLoop(MSA.LoopExpression node) {
+                if (Obstacle == null) { Obstacle = "a loop"; }
+                return base.VisitLoop(node);
+            }
+
+            protected override MSA.Expression VisitExtension(MSA.Expression node) {
+                if (Obstacle == null) { Obstacle = "an extension node " + node.GetType().Name; }
+                return node;
+            }
+
+            protected override MSA.Expression VisitDynamic(MSA.DynamicExpression node) {
+                if (Obstacle == null) { Obstacle = "a dynamic call"; }
+                return base.VisitDynamic(node);
+            }
+
+            protected override MSA.Expression VisitNew(MSA.NewExpression node) {
+                if (Obstacle == null) { Obstacle = "a construction of " + node.Type.Name; }
+                return base.VisitNew(node);
+            }
+        }
+
         private MSA.Expression/*!*/ EmitStatements(Statements/*!*/ statements, int start, out JT type) {
             int count = statements.Count - start;
             if (count <= 0) {
@@ -1066,7 +1230,7 @@ namespace IronRuby.Runtime.Jit {
                 type = JT.Obj;
                 return Ast.Constant(null, typeof(object));
             }
-            if (_resume != null && _ast != null && statements == _ast.Body.Statements) {
+            if (_resume != null && statements != null && statements == MethodStatements) {
                 // the method's own statements, which may carry :line hooks (EmitTopStatement)
                 return EmitStatements(statements, 0, out type);
             }
@@ -1212,7 +1376,7 @@ namespace IronRuby.Runtime.Jit {
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
-                    throw JitBailout.Instance;
+                    return EmitExceptionBody(body, out type);
                 }
                 return EmitStatements(body.Statements, out type);
             }
@@ -2317,6 +2481,49 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Constant(false);
         }
 
+        // IR_JIT_TYPE_TEST=0 turns EmitTypeTest off
+        internal static readonly bool TypeTests = Environment.GetEnvironmentVariable("IR_JIT_TYPE_TEST") != "0";
+
+        /// <summary>`x.is_a?(C)', `x.kind_of?(C)', `x.instance_of?(C)' or the same on self, C a constant and no block.</summary>
+        internal static bool IsTypeTest(MethodCall/*!*/ node) {
+            if (!TypeTests || node.Block != null || node.Target == null && node.IsVariableCall) { return false; }
+            if (node.MethodName != "is_a?" && node.MethodName != "kind_of?" && node.MethodName != "instance_of?") { return false; }
+            var args = node.Arguments;
+            return args != null && args.Expressions.Length == 1 && args.Expressions[0] is ConstantVariable;
+        }
+
+        /// <summary>
+        /// `x.is_a?(C)', `x.kind_of?(C)', `x.instance_of?(C)': Kernel's answer, a walk of the ancestors of x's class (its
+        /// singleton class, with the modules it was extended with, included) or a comparison with x's class
+        /// (JitRuntime.IsKindOf), with no frame and no call. C is the folded constant (EmitConstant), which the entry's
+        /// constant version guards. The site (JitRuntime.KernelMethodSite) checks that x's class resolves the name to
+        /// Kernel's method under the current global method version - which moves when a class is reopened with a method,
+        /// a module included, prepended or extended, or a singleton class made - and deopts otherwise: a redefined or
+        /// missing is_a? (a BasicObject, method_missing), and a C that is no module (TypeError) are the generic call's.
+        /// Ancestors are read when the test runs, so a module included after the body was compiled is seen. Not where a
+        /// refinement is active: a refined is_a? is what the call reaches.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitTypeTest(MethodCall/*!*/ node, out JT type) {
+            if (!_refinements.IsEmpty) { throw Bail(node.MethodName + " with refinements active"); }
+            var site = new JitRuntime.KernelMethodSite(node.MethodName, LibraryMethods(node.MethodName, _context.ObjectClass));
+            MSA.Expression receiver;
+            if (node.Target == null) {
+                receiver = _self;
+            } else {
+                JT rt;
+                receiver = Coerce(Emit(node.Target, out rt), rt, JT.Obj);
+            }
+            JT ct;
+            var module = Coerce(Emit(node.Arguments.Expressions[0], out ct), ct, JT.Obj);
+            // a constant folded to something that is no module would deopt on every call (the TypeError is the generic call's)
+            var folded = module as MSA.ConstantExpression;
+            if (folded != null && !(folded.Value is RubyModule)) { throw Bail(node.MethodName + " of a constant that is no module"); }
+            _canDeopt = true;
+            type = JT.Bool;
+            return Ast.Call(JitRuntime.M("IsKindOf"), Ast.Constant(_context), receiver, module, Ast.Constant(site),
+                Ast.Constant(node.MethodName == "instance_of?"));
+        }
+
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
             if (node.Block != null && !PassesNoBlock(node)) {
                 // an iterator with a literal block inside a core iterator's outlined loop: run in place (JitCompiler.Nest.cs)
@@ -2335,6 +2542,9 @@ namespace IronRuby.Runtime.Jit {
 
             // `raise ...' or `fail ...' (EmitRaise): a deopt, and the generic body raises.
             if (IsRaiseCall(node)) { return EmitRaise(node, out type); }
+
+            // `x.is_a?(C)', `kind_of?', `instance_of?' (EmitTypeTest)
+            if (IsTypeTest(node)) { return EmitTypeTest(node, out type); }
 
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
@@ -3610,7 +3820,9 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>Mirrors JitCompiler.EmitBody.</summary>
         private bool WalkBody(Body/*!*/ body) {
             if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
-                return No(body) && WalkClausesForCensus(body, 0);
+                // the statements, else and ensure in their order; the rescue clauses are not emitted (JitCompiler.EmitExceptionBody)
+                if (!JitCompiler.RescueBodies || _loops > 0 || JitCompiler.JumpsThroughEnsure(body)) { return No(body) && WalkClausesForCensus(body, 0); }
+                return WalkStatements(body.Statements) && WalkStatements(body.ElseStatements) && WalkStatements(body.EnsureStatements);
             }
             return WalkStatements(body.Statements);
         }
@@ -4052,6 +4264,11 @@ namespace IronRuby.Runtime.Jit {
             if (node.Target != null && argc == 0 && node.MethodName == "!") {
                 // `!x' (JitCompiler.EmitNot)
                 return WalkCondition(node.Target);
+            }
+
+            if (JitCompiler.IsTypeTest(node)) {
+                // `x.is_a?(C)' and the like (JitCompiler.EmitTypeTest): x is any object, C a constant
+                return (node.Target == null || Walk(node.Target)) && (WalkConstant((ConstantVariable)args.Expressions[0]) || No(node));
             }
 
             // `v.nil?', `v == w', `v != w', `v.equal?(w)' on any object (JitCompiler.EmitIdentityCall); `=='
