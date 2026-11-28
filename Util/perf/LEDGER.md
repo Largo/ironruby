@@ -2033,7 +2033,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
-- **perf/heldrfc 708f407 (round forty-three, 2026-11-28) - a method's scope holds its caller's literal
+- **perf/heldrfc e8a74f4 (round forty-three, 2026-11-28) - a method's scope holds its caller's literal
   block until it is parked (gap 25)** - not gated. At fcbc67b (rounds seven and eight merged) Havlak
   allocated 1.79 GB an iteration again, method scopes 24% and Procs 13% as before perf/havlakalloc: round
   thirty-seven's perf/literalcode (`2eda4af`, "a body that evaluates a literal block on every call is not a
