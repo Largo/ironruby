@@ -8510,6 +8510,41 @@ ArgumentError
         }
 
         /// <summary>
+        /// A Struct stores a ruby2_keywords Hash given as a member value as it came, as MRI's C rb_struct_initialize_m does: the
+        /// prelude's slow path splats the values with `**nil' (RubyCallFlags.HasRuby2KeywordsSplat). Expected output from CRuby 4.0.
+        /// </summary>
+        public void Struct_Ruby2KeywordsHash1() {
+            TestOutput(@"
+require 'ruby4'
+h = Hash.ruby2_keywords_hash({k: 1})
+S = Struct.new(:x, :y)
+s = S.new(1, h)
+p s.y.equal?(h), Hash.ruby2_keywords_hash?(s.y)
+s = S.new(*[1, h], **{})
+p s.y.equal?(h), s.to_a
+S3 = Struct.new(:x, :y, :z)
+s = S3.new(1, h)
+p s.y.equal?(h), s.to_a
+K = Struct.new(:x, :y, keyword_init: true)
+p K.new(x: 1, y: h).y.equal?(h)
+s = S.new(1, 2); s.send(:initialize, 3, h)
+p s.y.equal?(h)
+p S.new(x: 1, y: 2).to_a, S.new({x: 1}).to_a
+", @"
+true
+true
+true
+[1, {k: 1}]
+true
+[1, {k: 1}, nil]
+true
+true
+[1, 2]
+[{x: 1}, nil]
+");
+        }
+
+        /// <summary>
         /// A method's keyword prologue (PrismAstBridge.LowerKeywords): which error wins when several things are wrong at once,
         /// and defaults run in order and only for omitted keywords (Util/kw-prologue-matrix.rb).
         /// </summary>
