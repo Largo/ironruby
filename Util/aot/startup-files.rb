@@ -77,6 +77,10 @@ def recorded_evals(args, stdin)
     File.readlines(record, chomp: true).map do |l|
       e = JSON.parse(l)
       e["path"] = e["path"].gsub(tree + "/", "${ROOT}/")
+      # a text made from a location (Forwardable's delegators) names the tree too: the library hashes it with the tree's
+      # root as a marker (PrecompiledCode.HashEvalCode), so that it is the same text wherever the tree is
+      code = e["code"].unpack1("m0").b
+      e["code"] = [code.gsub((tree + "/").b, "${ROOT}/".b)].pack("m0")
       JSON.generate(e)
     end
   end

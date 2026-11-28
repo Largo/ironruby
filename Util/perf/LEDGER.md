@@ -1642,6 +1642,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     image; best-of-10 wall -2 to -11% and -0 to -14%. Not taken: the JIT's re-parses of start-up methods
     (2-3 ms of `-e 1`), and Kernel#require's first-call body compile (~10 ms, 4 ms of it the first
     def-body transform's cold path), the next leads.
+    2026-11-28, perf/requirecold (Landed, not gated): Kernel#require's first-call compile was
+    already gone. perf/bootparse precompiled the kernel_require.rb eval, and with it the def bodies
+    in it (`def body: transform` 9.0 ms -> 0 in `-e 1`). What was left to parse at start-up were
+    module_evals (FileUtils' 92, which `require "irb"` loads; Date::Format::Bag's 22) and the
+    36 reline delegators whose text names the tree (claimed only in the tree they were recorded in).
+    Both are now in the library: -1.4 to -2.1% main-thread instructions on `require "irb"` and irb;
+    the other three +0.05 to +0.14% (registering more keys). Next leads: the first top-level
+    transform of a process (4.1 ms for `-e 1`'s one character, a cold path), the JIT's re-parses
+    of library methods (140 `def body: AST bridge` in irb), and fileutils.rb, tmpdir.rb and
+    irb/completion.rb, still compiled from source (rescue re-raise frames, refinements).
 27. **Closed (perf/crubydiff, third round): `send` frames are hidden.** Was: **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -3012,6 +3022,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   the bound; the Enumerator*, Lazy*, Loop*, Fiber*, Thread*, Exception* and Raise* IronRuby.Tests
   (60) pass in five plain runs on base and five on new.
 
+- **perf/requirecold (2026-11-28) - module_evals in the startup library; eval texts that name the tree (gap 26)**
+  - not gated. Base 50b07b5 (claude/happy-gauss-95wm2j) merged with 516fb7c (perf/bootparse).
+  The brief: Kernel#require's body, compiled at its first call (~10 ms on the R2R host before
+  perf/bootparse, ~4 ms of it the cold path of the first def-body transform). Measured on the base
+  (IR_PHASE_TIMES, R2R host): that compile is gone. The kernel_require.rb eval comes from the library
+  since perf/bootparse, with its def bodies (`def body: transform` 9.0 ms / 1 -> 0 in `-e 1`,
+  `def body: LightCompile` 3.0 ms -> 0). So the transformer's cold path, R2R coverage and warming it
+  off the main thread were not pursued: what is left of it is the one top-level transform of each
+  command's own script (4.1 ms for `-e 1`). Taken instead, the largest parse left at start-up:
+  - aea43ac: module_evals. RubyUtils.Evaluate left `module_eval`/`class_eval` strings out of the
+    precompiled evals (with the eval code cache). FileUtils makes Verbose, NoWrite and DryRun with 92
+    `module_eval <<-EOS def #{name}...` (`require "irb"` loads fileutils through tmpdir) and
+    Date::Format::Bag 22 accessors; irb `1+1` parsed and transformed 135 texts. A module_eval of a named
+    module that is not a singleton class is now recorded and claimed, with the module's name in the key.
+    The compiler walks its text as that module's body, so its defs' frame labels name the module
+    (FileUtils::Verbose#mkdir) and their bodies are not compiled again from source at their first call.
+    FactoryKind.ModuleEval, as CreateCompilerOptionsForEval. instance_eval (a singleton class) and an
+    anonymous module's module_eval compile from text; the code cache still takes plain evals only.
+    startup-evals.txt 150 -> 264 evals; irb claims 212 (84), top-level transforms 135 -> 7.
+  - 658195a: Forwardable writes the location that defined a delegator into its text (the
+    private-method warning), so 36 of reline's 56 delegators name the tree's root. They were claimed
+    only in the tree startup-files.rb recorded them in: the release image, a build from any other
+    checkout, and perf/bootparse's measured base claimed 20 of 56. The recorder writes the root as
+    ${ROOT} in a text as in a path; HashEvalCode hashes a text with the root as RootMarker; and an
+    eval's frozen strings that name the tree are rebased as the library's other strings are. A copy of
+    the release image moved elsewhere claims all 56, and the warning names the moved tree. An eval that
+    would still tie the library to its tree (a symbol) is left out rather than the library unused.
+  Numbers (base / new, one batch each):
+  - Main-thread instructions (callgrind, TieredCompilation=0), R2R host: `-e 1` +0.08%, `gem --version`
+    +0.08%, `gem list` +0.07%, `require "irb"` -1.42%, irb -1.82%. Release image: +0.05%, +0.05%, +0.14%,
+    -2.09%, -1.79%. The +0.1% is the attribute's 114 more keys and hashes read at every start: 264 entries
+    share 99 keys, so a key table would take most of it back.
+  - Wall, best of 10 alternating, two batches: within noise (the spread between batches was +-9% on
+    the release image, against a ~2% effect).
+  Checked: FileUtils::Verbose/NoWrite/DryRun output, frame labels, owner, source_location, parameters and
+  an ArgumentError's backtrace as the base and as CRuby 4.0; Date's parsers as the base; the bootparse
+  probe (second load, changed byte, other file and line, threads) as the base. The five commands print what
+  the base prints (R2R host; release image moved). `startup-files.rb --check` passes. Matrices eval,
+  eval-locals, eval-defined, eval-literals, erb-escape, forwardable, binding-lvar, caller, sdef,
+  refinement, error-message, super-light in the gate's modes, r2r and r2r with IR_STARTUP_DLL=none: PASS
+  (70 same, 14 baseline). IronRuby.Tests and ruby/spec not run this round.
+  For the gate: that a module_eval's compiled code depends on nothing of its module but the name (the
+  key's), and labels; the root replacement in HashEvalCode and in eval strings (an eval text naming the
+  tree is now relocated, where a file's literal naming it still makes the library unrelocatable).
 - **perf/bootparse (2026-11-27) - the string evals of start-up precompiled in the startup library (gap 26)**
   - not gated. Base 4703cb5 (f67ac44 with perf/clrlookup).
   What start-up parses at run time (R2R host, IR_PHASE_TIMES, IR_STARTUP_DLL_TRACE): the string evals,
