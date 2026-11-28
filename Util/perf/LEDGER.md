@@ -1927,7 +1927,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - **Clock** (ab.rb -r 3, `Util/bench/isa-shapes.rb`, ns, off -> new, CRuby): mono 72.9 -> 57.2 (46.9), poly2
     89.8 -> 71.8 (63.5), poly4 143.6 -> 91.5 (62.9), a module argument 76.0 -> 65.7 (51.8), instance_of 67.3 ->
     54.3 (46.1), an Integer/Float/else chain 150.6 -> 126.2 (75.3), on self 71.4 -> 52.3 (42.6); no overlap.
-  - **Checks.** `Util/jit-isa-matrix.rb` (new, 38 rows): receivers of every kind; Comparable, Enumerable, Module
+  - **Checks.** `Util/jit-isa-matrix.rb` (new, 37 rows): receivers of every kind; Comparable, Enumerable, Module
     and Class arguments; instance_of? with a singleton class; include, prepend and extend (an Object, a String,
     Integer) after the body is hot; a constant swapped to another class and to a non-module; is_a?(5); a
     BasicObject; method_missing; is_a? redefined in a class, a singleton, a class reopened and Kernel, then
