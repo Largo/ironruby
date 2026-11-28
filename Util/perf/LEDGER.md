@@ -1901,6 +1901,47 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/r2kflag (2026-11-28) - a ruby2_keywords hash stays positional at a call with an explicit
+  `**`, and at a library method's own call; `yield(*args)` makes it keywords; `**h` passes a dup**
+  (correctness, no switch). Built on aa82bf28 (claude/perf-lsite, which has f67ac44).
+  - **What CRuby 4.0 does.** A marked hash ending a splatted list is made keywords only at a
+    splat in Ruby source with no `**` (vm_caller_setup_arg_splat, a call without kw_splat):
+    `g(*a, **{})`, `g(*a, **nil)`, `super(*a, **{})` keep it positional, the same object with its
+    mark, and a C method passing its arguments on (Class#new to #initialize, a Method's proc,
+    Kernel#send, Proc#call) passes them as they came. `yield(*args)` converts as `f(*args)` does.
+    `**h` alone gives the callee a dup of h: its default, default proc and compare_by_identity
+    come along, to a `**r` (minus the declared keywords) and to a positional parameter alike.
+  - **What IronRuby did.** Every splatted call converted the marked hash (MetaObjectBuilder.
+    AddSplattedArgumentTest, ArgsBuilder, RubyOverloadResolver, RubyMethodGroupBase,
+    LibraryDispatcher), library sites included; `yield(*args)` never did (a block taking
+    `*a, **k` got the hash in `a`; language/keyword_arguments' "yield(*ruby2_keyword_args)"
+    passed only because the lambda's own `target(*args, **kwargs)` converted it - wrongly); and
+    KeywordSplatArgument's copy dropped the default, default proc and identity comparison.
+  - **What changed.** RubyCallFlags.HasRuby2KeywordsSplat (4096; FlagsCount 13): set by
+    CallSiteBuilder on a splat site with no `**` among its arguments, read wherever the mark was
+    turned back into keywords - a compile-time property of the site, so the rules decide it and
+    no call pays for it (LibraryDispatcher keeps it in a field for ExpandSplat). Library-made
+    sites never set it, but Symbol#to_proc's. SuperCall's two keyword sites pass explicitly. Arguments.TransformToYield
+    converts the splat of a yield without `**` (RubyOps.SplatRuby2Keywords). Hash.
+    TryCopyAsKeywordArguments and KeywordSplatArgument's general copy keep the default, default
+    proc and comparer.
+  - **Checks.** IronRuby.Tests Method_Ruby2KeywordsExplicitSplat1 (CRuby 4.0's output; fails on
+    the base build). Util/kwsplat-forward-matrix.rb: its three rows that differed now match, and
+    new rows for yield, Method#to_proc, Class#new and send; with the splat, keyword and forwarding
+    matrices in every mode: same as CRuby (the one difference is `IR_KWSPLAT_BY_REFERENCE=0`'s known row). Specs language/keyword_arguments, send, def, super, method,
+    block, yield and core/kernel/send, core/module/ruby2_keywords, core/hash/ruby2_keywords_hash,
+    core/struct/new, core/method/to_proc, core/proc/ruby2_keywords as before. IronRuby.Tests in
+    full (Debug): PASSED, 1,403 tests. SymbolProcKeywords1 caught one library site that does convert:
+    Symbol#to_proc's (Proc.CreateMethodInvoker), whose proc keeps keywords marked in its rest list.
+  - **Clock** (`ab.rb -r 10`, Release, base aa82bf28): splat-shapes, delegate-shapes (`N=1000000`)
+    and yield splats (`yield(*a)` 65.7 / 67.6 ns, `yield(*a, **k)` 108.0 / 106.6) unchanged within
+    their spreads; no instruction counter in this container.
+  - **Left.** `Struct.new(:x, :y).new(1, h)` stores a copy of a marked h even without a splat
+    (StructOps; CRuby stores h). An empty `**e` with a default gives a `**k` callee `{}`, where
+    CRuby gives a dup of e (default 7). `f(*a, k: 1, &g)`: the call convention passes one
+    trailing list, so `[*a, kw]` is built before the block's #to_proc either way - one array,
+    nothing to gain; only a #to_proc that changes `a` could tell.
+
 - **perf/kwfwd (/perf-step, 2026-11-27) - `f(*a, **h)` passes `a` itself and no array for an
   empty `h`; `def m(*, **)` keeps no copy of its arguments for a `super`** (switch
   `IR_KWSPLAT_BY_REFERENCE` for the first, on unless `=0`). Built on f7ae738b (claude/perf-lsite,

@@ -8308,6 +8308,72 @@ false
         }
 
         /// <summary>
+        /// A call with an explicit `**' - even one that passes nothing - leaves a ruby2_keywords hash ending its splatted list
+        /// positional, the same object with its mark (RubyCallFlags.HasRuby2KeywordsSplat), and so does a library method
+        /// passing its arguments on, where `yield(*args)' makes it keywords as `f(*args)' does; and `**h' alone gives the callee a dup of h, its default, default proc and
+        /// compare_by_identity with it (RubyOps.KeywordSplatArgument). Expected output from CRuby 4.0.
+        /// </summary>
+        public void Method_Ruby2KeywordsExplicitSplat1() {
+            TestOutput(@"
+require 'ruby4'
+def g(*a, **k) = [a, k]
+def g2(a, k: 0) = [a, k]
+def rest(*a) = a
+h = Hash.ruby2_keywords_hash({k: 1})
+a = [1, h]
+e = {}
+p g(*a), g(*a, **e), g(*a, **nil), g(*a, **{z: 2})
+r = rest(*a, **e)
+p r.last.equal?(h), Hash.ruby2_keywords_hash?(r.last)
+p((g2(*a, **e) rescue $!.class), g2(*a))
+p send(:g, *a, **e), method(:g).call(*a, **e), method(:g).to_proc.call(*a, **e)
+p proc { |*x, **kk| [x, kk] }.call(*a, **e)
+ruby2_keywords def fwd(*r) = g(*r, **{})
+p fwd(1, k: 2)
+class P; def m(*x, **kk) = [x, kk]; end
+class C < P; def m(*x) = super(*x, **{}); end
+p C.new.m(1, h)
+dp = Hash.new { :dp }; dp[:z] = 1
+dv = Hash.new(5); dv[:z] = 1
+ci = {}.compare_by_identity; ci[:z] = 1
+def kr(**r) = [r[:missing], r.default, r.compare_by_identity?]
+def kn(k: 1, **r) = [k, r.default, r.compare_by_identity?]
+def pos(x) = [x.default, x.compare_by_identity?]
+p kr(**dp), kr(**dv), kr(**ci), kn(**dv), kn(**ci), pos(**dv)
+p kr(a: 1, **dv), kr(**dv, **{})
+def y(args) = yield(*args)
+def yk(args) = yield(*args, **{})
+p y([h]) { |*x, **kk| [x, kk] }, y([h], &-> *x, **kk { [x, kk] }), yk([h]) { |*x, **kk| [x, kk] }
+", @"
+[[1], {k: 1}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {z: 2}]
+true
+true
+ArgumentError
+[1, 1]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 2}], {}]
+[[1, {k: 1}], {}]
+[:dp, nil, false]
+[5, 5, false]
+[nil, nil, true]
+[1, 5, false]
+[1, nil, true]
+[5, false]
+[nil, nil, false]
+[nil, nil, false]
+[[], {k: 1}]
+[[], {k: 1}]
+[[{k: 1}], {}]
+");
+        }
+
+        /// <summary>
         /// A method's keyword prologue (PrismAstBridge.LowerKeywords): which error wins when several things are wrong at once,
         /// and defaults run in order and only for omitted keywords (Util/kw-prologue-matrix.rb).
         /// </summary>

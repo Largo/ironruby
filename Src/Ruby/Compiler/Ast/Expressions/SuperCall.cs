@@ -307,9 +307,11 @@ namespace IronRuby.Compiler.Ast {
             temps.Add(keywords);
             body.Add(Ast.Assign(keywords, keywordsValue));
 
-            var without = new CallSiteBuilder(gen, gen.CurrentSelfVariable, blockArgVariable);
+            // both pass their keywords explicitly - a `**' that passes nothing, or the hash - so a ruby2_keywords hash ending
+            // the positionals stays one (RubyCallFlags.HasExplicitKeywords)
+            var without = new CallSiteBuilder(gen, gen.CurrentSelfVariable, blockArgVariable) { HasExplicitKeywords = true };
             AddArguments(without, values, splatted, null);
-            var with = new CallSiteBuilder(gen, gen.CurrentSelfVariable, blockArgVariable);
+            var with = new CallSiteBuilder(gen, gen.CurrentSelfVariable, blockArgVariable) { HasExplicitKeywords = true };
             AddArguments(with, values, splatted, keywords);
 
             body.Add(Ast.Condition(

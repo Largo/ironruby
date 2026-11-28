@@ -77,13 +77,22 @@ namespace IronRuby.Runtime.Calls {
         // (ArgsBuilder.AddCallArguments). Not a site that splats an array of the program's own (`f(*a)'), which the callee
         // must not share.
         HasFreshSplat = 2048,
+
+        // A splat written in Ruby source, in a call with no `**' among its arguments (`f(*a)', not `f(*a, **h)'): the one
+        // kind of call at which a ruby2_keywords hash ending the list is made keyword arguments again (RubyOps.
+        // SplatRuby2Keywords, read by MetaObjectBuilder.AddSplattedArgumentTest, ArgsBuilder, RubyOverloadResolver,
+        // RubyMethodGroupBase and LibraryDispatcher). CRuby 4.0 looks at the mark only there (vm_caller_setup_arg_splat, for
+        // a call without kw_splat): with an explicit `**' - even one that passes nothing - the hash stays a positional
+        // argument, the same object with its mark, and a C method passing its arguments on (Class#new to #initialize, a
+        // Method's proc, Kernel#send) passes them as they came. So a site a library method makes never converts.
+        HasRuby2KeywordsSplat = 4096,
     }
         
     /// <summary>
     /// RubyScope/RubyContext, (self), (argument){ArgumentCount}, (splatted-argument)?, (block)?
     /// </summary>
     public struct RubyCallSignature : IEquatable<RubyCallSignature> {
-        private const int FlagsCount = 12;
+        private const int FlagsCount = 13;
 
         private const int ResolveOnlyArgumentCount = (int)(UInt32.MaxValue >> FlagsCount);
         private const int MaxArgumentCount = ResolveOnlyArgumentCount - 1;
@@ -104,6 +113,7 @@ namespace IronRuby.Runtime.Calls {
         public bool HasSourceBlock { get { return (_countAndFlags & (uint)RubyCallFlags.HasSourceBlock) != 0; } }
         public bool HasLightScope { get { return (_countAndFlags & (uint)RubyCallFlags.HasLightScope) != 0; } }
         public bool HasFreshSplat { get { return (_countAndFlags & (uint)RubyCallFlags.HasFreshSplat) != 0; } }
+        public bool HasRuby2KeywordsSplat { get { return (_countAndFlags & (uint)RubyCallFlags.HasRuby2KeywordsSplat) != 0; } }
 
         // defined? ignores arguments hence we can use one argument number (max) to represent resolve only sites:
         public bool ResolveOnly { get { return ArgumentCount == ResolveOnlyArgumentCount; } }

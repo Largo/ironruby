@@ -1180,6 +1180,7 @@ namespace IronRuby.Tests {
                 Method_LightFrameMemberOpAssign1,
                 Method_LightFrameKeywordRest1,
                 Method_KeywordHashIntoRest1,
+                Method_Ruby2KeywordsExplicitSplat1,
                 Method_KeywordPrologue1,
                 Method_LightFrameGlobal1,
                 Method_LightFrameLexical1,

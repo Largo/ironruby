@@ -8,9 +8,9 @@
 #   IR_LIGHT_FRAMES=0 ./ir.sh Util/kwsplat-forward-matrix.rb > scoped.txt
 #   diff mri.txt on.txt && diff mri.txt scoped.txt
 #
-# Three probes differ from CRuby 4.0 on builds before and after this change and are kept to show it: a `**' copy loses
-# the hash's default proc, and a ruby2_keywords hash ends the list before an explicit empty `**' (CRuby passes it
-# positionally, flag and all; IronRuby's call sites take it as keywords whenever it is the last item splatted).
+# The ruby2_keywords probes and the default-proc one differed from CRuby 4.0 until a call with an explicit `**' stopped
+# making a marked hash keywords (RubyCallFlags.HasRuby2KeywordsSplat) and `**h' passed a dup of h (RubyOps.
+# KeywordSplatArgument).
 #
 # Each probe runs 3000 times (interpreted, then compiled) and prints every distinct answer once.
 
@@ -135,3 +135,13 @@ class SupE3 < SupP; def m(*, **) = [1].map { eval('super') }.first; end
 t("eval('super') from (a, *, d:)") { |i| SupE.new.m(1, 2, 3, d: 4) }
 t("eval('super') from (*, **)") { |i| i.even? ? SupE2.new.m(1, 2, k: 3) : SupE2.new.m }
 t("eval('super') in a block from (*, **)") { |i| SupE3.new.m(1, k: 2) }
+def y_splat(args) = yield(*args)
+def y_splat_kw(args) = yield(*args, **{})
+t("yield(*args) with a ruby2_keywords hash") { |i| y_splat([1, Hash.ruby2_keywords_hash({k: i % 2})]) { |*x, **k| [x, k] } }
+t("yield(*args, **{}) keeps it positional") { |i| r = y_splat_kw([1, Hash.ruby2_keywords_hash({k: 1})]) { |*x, **k| [x, k] }; [r, Hash.ruby2_keywords_hash?(r[0].last)] }
+t("yield(*args) to a lambda") { |i| y_splat([Hash.ruby2_keywords_hash({k: 1})], &->(*x, **k) { [x, k] }) }
+t("Method#to_proc and Class#new pass it on positional") do |i|
+  h = Hash.ruby2_keywords_hash({k: 1}); a = [1, h]; e = {}
+  c = Class.new { attr_reader :v; def initialize(*x, **k) = @v = [x, k] }
+  [method(:kwr).to_proc.call(*a, **e), c.new(*a, **e).v, send(:kwr, *a, **e)]
+end
