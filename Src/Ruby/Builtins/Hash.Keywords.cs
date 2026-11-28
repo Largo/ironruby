@@ -127,6 +127,47 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// <see cref="CopyWithoutKeywords"/> done to this hash itself, a keyword call's own (<see cref="CreateKeywordArguments"/>,
+        /// no bucket array yet): the entries whose keys are among <paramref name="names"/> (by identity) are taken out and the
+        /// rest slid down, keeping their order and hash codes. False, and nothing done, for a hash that has buckets.
+        /// </summary>
+        internal bool TryRemoveKeywordsInPlace(object/*!*/[]/*!*/ names) {
+            if (_buckets != null) {
+                return false;
+            }
+            Entry[] entries = _entries;
+            int count = _count;
+            int dst = 0;
+            for (int src = _start; src < count; src++) {
+                ref Entry e = ref entries[src];
+                if (e.Next == TombstoneNext) {
+                    continue;
+                }
+                object key = e.Key;
+                int j = 0;
+                while (j < names.Length && names[j] != key) {
+                    j++;
+                }
+                if (j < names.Length) {
+                    continue;
+                }
+                if (dst != src) {
+                    entries[dst] = e;
+                }
+                dst++;
+            }
+            if (dst != count || _start != 0) {
+                Array.Clear(entries, dst, count - dst);
+                _count = dst;
+                _liveCount = dst;
+                _start = 0;
+                _version++;
+                _stamp++;
+            }
+            return true;
+        }
+
         private bool AllKeysAreSymbols() {
             Entry[] entries = _entries;
             int count = _count;

@@ -173,3 +173,27 @@ def mg_raise(**o) = kwr(k: 1, **o.fetch(:h))
 t("error raised inside a merge's operand") { |i| (mg_raise rescue [$!.class, $!.message]) }
 # (whether the merging method is in the backtrace: IronRuby's top frame is the Hash#merge #to_hash goes through, MRI's the method)
 t("backtrace of an error in a merged call") { |i| begin; mg_two(BadHash.new); rescue TypeError => e; e.backtrace_locations.map(&:label).include?("Object#mg_two"); end }
+
+# ---------------------------------------------------------------- 8. a **rest parameter is the call's own keyword hash (RubyOps.MakeKeywordRest,
+# IR_KWREST_TAKE): it must never be a hash the caller, or anything else, still holds
+def kt_mut(k: 0, **o) = (o[:added] = k; o.delete(:z); o)
+def kt_keep(**o) = ($kept ||= []) << o
+def kt_super_base(**o) = o
+class KtP; def m(k: 0, **o) = [k, o]; end
+class KtZ < KtP; def m(k: 0, **o) = (o[:local] = 1; super); end
+class KtE < KtP; def m(k: 0, **o) = (o[:local] = 1; eval('super')); end
+t("caller's **h is not the callee's o") { |i| h = {k: 1, z: 2}; r = kt_mut(**h); [r, h] }
+t("caller's **h, no declared keys") { |i| h = {z: 2}; r = kt_keep(**h); r[-1][:x] = 1; $kept = nil; h }
+t("literal keywords: o mutated, declared key gone") { |i| kt_mut(k: 3, z: 4, y: 5) }
+t("each call's o is its own") { |i| $kept = nil; a = kt_keep(a: 1)[-1]; b = kt_keep(a: 1)[-1]; a[:x] = 1; [a, b, a.equal?(b)] }
+t("o through send and method_missing") { |i| [send(:kt_mut, k: 1, z: 2, y: 3), MM.new.ghost(k: 1)] }
+t("o through Method#call and a proc") { |i| [method(:kt_mut).call(k: 1, y: 2), proc { |k: 0, **o| o[:p] = 1; o }.call(k: 1, y: 2)] }
+t("o through define_method") { |i| self.class.send(:define_method, :kt_dm) { |k: 0, **o| o[:d] = k; o } if i == 0; kt_dm(k: 2, y: 3) }
+t("zsuper after o changed") { |i| KtZ.new.m(k: 1, y: 2) }
+t("eval('super') after o changed") { |i| KtE.new.m(k: 1, y: 2) }
+t("o keeps compare_by_identity and default") { |i| h = Hash.new(5).compare_by_identity; h[:y] = 1; o = kt_keep(**h)[-1]; $kept = nil; [o.default, o.compare_by_identity?, o] }
+t("o from a frozen **h") { |i| h = {k: 1, y: 2}.freeze; [kt_mut(**h), h.frozen?] }
+ruby2_keywords def r2k_fwd_mut(*a) = kt_mut(*a)
+t("o from ruby2_keywords") { |i| r = r2k_fwd_mut(k: 1, y: 2); r }
+t("o when no keywords given") { |i| [kt_mut, kt_keep[-1].tap { $kept = nil }] }
+t("o with non-Symbol keys") { |i| kt_mut(**{"s" => 1, k: 2}) }

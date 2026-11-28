@@ -8545,6 +8545,56 @@ true
         }
 
         /// <summary>
+        /// A **rest parameter is the keyword hash the call made for itself, the declared keywords taken out in place
+        /// (RubyOps.MakeKeywordRest, IR_KWREST_TAKE): never a hash the caller holds - `**h' passes a copy - nor one another call
+        /// gets; its default and comparer as the copy had them. Expected output from CRuby 4.0.
+        /// </summary>
+        public void Method_KeywordRestTakeover1() {
+            TestOutput(@"
+def kt_mut(k: 0, **o) = (o[:added] = k; o.delete(:z); o)
+def kt_keep(**o) = o
+class KtP; def m(k: 0, **o) = [k, o]; end
+class KtZ < KtP; def m(k: 0, **o) = (o[:local] = 1; super); end
+class KtE < KtP; def m(k: 0, **o) = (o[:local] = 1; eval('super')); end
+h = {k: 1, z: 2}
+p kt_mut(**h), h
+p kt_mut(k: 3, z: 4, y: 5)
+a = kt_keep(a: 1); b = kt_keep(a: 1); a[:x] = 1
+p a, b, a.equal?(b)
+p send(:kt_mut, k: 1, z: 2, y: 3), method(:kt_mut).call(k: 1, y: 2)
+p proc { |k: 0, **o| o[:p] = 1; o }.call(k: 1, y: 2)
+p KtZ.new.m(k: 1, y: 2), KtE.new.m(k: 1, y: 2)
+d = Hash.new(5).compare_by_identity; d[:y] = 1
+o = kt_keep(**d)
+p o.default, o.compare_by_identity?, o.equal?(d)
+f = {k: 1, y: 2}.freeze
+p kt_mut(**f), f.frozen?
+p kt_mut, kt_keep
+p kt_mut(**{""s"" => 1, k: 2})
+", @"
+{added: 1}
+{k: 1, z: 2}
+{y: 5, added: 3}
+{a: 1, x: 1}
+{a: 1}
+false
+{y: 3, added: 1}
+{y: 2, added: 1}
+{y: 2, p: 1}
+[1, {y: 2, local: 1}]
+[1, {y: 2, local: 1}]
+5
+true
+false
+{y: 2, added: 1}
+true
+{added: 0}
+{}
+{""s"" => 1, added: 2}
+");
+        }
+
+        /// <summary>
         /// A method's keyword prologue (PrismAstBridge.LowerKeywords): which error wins when several things are wrong at once,
         /// and defaults run in order and only for omitted keywords (Util/kw-prologue-matrix.rb).
         /// </summary>

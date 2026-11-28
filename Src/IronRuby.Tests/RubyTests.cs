@@ -1195,6 +1195,7 @@ namespace IronRuby.Tests {
                 Method_KeywordHashIntoRest1,
                 Method_Ruby2KeywordsExplicitSplat1,
                 Struct_Ruby2KeywordsHash1,
+                Method_KeywordRestTakeover1,
                 Method_KeywordPrologue1,
                 Method_LightFrameGlobal1,
                 Method_LightFrameLexical1,

@@ -1995,6 +1995,42 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/kwbind (/perf-step, 2026-11-28) - a `**rest` parameter is the call's own keyword hash, the
+  declared keywords taken out in place** (gap 38; switch `IR_KWREST_TAKE`, on unless `=0`). Built on
+  33818f7 (claude/happy-gauss-95wm2j) with d45083a0 merged.
+  - **Profile** (clock, Release, ns; CRuby in brackets): `def kopt(k: 0)` called `(k: 1)` 44 [30],
+    `def kreq(k:)` 44 [31] - the method JIT takes both, and what is left is the call (`pos(1)` 40
+    [27]); so a declared-keywords-only callee already reads the call's pairs without paying for
+    them, and the round's first candidate has nothing to win. A callee with `**o` is what pays:
+    `krest(k:, **o)` 165 [80], `onlyrest(**o)` 155 [89] - the JIT's screen rejects them
+    (KeywordArgumentsTest; JitKeywords leaves out a Match that accepts a rest). Of `onlyrest`'s
+    155: the caller's keyword hash ~43 (`poh({k: 1})` 83 against `pos` 40), the callee ~72 - its
+    prologue, and RubyOps.MakeKeywordRest's copy of the hash without the declared keywords.
+  - **What changed.** MakeKeywordRest takes the call's hash itself when it is one a keyword call
+    made (marked, a plain Hash, not frozen, no bucket array yet - CreateKeywordArguments' layout):
+    Hash.TryRemoveKeywordsInPlace slides the undeclared entries down over the declared ones, and the
+    marks come off. Every marked hash is made for one call (MakeKeywordArgumentsHash, `**h`'s copy,
+    the ruby2_keywords copies, a library's own; probed: a hash a library method stores, `[].push(k:
+    1)`, comes out unmarked), and the prologue has read the declared keywords before it binds the
+    rest, so nothing else sees the hash change. PassOnKeywordRest already copies when rest is the
+    given hash (zsuper), and eval('super') reads rest.
+  - **Clock** (`ab.rb -r 8`, ns; CRuby / `IR_KWREST_TAKE=0` / on): `krest(k: 1)` 66.6 / 143.7 /
+    108.0 (0.75), with an extra key 83.7 / 154.9 / 120.0 (0.77), `onlyrest(k: 1)` 76.6 / 140.0 /
+    99.7 (0.71), `krest_u` (reads o) 72.3 / 147.4 / 127.9 (0.87, overlapping); the controls
+    unchanged within their spreads.
+  - **Checks.** IronRuby.Tests Method_KeywordRestTakeover1 (CRuby 4.0's output: the caller's `**h`
+    untouched, each call's own o, send, Method#call, a proc, zsuper and eval('super') after o
+    changed, default and compare_by_identity kept, a frozen `**h`, no keywords, non-Symbol keys).
+    New rows in Util/kwsplat-forward-matrix.rb (the same, plus method_missing, define_method,
+    ruby2_keywords). kwsplat-forward, keyword-light, keyword-rest-light, kw-prologue, splat-pass,
+    kwrest-call, light-entry and hot-shapes: same as CRuby in default, `IR_KWREST_TAKE=0`,
+    `IR_LIGHT_KEYWORD_SPLAT=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` (48 of
+    48). Specs language/keyword_arguments, def, send, super, method, core/hash and
+    core/kernel/send as on the base build. IronRuby.Tests in full (Debug): PASSED, 1,418.
+  - **Left.** Still ~1.5x CRuby: the caller's keyword hash, and the interpreted prologue of a
+    method the JIT declines. Next: let JitKeywords take a Match that accepts a rest, binding the
+    rest with the same take-over.
+
 - **perf/kwsplatlight (/perf-frame, 2026-11-28) - `f(k: v, **h)` and `f(**a, **b)` in light frames;
   a Struct stores a ruby2_keywords Hash as given** (switch `IR_LIGHT_KEYWORD_SPLAT`, which already
   covered the lone `f(**h)`). Built on 33818f7 (claude/happy-gauss-95wm2j) with 78a731ca merged;
