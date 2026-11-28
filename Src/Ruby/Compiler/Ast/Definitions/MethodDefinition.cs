@@ -1494,6 +1494,18 @@ namespace IronRuby.Compiler.Ast {
                 if (splat != null) {
                     return (LightSplatEnabled || why != null && Refuse(why, node.GetType().Name + " (IR_LIGHT_SPLAT=0)")) && IsScopeFree(splat.Argument, blockLiterals, why);
                 }
+                // `f(k: v, **h)', `f(**a, **b)': h's entries go into the call's keyword hash by a helper that takes the scope only
+                // for its runtime (RubyOps.MergeKeywordSplat, MergeKeywordHash; LightFrameRewriter.ScopeOperandIndex), and
+                // anything but a Hash or nil through `hash.merge(h || {})', a call like any other; the temporaries are locals
+                // (IR_LIGHT_KEYWORD_SPLAT)
+                var merge = node as KeywordSplatMerge;
+                if (merge != null) {
+                    if (!LightKeywordSplatEnabled) {
+                        return Refuse(why, "KeywordSplatMerge (IR_LIGHT_KEYWORD_SPLAT=0)");
+                    }
+                    return IsScopeFree(merge.Hash, blockLiterals, why) && IsScopeFree(merge.Splatted, blockLiterals, why) &&
+                        (merge.Converted == null || IsScopeFree(merge.Converted, blockLiterals, why));
+                }
                 // `super', `super(a, *r)', `super(&b)': the site is given the module and the name the body was compiled for,
                 // which is what it read from the scope, and self (LightFrameRewriter.LightScopeCall); a parameterless super
                 // passes the parameters, which are locals, and the method's block, which the frame then converts as a method's
@@ -1963,7 +1975,8 @@ namespace IronRuby.Compiler.Ast {
                 // one-or-zero element array for a splatted call, or the call's own keyword hash passed on by a parameterless
                 // `super' (IR_LIGHT_KEYWORD_SPLAT)
                 if (LightKeywordSplatEnabled && (method == Methods.SplatKeywordHash || method == Methods.SplatKeywordHashIfHash ||
-                    method == Methods.KeywordSplatArgument || method == Methods.PassOnKeywordRest)) {
+                    method == Methods.KeywordSplatArgument || method == Methods.PassOnKeywordRest ||
+                    method == Methods.MergeKeywordSplat || method == Methods.MergeKeywordHash)) {
                     return 0;
                 }
                 if (LightKeywordsEnabled && (method == Methods.GetOmittedKeywordArguments || method == Methods.MakeOmittedKeywordArguments)) {

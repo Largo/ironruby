@@ -1995,6 +1995,47 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/kwsplatlight (/perf-frame, 2026-11-28) - `f(k: v, **h)` and `f(**a, **b)` in light frames;
+  a Struct stores a ruby2_keywords Hash as given** (switch `IR_LIGHT_KEYWORD_SPLAT`, which already
+  covered the lone `f(**h)`). Built on 33818f7 (claude/happy-gauss-95wm2j) with 78a731ca merged;
+  RubyCallFlags.HasRuby2KeywordsSplat moved to 8192 (FlagsCount 14) beside round 7's HasMatchSink.
+  - **Census** (`Util/perf/census.rb -d`, Src/StdLib and Util/bench, 29,102 methods): light frames
+    27,997 -> 28,017 (+20), every one refused before for `KeywordSplatMerge` (Pathname#glob,
+    File.binwrite, Exception.__detailed__, mkmf's try_*, optparse's getopts, Prism's desugar
+    compilers, Tempfile.create, Net::IMAP...); JIT verdicts unchanged; no method still refused
+    for it first.
+  - **Why it was refused.** IsScopeFree had no case for the node the bridge makes of a `**h`
+    beside other keywords (KeywordSplatMerge), and its helpers (RubyOps.MergeKeywordSplat,
+    MergeKeywordHash) take the scope - for its runtime only, as the lone splat's helpers do, which
+    IR_LIGHT_KEYWORD_SPLAT already let through. Now the node is scope-free when its parts are (the
+    temporaries are locals; the `hash.merge(h || {})` that converts anything but a Hash or nil is
+    a call like any other), and the two helpers are in the rewriter's runtime-only list.
+  - **Clock** (`ab.rb -r 8`, Release, ns; CRuby / `IR_LIGHT_KEYWORD_SPLAT=0` / on): `g(k: 1, **o)`
+    188 / 419 / 370, with no keywords 153 / 292 / 252, `g(**o, **o)` 212 / 429 / 377,
+    `g(k: a, **o)` 200 / 424 / 380; `def w(**o) = g(**o)` (light already; the switch turns it
+    off too) 148 / 344 / 304, empty 160 / 202 / 163. Still twice CRuby: the merge's hash and the
+    callee's `k:, **o` binding, not the frame.
+  - **Struct.** `Struct.new(:x, :y).new(1, h)`, h ruby2_keywords-marked: a Hash value goes to
+    the prelude's __struct_initialize_slow__, whose `__struct_initialize__(*args)` made it
+    keywords (a copy) - a Ruby splat without `**` (RubyCallFlags.HasRuby2KeywordsSplat). Its three
+    stores splat with `**nil` now, which passes nothing and leaves the values as they came, as
+    MRI's C rb_struct_initialize_m does. IronRuby.Tests Struct_Ruby2KeywordsHash1 (CRuby's
+    output).
+  - **Not done.** An empty `**e` with a default gives a `**k` callee `{}`; CRuby gives it a dup
+    of e (default 7), through procs and send too but not Method#call. IronRuby passes nothing for
+    any empty `**`; matching needs an empty keyword hash that every binder drops for a callee
+    without `**k` - not a contained change.
+  - **Checks.** kwsplat-forward (new rows: merged keywords, `**nil` and to_hash in a merge,
+    non-Symbol keys, keys with a Ruby #hash, deep recursion, errors in a merge's operand),
+    keyword-light, keyword-rest-light, splat-pass, kwrest-call, anon-forward, block-pass,
+    light-entry, hot-shapes, struct and hash-struct matrices: same as CRuby in default,
+    `IR_LIGHT_KEYWORD_SPLAT=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`, and
+    `IR_KWSPLAT_BY_REFERENCE=0` but for its known row. A backtrace probe showed IronRuby's top
+    frame for a #to_hash TypeError in a merge is Hash#merge (CRuby: the method) in every mode,
+    frames off too - before this change as well; the row checks the method is in the backtrace.
+    Specs language/keyword_arguments, send, def, super and core/struct as on the base build.
+    IronRuby.Tests in full (Debug): PASSED, 1,417 tests.
+
 - **perf/r2kflag (2026-11-28) - a ruby2_keywords hash stays positional at a call with an explicit
   `**`, and at a library method's own call; `yield(*args)` makes it keywords; `**h` passes a dup**
   (correctness, no switch). Built on aa82bf28 (claude/perf-lsite, which has f67ac44).

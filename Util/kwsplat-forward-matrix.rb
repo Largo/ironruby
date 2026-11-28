@@ -145,3 +145,31 @@ t("Method#to_proc and Class#new pass it on positional") do |i|
   c = Class.new { attr_reader :v; def initialize(*x, **k) = @v = [x, k] }
   [method(:kwr).to_proc.call(*a, **e), c.new(*a, **e).v, send(:kwr, *a, **e)]
 end
+
+# ---------------------------------------------------------------- 7. keyword splats merged with other keywords, in light frames
+# (MethodDefinition.IsScopeFree takes a KeywordSplatMerge; IR_LIGHT_KEYWORD_SPLAT=0 refuses it)
+class KeyHash; attr_reader :n; def initialize(n) = @n = n; def hash = @n.hash; def eql?(o) = o.is_a?(KeyHash) && o.n == @n; end
+def mg_kw(**o) = kwr(k: 1, **o)
+def mg_two(a, **o) = kwr(**o, **a)
+def mg_after(**o) = kwr(**o, z: 9)
+def mg_lead(x, **o) = kwr(x, k: x, **o)
+t("k: 1, **o") { |i| i.even? ? mg_kw(z: i % 3) : mg_kw }
+t("k: 1, **o overriding k") { |i| mg_kw(k: 2) }
+t("**o, **a") { |i| mg_two({a: 1}, b: 2) }
+t("**o, **a, both empty") { |i| mg_two({}) }
+t("**o, **nil") { |i| mg_two(nil, b: 2) }
+t("**o, z: 9 after") { |i| mg_after(z: 1, y: 2) }
+t("positional and merged keywords") { |i| mg_lead(i % 2, q: 1) }
+t("merged **obj: to_hash") { |i| log = []; [mg_two(ToHash.new(log, {t: 1}), b: 2), log] }
+t("merged **obj: to_hash returning a non-Hash") { |i| (mg_two(BadHash.new, b: 2) rescue [$!.class, $!.message]) }
+t("merged **obj with no to_hash") { |i| (mg_two(Object.new) rescue [$!.class]) }
+t("merged non-Symbol keys") { |i| mg_two({"s" => 1}) }
+t("merged keys with a Ruby #hash") { |i| r = mg_two({KeyHash.new(1) => 1, KeyHash.new(1) => 2}); [r[0], r[1].size, r[1].values] }
+t("merged hash's default is not kept") { |i| r = mg_two(Hash.new(5).merge(a: 1)); [r[1].default, r[1].default_proc] }
+t("merged frozen hash") { |i| mg_two({a: 1}.freeze, b: 2) }
+def mg_deep(n, **o) = n == 0 ? o.size : mg_deep(n - 1, k: n, **o)
+t("deep recursion through a merged call") { |i| mg_deep(100, a: 1) }
+def mg_raise(**o) = kwr(k: 1, **o.fetch(:h))
+t("error raised inside a merge's operand") { |i| (mg_raise rescue [$!.class, $!.message]) }
+# (whether the merging method is in the backtrace: IronRuby's top frame is the Hash#merge #to_hash goes through, MRI's the method)
+t("backtrace of an error in a merged call") { |i| begin; mg_two(BadHash.new); rescue TypeError => e; e.backtrace_locations.map(&:label).include?("Object#mg_two"); end }
