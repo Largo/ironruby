@@ -2025,6 +2025,20 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/datafilter (/perf-step, 2026-11-28, on fcbc67b + 672867e) - a filter by identity hash
+  keeps objects without instance data out of the instance data table (`IR_INSTANCE_DATA_FILTER`)**
+  - instructions and clock, not gated. perf/kernelcall's lead: once one String and one Hash have a
+  singleton method, every String's and Hash's class lookup went to the ConditionalWeakTable
+  (`@s.nil?` compiled +21% instructions, `@s.is_a?(String)` +37%). A per-object bit is unsafe on
+  MutableString (non-atomic `_flags`) and absent on Hash, so each runtime keeps 65,536 bits (8 KB)
+  by `RuntimeHelpers.GetHashCode`, set before data is added, never cleared. With the singletons:
+  `@s.nil?` 2572 -> 2335, `@s.is_a?` 3314 -> 2840 instructions; clock `@h.nil?` 0.88, `@s.is_a?`
+  0.87, `@h.is_a?` 0.80; without them unchanged. Census 0 up, 0 down. Left: ~200 instructions a
+  lookup over the plain case, the identity hash's runtime call.
+  `Util/clr-class-matrix.rb` (new) CRuby's output in five modes, switch off and R2R; eight other
+  matrices unchanged; ruby/spec core/string, hash, kernel, objectspace, enumerator the same;
+  460 IronRuby.Tests on Debug pass.
+
 - **perf/kernelcall (/perf-step, 2026-11-28, on 744b83e) - an Array without instance data is
   answered its class without the instance data table (`RubyArray.MayHaveInstanceData`,
   `IR_ARRAY_CLASS_FAST`)** - instructions and clock, not gated. The round's premise (a C# Kernel
