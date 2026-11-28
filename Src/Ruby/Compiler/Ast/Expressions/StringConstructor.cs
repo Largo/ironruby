@@ -44,6 +44,12 @@ namespace IronRuby.Compiler.Ast {
         private readonly StringKind _kind;
         private readonly List<Expression>/*!*/ _parts;
 
+        /// <summary>
+        /// The line of each part that reads a local variable, 0 for the others, or null (PrismAstBridge.WithPartLines): the
+        /// variable's node carries its declaration's span, not the part's.
+        /// </summary>
+        internal int[] PartLines;
+
         public StringKind Kind {
             get { return _kind; }
         }
@@ -67,13 +73,13 @@ namespace IronRuby.Compiler.Ast {
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             switch (_kind) {
                 case StringKind.Mutable:
-                    return TransformConcatentation(gen, _parts, StringFactory.Instance);
+                    return TransformConcatentation(gen, _parts, StringFactory.Instance, PartLines);
 
                 case StringKind.Symbol:
-                    return TransformConcatentation(gen, _parts, SymbolFactory.Instance);
+                    return TransformConcatentation(gen, _parts, SymbolFactory.Instance, PartLines);
 
                 case StringKind.Command: {
-                    var command = TransformConcatentation(gen, _parts, StringFactory.Instance);
+                    var command = TransformConcatentation(gen, _parts, StringFactory.Instance, PartLines);
 
                     // `cmd` hands ` a frozen string, whatever the frozen_string_literal
                     // setting; an interpolated `cmd #{x}` hands it a mutable one. The
@@ -117,7 +123,7 @@ namespace IronRuby.Compiler.Ast {
 
             var merged = new MSAst.ExpressionCollectionBuilder();
             var concat = new LiteralConcatenation(encoding);
-            if (!ConcatLiteralsAndTransformRecursive(_parts, concat, merged, convert)) {
+            if (!ConcatLiteralsAndTransformRecursive(_parts, null, concat, merged, (part, line) => convert(part))) {
                 return null;
             }
             if (concat.Count > 0) {
@@ -135,6 +141,11 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal static MSA.Expression/*!*/ MakeConversion(AstGenerator/*!*/ gen, Expression/*!*/ expression) {
+            return MakeConversion(gen, expression, 0);
+        }
+
+        /// <param name="partLine">The part's own line when it reads a local variable (PartLines), or 0.</param>
+        internal static MSA.Expression/*!*/ MakeConversion(AstGenerator/*!*/ gen, Expression/*!*/ expression, int partLine) {
             // an interpolation in a heredoc can be lines below the statement: a backtrace from it
             // names its own line
             // a to_s a refinement supplies is not visible to the conversion site - see RubyOps.TryConvertToSWithRefinements
@@ -149,7 +160,13 @@ namespace IronRuby.Compiler.Ast {
             // A local variable node is shared by every read of the variable and carries the span of
             // its declaration, which would move the statement's line back there (a call taking
             // "#{block_param}" reported the block's first line), so a read keeps the statement's.
-            return expression.Location.IsValid && !(expression is LocalVariable) ? gen.AddDebugInfo(conversion, expression.Location) : conversion;
+            if (expression is LocalVariable) {
+                // ... but a part on a later line of the string than the frame is at (a heredoc's) reports that line, as MRI's
+                // does, and the frame's line again after it (as a call on a later line of a statement does)
+                int current = gen.CurrentLine;
+                return (AstGenerator.CallLines && partLine > 0 && current > 0 && partLine != current) ? gen.AddCallLine(conversion, partLine, current) : conversion;
+            }
+            return expression.Location.IsValid ? gen.AddDebugInfo(conversion, expression.Location) : conversion;
         }
 
         #region Factories
@@ -299,6 +316,11 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal static MSA.Expression/*!*/ TransformConcatentation(AstGenerator/*!*/ gen, List<Expression>/*!*/ parts, IFactory/*!*/ factory) {
+            return TransformConcatentation(gen, parts, factory, null);
+        }
+
+        internal static MSA.Expression/*!*/ TransformConcatentation(AstGenerator/*!*/ gen, List<Expression>/*!*/ parts, IFactory/*!*/ factory,
+            int[] partLines) {
 
             // fast path for a single element:
             if (parts.Count == 1) {
@@ -311,21 +333,21 @@ namespace IronRuby.Compiler.Ast {
                         return factory.CreateExpression(gen, (byte[])literal.Value, literal.Encoding);
                     }
                 } else {
-                    return factory.CreateExpressionM(gen, new MSAst.ExpressionCollectionBuilder { MakeConversion(gen, parts[0]) });
+                    return factory.CreateExpressionM(gen, new MSAst.ExpressionCollectionBuilder { MakeConversion(gen, parts[0], LineOf(partLines, 0)) });
                 }
             }
 
             var merged = new MSAst.ExpressionCollectionBuilder();
             var concat = new LiteralConcatenation(gen.Encoding);
 
-            if (!ConcatLiteralsAndTransformRecursive(parts, concat, merged, part => MakeConversion(gen, part))) {
+            if (!ConcatLiteralsAndTransformRecursive(parts, partLines, concat, merged, (part, line) => MakeConversion(gen, part, line))) {
                 // TODO: we should emit Append calls directly, and not create an array first
                 // TODO: MRI reports a syntax error
                 // we can't concatenate due to encoding incompatibilities, report error at runtime:
                 // Each part is a MutableString here: a literal as itself, anything else converted by #to_s
                 // (the parts' plain Transform is typed object, which the MutableString[] can't hold).
                 var unmerged = new List<MSA.Expression>();
-                TransformPartsUnmerged(gen, parts, unmerged);
+                TransformPartsUnmerged(gen, parts, partLines, unmerged);
                 return factory.CreateExpressionN(gen, unmerged);
             }
 
@@ -356,16 +378,21 @@ namespace IronRuby.Compiler.Ast {
             return AstUtils.Constant(part.Freeze(), typeof(MutableString));
         }
 
-        private static void TransformPartsUnmerged(AstGenerator/*!*/ gen, List<Expression>/*!*/ parts, List<MSA.Expression>/*!*/ result) {
-            foreach (Expression part in parts) {
+        private static int LineOf(int[] partLines, int index) {
+            return (partLines != null && index < partLines.Length) ? partLines[index] : 0;
+        }
+
+        private static void TransformPartsUnmerged(AstGenerator/*!*/ gen, List<Expression>/*!*/ parts, int[] partLines, List<MSA.Expression>/*!*/ result) {
+            for (int i = 0; i < parts.Count; i++) {
+                Expression part = parts[i];
                 StringLiteral literal;
                 StringConstructor ctor;
                 if ((literal = part as StringLiteral) != null) {
                     result.Add(TransformLiteralPart(literal.Value, literal.Encoding));
                 } else if ((ctor = part as StringConstructor) != null) {
-                    TransformPartsUnmerged(gen, ctor.Parts, result);
+                    TransformPartsUnmerged(gen, ctor.Parts, ctor.PartLines, result);
                 } else {
-                    result.Add(MakeConversion(gen, part));
+                    result.Add(MakeConversion(gen, part, LineOf(partLines, i)));
                 }
             }
         }
@@ -382,8 +409,8 @@ namespace IronRuby.Compiler.Ast {
         // Returns false if the parts can't be concatenated due to encoding incompatibilities.
         // "convert" makes the String of a part that is not a literal (MakeConversion), in the parts' order.
         // 
-        private static bool ConcatLiteralsAndTransformRecursive(List<Expression>/*!*/ parts,
-            LiteralConcatenation/*!*/ concat, MSAst.ExpressionCollectionBuilder/*!*/ result, Func<Expression, MSA.Expression>/*!*/ convert) {
+        private static bool ConcatLiteralsAndTransformRecursive(List<Expression>/*!*/ parts, int[] partLines,
+            LiteralConcatenation/*!*/ concat, MSAst.ExpressionCollectionBuilder/*!*/ result, Func<Expression, int, MSA.Expression>/*!*/ convert) {
 
             for (int i = 0; i < parts.Count; i++) {
                 Expression part = parts[i];
@@ -395,7 +422,7 @@ namespace IronRuby.Compiler.Ast {
                         return false;
                     }
                 } else if ((ctor = part as StringConstructor) != null) {
-                    if (!ConcatLiteralsAndTransformRecursive(ctor.Parts, concat, result, convert)) {
+                    if (!ConcatLiteralsAndTransformRecursive(ctor.Parts, ctor.PartLines, concat, result, convert)) {
                         return false;
                     }
                 } else {
@@ -404,7 +431,7 @@ namespace IronRuby.Compiler.Ast {
                         concat.Clear();
                     }
 
-                    result.Add(convert(part));
+                    result.Add(convert(part, LineOf(partLines, i)));
                 }
             }
 
