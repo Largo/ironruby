@@ -607,8 +607,29 @@ namespace IronRuby.Runtime.Precompiled {
             }
         }
 
-        /// <summary>The SHA-256 of an eval's text, hex: what tells the text the library was compiled from.</summary>
-        public static string/*!*/ HashEvalCode(byte[]/*!*/ code) {
+        /// <summary>
+        /// The SHA-256 of an eval's text, hex: what tells the text the library was compiled from. The tree's root in it
+        /// (<paramref name="root"/>, with its trailing separator) counts as <see cref="RootMarker"/>: a text made from a
+        /// location (Forwardable's delegators name the file that defined them in a warning) is the same text in a tree that
+        /// has moved, and the compiled code's strings move with the tree (as a file's do).
+        /// </summary>
+        public static string/*!*/ HashEvalCode(byte[]/*!*/ code, string root) {
+            if (!String.IsNullOrEmpty(root)) {
+                byte[] rootBytes = System.Text.Encoding.UTF8.GetBytes(root);
+                if (code.AsSpan().IndexOf(rootBytes) >= 0) {
+                    byte[] marker = System.Text.Encoding.UTF8.GetBytes(RootMarker.ToString());
+                    var rooted = new System.Collections.Generic.List<byte>(code.Length);
+                    var rest = code.AsSpan();
+                    int i;
+                    while ((i = rest.IndexOf(rootBytes)) >= 0) {
+                        rooted.AddRange(rest.Slice(0, i).ToArray());
+                        rooted.AddRange(marker);
+                        rest = rest.Slice(i + rootBytes.Length);
+                    }
+                    rooted.AddRange(rest.ToArray());
+                    code = rooted.ToArray();
+                }
+            }
             return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(code));
         }
 
@@ -636,7 +657,7 @@ namespace IronRuby.Runtime.Precompiled {
             if (!_evals.TryGetValue(key, out candidates)) {
                 return null;
             }
-            string hash = HashEvalCode(code);
+            string hash = HashEvalCode(code, _runtimeRoot ?? _compiledRoot);
             PrecompiledEval eval = null;
             foreach (var candidate in candidates) {
                 if (candidate.Hash == hash) {

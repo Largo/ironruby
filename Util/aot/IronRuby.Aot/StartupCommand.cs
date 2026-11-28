@@ -48,6 +48,22 @@ namespace IronRuby.Aot {
         /// <summary>The marker startup-evals.txt has for the tree's root in a path: the tree the library is compiled for replaces it.</summary>
         private const string EvalRootMarker = "${ROOT}";
 
+        private static byte[] ReplaceBytes(byte[] bytes, string marker, string value) {
+            var m = System.Text.Encoding.ASCII.GetBytes(marker);
+            if (bytes.AsSpan().IndexOf(m) < 0) return bytes;
+            var v = System.Text.Encoding.UTF8.GetBytes(value);
+            var result = new List<byte>(bytes.Length);
+            var rest = bytes.AsSpan();
+            int i;
+            while ((i = rest.IndexOf(m)) >= 0) {
+                result.AddRange(rest.Slice(0, i).ToArray());
+                result.AddRange(v);
+                rest = rest.Slice(i + m.Length);
+            }
+            result.AddRange(rest.ToArray());
+            return result.ToArray();
+        }
+
         // one JSON object a line, as PrecompiledCode.RecordEval writes them
         private static List<AotCompiler.EvalUnit> ReadEvals(string file, string root) {
             var result = new List<AotCompiler.EvalUnit>();
@@ -56,7 +72,8 @@ namespace IronRuby.Aot {
                 var o = System.Text.Json.Nodes.JsonNode.Parse(line).AsObject();
                 string[] Names(string name) => o[name] is System.Text.Json.Nodes.JsonArray a ? a.Select(n => (string)n).ToArray() : null;
                 result.Add(new AotCompiler.EvalUnit {
-                    Code = Convert.FromBase64String((string)o["code"]),
+                    // the text with this tree for the marker (startup-files.rb puts it in for a text made from a location)
+                    Code = ReplaceBytes(Convert.FromBase64String((string)o["code"]), EvalRootMarker, root),
                     Encoding = (string)o["encoding"],
                     Path = ((string)o["path"]).Replace(EvalRootMarker, root),
                     Line = (int)o["line"],
