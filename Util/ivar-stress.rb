@@ -67,11 +67,14 @@ class PBase
   def ga = @a
   def gb = @b
   def setb(d) = (@b = d * 1.0)
+  def setbi(i) = (@b = i + 1; nil)           # an Integer stored raw (perf/intivar)
 end
 def p_upd(o) = (o.a = o.a + 1.0)
+def i_upd(o) = (o.a = o.a + 1; nil)
 PKINDS = [Float, Integer, NilClass]
 pwarm = Class.new(PBase)
 300.times { o = pwarm.new; p_upd(o); p_upd(o); o.setb(2.5); o.setb(3.5); o.ga; o.gb }
+300.times { |k| o = pwarm.new; o.a = k; i_upd(o); i_upd(o); o.setbi(k); o.setbi(k + 5000); o.ga; o.gb }
 # IronRuby's count of promotions (0 elsewhere, and on a build without it)
 def promotions
   return 0 unless defined?(System::Type)
@@ -96,8 +99,9 @@ prounds.times do |round|
           when 2 then o.a = 0.25
           when 3 then o.setb(0.5)
           else
-            p_upd(o) if o.a.is_a?(Float)
-            o.setb(i * 0.5)
+            a = o.a
+            if a.is_a?(Float) then p_upd(o) elsif a.is_a?(Integer) then i_upd(o) end
+            i.even? ? o.setb(i * 0.5) : o.setbi(i * 1000)
           end
           if i % 11 == 0
             name = :"@w#{t}_#{i % 3}"

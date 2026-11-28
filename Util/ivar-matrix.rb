@@ -169,6 +169,113 @@ t("fl promote: dup, clone, Marshal of raw objects") do
   [o.a, d.a, c.a, m.a, d.b, Marshal.dump(o) == Marshal.dump(FlPro.new(3.0, 2))]
 end
 
+# ---------------------------------------------------------------- Integer variables stored raw
+# The method JIT stores an Integer it holds as an int or a long raw (RubyInstanceData, "Raw
+# locations"), as it does a Float: a counter's `@n += 1' then updates the variable in place. An
+# Integer past a long, or anything else, is stored boxed, and nothing below may tell the two apart.
+# (The writers end with a read: a write that is a method's value is stored boxed, its box returned.)
+
+class InRaw
+  attr_accessor :v
+  def initialize; @n = 0; @v = 0; end
+  def put(i) = (@n = i + 0; @n)
+  def inc(i) = (@n += i; @n)
+  def big = (@n = @n * 4_000_000_000; @n)
+  def n = @n
+end
+def in_raw_attr(o, i) = (o.v = o.v + i; o.v)
+inr = InRaw.new
+300.times { |i| inr.put(i * 1000); inr.inc(1); in_raw_attr(inr, 1) }
+def in_raw(i)
+  o = InRaw.new; o.put(i); o.inc(0); in_raw_attr(o, 1); o
+end
+t("int: read back, small, cached, int, long") { [0, 5, 1023, 1024, 70_000, 2**31 - 1, -2**31, -129].map { |i| o = in_raw(i); [o.n, o.inc(1), o.n.class] } }
+t("int: past an int") { o = in_raw(2**31 - 2); [o.inc(1), o.inc(1), o.inc(1), o.n.class, o.inc(-3), o.inc(2**40), o.n] }
+t("int: past a long, to Bignum and back") { o = in_raw(2**62); r = [o.inc(2**62), o.inc(2**62), o.n.class]; r << o.inc(-(2**64)) << o.inc(1) << o.n.class }
+t("int: overflow by *") { o = in_raw(3); [o.big, o.big, o.big, o.n.class, o.put(7), o.inc(1)] }
+t("int: type changes") { o = in_raw(5000); r = [o.inc(1)]; o.instance_variable_set(:@n, 'str'); r << o.n << (o.inc(1) rescue $!.class); o.put(nil.to_i); r << o.inc(9) << o.n; o.instance_variable_set(:@n, nil); r << o.n << (o.inc(1) rescue $!.class); o.instance_variable_set(:@n, 2.5); r << o.inc(1) << o.put(8) << o.inc(1) }
+t("int: identity, hash, eql?, object_id") { o = in_raw(5000); a = o.n; b = o.n; [a.equal?(b), a.eql?(5000), a.hash == 5000.hash, {5000 => :k}[a], a.object_id == 5000.object_id, o.inc(1).equal?(o.n)] }
+t("int: YAML round trip") { require 'yaml'; o = in_raw(123_456); y = YAML.dump(o); [y.lines.grep(/n:|v:/), YAML.unsafe_load(y).n] }
+t("int: Marshal round trip") { m = Marshal.load(Marshal.dump(in_raw(2**30 + 5))); [m.n, m.v, m.inc(1), m.n.class] }
+t("int: Marshal of a long and a Bignum") { o = in_raw(2**40); m = Marshal.load(Marshal.dump(o)); o.inc(2**70); [m.n, Marshal.load(Marshal.dump(o)).n] }
+t("int: inspect, instance_variables") { o = in_raw(77_777); [o.inspect.sub(/0x\h+/, ''), o.instance_variables] }
+t("int: instance_variable_get/set") { o = in_raw(2500); r = [o.instance_variable_get(:@n)]; o.instance_variable_set(:@n, 'str'); r << o.n << (o.inc(1) rescue $!.class); o.instance_variable_set(:@n, 10**20); r << o.inc(1) << o.instance_variable_get(:@n) }
+t("int: remove") { o = in_raw(2500); [o.remove_instance_variable(:@n), o.instance_variables, o.put(1500), o.inc(1), o.instance_variables, o.remove_instance_variable(:@n), (o.n rescue $!.class)] }
+t("int: defined?, instance_variable_defined?") { o = in_raw(9000); [o.instance_variable_defined?(:@n), o.instance_eval { defined?(@n) }] }
+t("int: dup/clone/initialize_copy") { o = in_raw(2500); d = o.dup; c = o.clone; d.inc(1); c.inc(2); o.inc(3); [o.n, d.n, c.n] }
+t("int: freeze") { o = in_raw(2500); o.freeze; [(o.put(1) rescue $!.class), (o.inc(1) rescue $!.class), (in_raw_attr(o, 2) rescue $!.class), o.n, o.v] }
+t("int: Ractor.make_shareable") { o = in_raw(3500); Ractor.make_shareable(o); [Ractor.shareable?(o), o.frozen?, o.n] }
+t("int: binding sees the value") { o = in_raw(4500); o.instance_eval { binding }.eval('@n') }
+t("int: Comparable, Range, Array index") { o = in_raw(2000); a = (0..2010).to_a; [o.n > 1999, (1990..2005).include?(o.n), a[o.n], 'x' * (o.n - 1995)] }
+t("int: Float mixed in") { o = in_raw(2000); r = [o.inc(0.5), o.n.class, o.inc(1), o.put(4), o.inc(1), o.n.class]; r }
+
+class InSub < InRaw
+  def initialize; super; @s1 = 1; @s2 = 2; @s3 = 3; end
+  def bump = (@s3 += 1000; @n += 1; @s1 += @s3; nil)
+  def all = [@n, @v, @s1, @s2, @s3]
+end
+t("int: subclass with more variables") { o = InSub.new; 50.times { o.bump; o.inc(1) }; [o.all, o.instance_variables, Marshal.load(Marshal.dump(o)).all] }
+
+# Promotion: a typed store over an Integer moves the object to the raw twin of its shape, and
+# its class's later instances are born raw. Plain and raw objects at one site, the raw tree's
+# removal and growth, a raw object made too complex, and copies.
+class InPro
+  attr_accessor :a, :b
+  def initialize(a, b) = (@a = a; @b = b)
+  def step(d) = (@a += d; @a)
+  def get = @a
+end
+def in_pro_read(o) = o.get * 2
+iplain = InPro.new(1500, :p)
+300.times { |i| o = InPro.new(i * 100, i); o.step(1); o.step(2); in_pro_read(o) }
+t("int promote: plain and born-raw objects at one site") do
+  born = InPro.new(2500, :b)
+  r = []
+  4.times { iplain.step(1000); born.step(1000); r << in_pro_read(iplain) << in_pro_read(born) }
+  r + [iplain.a, born.a, iplain.instance_variables, born.instance_variables]
+end
+t("int promote: generic reads and writes of born-raw objects") do
+  o = InPro.new(1000, 2); o.step(1)
+  o.b = 3; o.a = :sym
+  r = [o.a, o.b, (o.step(1) rescue $!.class)]
+  o.a = 4000; o.step(1); r << o.a << o.instance_variable_get(:@a) << o.inspect.sub(/0x\h+/, '')
+end
+t("int promote: remove and grow in the raw tree") do
+  o = InPro.new(1000, 2); o.step(1)
+  o.remove_instance_variable(:@b); o.step(1)
+  10.times { |i| o.instance_variable_set(:"@g#{i}", i * 5000) }
+  o.step(1)
+  [o.a, o.instance_variables.size, o.instance_variable_get(:@g9), o.remove_instance_variable(:@a), o.instance_variables.first(2)]
+end
+t("int promote: raw object made too complex") do
+  o = InPro.new(1000, 2); o.step(1)
+  300.times { |i| o.instance_variable_set(:"@z#{rand(1 << 30)}_#{i}", i) }
+  o.step(1)
+  [o.a, in_pro_read(o), o.instance_variables.size]
+end
+t("int promote: dup, clone, Marshal of raw objects") do
+  o = InPro.new(1000, 2); o.step(1); o.step(1)
+  d = o.dup; c = o.clone; m = Marshal.load(Marshal.dump(o))
+  d.step(10); c.step(20); m.step(30)
+  [o.a, d.a, c.a, m.a, d.b, Marshal.dump(o) == Marshal.dump(InPro.new(1002, 2))]
+end
+t("int promote: Integer and Float in one variable, by object") do
+  f = InPro.new(1.5, 0); f.step(1.0); f.step(1.0)
+  i = InPro.new(1500, 0); i.step(1); i.step(1)
+  [f.a, i.a, f.step(1), i.step(0.5), f.a.class, i.a.class]
+end
+t("int promote: two threads write one object") do
+  o = InPro.new(0, 0)
+  t1 = Thread.new { 20_000.times { o.step(1) } }
+  t2 = Thread.new { 20_000.times { |k| o.b = (k.even? ? 'str' : k * 3) } }
+  t1.join; t2.join
+  r = [o.a.class, o.a.between?(1, 20_000), o.b]
+  t3 = Thread.new { 5_000.times { o.a = 'x'; o.a = 7 } }
+  5_000.times { o.step(1) rescue nil }
+  t3.join
+  r << [Integer, String].include?(o.a.class)
+end
+
 # ---------------------------------------------------------------- basic operations
 
 targets.each do |name, obj|

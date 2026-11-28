@@ -111,11 +111,11 @@ namespace IronRuby.Builtins {
         internal int InstanceVariableCapacity;
 
         /// <summary>
-        /// An instance of this class has been promoted to raw Float storage (RubyInstanceData, "Float
-        /// locations"): new instances start in the raw shape tree, so that they need no Move of their
-        /// own. Set once, never cleared; a racy read only costs one instance a Move.
+        /// An instance of this class has been promoted to raw Float or Integer storage (RubyInstanceData,
+        /// "Float locations"): new instances start in the raw shape tree, so that they need no Move of
+        /// their own. Set once, never cleared; a racy read only costs one instance a Move.
         /// </summary>
-        internal bool FloatsRaw;
+        internal bool BornRaw;
 
         //
         // Null if this class doesn't represent a CLR type, it represets a CLR type that implements IRubyObject or 

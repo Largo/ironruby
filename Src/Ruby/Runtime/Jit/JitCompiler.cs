@@ -1631,6 +1631,15 @@ namespace IronRuby.Runtime.Jit {
                         Ast.Call(JitRuntime.M("SetIVarDouble"), Ast.Constant(_context), _self, raw, ivarSite),
                         raw);
                 }
+                if (RawInts && IsInteger(vt)) {
+                    // an Integer stored raw, as a Float is; the value stays an int (a long)
+                    var raw = Ast.Variable(ClrType(vt), "#value");
+                    type = vt;
+                    return Ast.Block(ClrType(vt), new[] { raw },
+                        Ast.Assign(raw, v),
+                        Ast.Call(JitRuntime.M("SetIVarLong"), Ast.Constant(_context), _self, Coerce(raw, vt, JT.Lng), ivarSite),
+                        raw);
+                }
                 type = JT.Obj;
                 return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), ivarSite);
             }
@@ -2694,8 +2703,8 @@ namespace IronRuby.Runtime.Jit {
             }
             if (from == JT.Obj) {
                 switch (to) {
-                    case JT.Int: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardInt"), e);
-                    case JT.Lng: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardLong"), e);
+                    case JT.Int: _canDeopt = true; return GuardIVarRead("GuardInt", e);
+                    case JT.Lng: _canDeopt = true; return GuardIVarRead("GuardLong", e);
                     case JT.Dbl: _canDeopt = true; return GuardIVarRead("GuardDouble", e);
                 }
             }
@@ -2811,19 +2820,27 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// The guarded unboxing of an instance variable read: GuardDouble (SpeculateDouble) of GetIVar or
-        /// ReadSelfAttr becomes their Double (SpeculateDouble) version, which reads a Float the typed code stored raw without boxing it
-        /// (RubyInstanceData, "Float locations"). Both deopt on the same values.
+        /// The guarded unboxing of an instance variable read: GuardDouble (SpeculateDouble, GuardInt, GuardLong) of GetIVar or
+        /// ReadSelfAttr becomes their Double (SpeculateDouble, Int, Long) version, which reads a Float (an Integer) the typed code
+        /// stored raw without boxing it (RubyInstanceData, "Float locations"). Both deopt on the same values.
         /// </summary>
         internal static MSA.Expression/*!*/ GuardIVarRead(string/*!*/ guard, MSA.Expression/*!*/ read) {
             var call = read as MSA.MethodCallExpression;
-            if ((guard == "GuardDouble" || guard == "SpeculateDouble") && call != null && call.Object == null) {
-                string suffix = (guard == "GuardDouble") ? "Double" : "SpeculateDouble";
+            if ((guard == "GuardDouble" || guard == "SpeculateDouble" || (RawInts && (guard == "GuardInt" || guard == "GuardLong")))
+                && call != null && call.Object == null) {
+                string suffix = (guard == "GuardDouble") ? "Double" : (guard == "GuardInt") ? "Int" : (guard == "GuardLong") ? "Long" : "SpeculateDouble";
                 if (call.Method == JitRuntime.M("GetIVar")) { return Ast.Call(JitRuntime.M("GetIVar" + suffix), call.Arguments); }
                 if (call.Method == JitRuntime.M("ReadSelfAttr")) { return Ast.Call(JitRuntime.M("ReadSelfAttr" + suffix), call.Arguments); }
             }
             return Ast.Call(JitRuntime.M(guard), read);
         }
+
+        /// <summary>
+        /// An Integer the typed code holds as an int or a long is stored into an instance variable raw, and
+        /// read back without a box (RubyInstanceData, "Float locations"; JitRuntime.SetIVarLong). IR_RAW_INTS=0:
+        /// boxed, as before.
+        /// </summary>
+        internal static readonly bool RawInts = Environment.GetEnvironmentVariable("IR_RAW_INTS") != "0";
 
         /// <summary>The two representations of a Ruby Integer the specialized code carries.</summary>
         private static bool IsInteger(JT t) {

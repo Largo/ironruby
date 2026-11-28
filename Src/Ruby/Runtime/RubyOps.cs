@@ -5843,8 +5843,16 @@ namespace IronRuby.Runtime {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object GetInstanceVariable(RubyScope/*!*/ scope, object self, InstanceVariableSite/*!*/ site) {
             object value;
-            if (self is RubyObject obj && TryReadCached(obj._instanceData, site, out value)) {
-                return value;
+            if (self is RubyObject obj) {
+                var data = obj._instanceData;
+                if (TryReadCached(data, site, out value)) {
+                    return value;
+                }
+                // an object with raw Floats or Integers (RubyInstanceData, "Float locations"), which the read
+                // above leaves out: here and not a call away (an Integer counter makes its class's objects raw)
+                if (TryReadCachedRaw(data, site, out value)) {
+                    return value;
+                }
             }
             return GetInstanceVariableUncached(scope, self, site);
         }
@@ -5985,6 +5993,97 @@ namespace IronRuby.Runtime {
         private static bool TryWriteCachedFloatPlain(RubyInstanceData/*!*/ data, object[]/*!*/ slots, InstanceVariableShape/*!*/ shape,
             int index, double value, InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
             var now = data.TryWriteFloatPlain(slots, shape, index, value, ownerClass);
+            if (now != null && now != shape) {
+                site.Update(site.Cache.Remember(now, index));
+            }
+            return now != null;
+        }
+
+        // ---- the same for an Integer the typed code holds as an int or a long (RubyInstanceData,
+        // "Float locations": an IntLocation is to an Integer what a FloatLocation is to a Float)
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryReadCachedLongSlow(object[]/*!*/ slots, InstanceVariableSite/*!*/ site, InstanceVariableSite.Entry/*!*/ entry, out long value) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.Shape) {
+                // a plain object: a boxed Integer or nothing for us
+                return RubyInstanceData.TryReadLong(RubyInstanceData.GetSlot(slots, entry.Index), out value);
+            } else if (shape == entry.OtherShape) {
+                object slot = RubyInstanceData.GetSlot(slots, entry.OtherIndex);
+                if (entry.OtherRaw) {
+                    site.Update(entry.Remember(entry.OtherShape, entry.OtherIndex));
+                }
+                return RubyInstanceData.TryReadLong(slot, out value);
+            }
+            value = 0;
+            return false;
+        }
+
+        // TryReadCached of a variable that holds an Integer that fits a long, for the typed code: the
+        // long, without boxing a raw one. False for a miss or a variable that holds anything else.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCachedLong(RubyInstanceData data, InstanceVariableSite/*!*/ site, out long value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    return RubyInstanceData.TryReadLong(RubyInstanceData.GetSlot(slots, entry.Index), out value);
+                }
+                return TryReadCachedLongSlow(slots, site, entry, out value);
+            }
+            value = 0;
+            return false;
+        }
+
+        // TryWriteCached of an Integer the typed code holds raw: into the variable's IntLocation
+        // (RubyInstanceData.TryWriteLong). False for a miss, an add, a frozen object or a shape
+        // changed under it: the caller boxes the Integer and takes the ordinary path.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryWriteCachedLong(RubyInstanceData data, long value, InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
+            if (data != null && !data._frozen) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.Shape && entry.Next == null) {
+                    if (entry.Raw) {
+                        return RubyInstanceData.TryWriteLong(slots, shape, entry.Index, value);
+                    }
+                    if (IntLocation.IsCached(value)) {
+                        // a plain object and a value the cache boxes: TryWriteCached's store (no promotion for it)
+                        RubyInstanceData.SetSlot(slots, entry.Index, ScriptingRuntimeHelpers.Int32ToObject((int)value));
+                        return RubyInstanceData.ShapeOf(slots) == shape;
+                    }
+                }
+                return TryWriteCachedLongSlow(data, slots, shape, value, site, ownerClass);
+            }
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryWriteCachedLongSlow(RubyInstanceData/*!*/ data, object[]/*!*/ slots, object shape, long value,
+            InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
+            var entry = site.Cache;
+            if (shape == entry.Shape && entry.Next == null) {
+                return TryWriteCachedLongPlain(data, slots, entry.Shape, entry.Index, value, site, ownerClass);
+            }
+            if (shape == entry.Shape) {
+                // adding the variable (a constructor's `@n = 0'): boxed, by the cached add
+                return data.TrySetCached(entry, IntLocation.Box(value), ownerClass);
+            }
+            if (shape == entry.OtherShape) {
+                if (entry.OtherRaw) {
+                    site.Update(entry.Remember(entry.OtherShape, entry.OtherIndex));
+                    return RubyInstanceData.TryWriteLong(slots, shape, entry.OtherIndex, value);
+                }
+                return TryWriteCachedLongPlain(data, slots, entry.OtherShape, entry.OtherIndex, value, site, ownerClass);
+            }
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryWriteCachedLongPlain(RubyInstanceData/*!*/ data, object[]/*!*/ slots, InstanceVariableShape/*!*/ shape,
+            int index, long value, InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
+            var now = data.TryWriteLongPlain(slots, shape, index, value, ownerClass);
             if (now != null && now != shape) {
                 site.Update(site.Cache.Remember(now, index));
             }
