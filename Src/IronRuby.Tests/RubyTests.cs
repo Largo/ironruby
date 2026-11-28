@@ -895,6 +895,7 @@ namespace IronRuby.Tests {
                 DefineMethodVisibility2B,
                 AliasedMethodVisibility1,
                 AliasVisibilityKeepsAlias1,
+                MethodRedefinitionWarningMessage1,
                 AttributeAccessorsVisibility1,
                 AttributeAccessorsVisibility2,
                 ModuleFunctionVisibility1,

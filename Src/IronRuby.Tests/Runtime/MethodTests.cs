@@ -1435,6 +1435,24 @@ D
         }
 
         /// <summary>
+        /// "method redefined; discarding old m" and "previous definition of m was here" reach Warning.warn
+        /// as one message, as in MRI.
+        /// </summary>
+        public void MethodRedefinitionWarningMessage1() {
+            TestOutput(@"
+$n = []
+def Warning.warn(m, **) = $n << m.lines.map { |l| l[/:(\d+: warning: .*)/, 1] }
+class B
+  def m; end
+  def m; end
+end
+p $n
+", @"
+[[""6: warning: method redefined; discarding old m"", ""5: warning: previous definition of m was here""]]
+");
+        }
+
+        /// <summary>
         /// alias, alias_method ignore the current scope visibility flags and copy methods with their visibility unmodified.
         /// </summary>
         public void AliasedMethodVisibility1() {

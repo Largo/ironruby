@@ -4052,6 +4052,35 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// MRI's rb_method_entry_make under $VERBOSE: "method redefined; discarding old foo" at
+        /// <paramref name="path"/>:<paramref name="line"/> (the running line when that is not known)
+        /// and, when the old definition was written in Ruby, "previous definition of foo was here" at
+        /// <paramref name="previousPath"/>. MRI's Warning.warn gets the two lines as one message, so a
+        /// hook that takes one line per warning sees them together.
+        /// </summary>
+        public void ReportMethodRedefinitionWarning(string/*!*/ message, string path, int line,
+            string/*!*/ previousMessage, string previousPath, int previousLine) {
+
+            if (!(Verbose is bool verbose && verbose)) {
+                return;
+            }
+            if (path == null || line <= 0) {
+                // the runtime warning count a host reads (ErrorCounter.WarningCount) has always counted this one,
+                // which went through the sink, and not one written at a known definition
+                _runtimeErrorSink.CountWarning();
+                if (!TryGetCurrentSourceLocation(out path, out line)) {
+                    path = null;
+                    line = 0;
+                }
+            }
+            string text = FormatWarning(message, path, line);
+            if (previousPath != null) {
+                text += FormatWarning(previousMessage, previousPath, previousLine);
+            }
+            DispatchWarning(MutableString.Create(text, RubyEncoding.UTF8), null);
+        }
+
         #region Warning categories, chilled string literals
 
         /// <summary>

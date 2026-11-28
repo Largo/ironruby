@@ -2457,16 +2457,9 @@ namespace IronRuby.Builtins {
                 return;
             }
 
-            if (sourcePath != null && sourceLine > 0) {
-                _context.ReportWarningAt(sourcePath, sourceLine, "method redefined; discarding old " + name);
-            } else {
-                _context.ReportWarning("method redefined; discarding old " + name, true);
-            }
-
-            // a C# method, as a C one, has no previous definition to point at
-            if (file != null) {
-                _context.ReportWarningAt(file, line, "previous definition of " + name + " was here");
-            }
+            // a C# method, as a C one, has no previous definition to point at (file is null)
+            _context.ReportMethodRedefinitionWarning("method redefined; discarding old " + name, sourcePath, sourceLine,
+                "previous definition of " + name + " was here", file, line);
         }
 
         // Module#module_function/private/protected/public:

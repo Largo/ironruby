@@ -34,6 +34,14 @@ namespace IronRuby.Runtime {
             _context = context;
         }
 
+        /// <summary>
+        /// Counts a warning that was written without going through <see cref="Add"/>, as one that did would have been
+        /// (RubyContext.ReportMethodRedefinitionWarning).
+        /// </summary>
+        internal void CountWarning() {
+            CountError(Severity.Warning);
+        }
+
         private CallSite<Func<CallSite, object, object, object>> _WriteSite;
 
         internal void WriteMessage(MutableString/*!*/ message) {
