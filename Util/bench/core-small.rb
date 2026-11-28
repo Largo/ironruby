@@ -108,6 +108,8 @@ class H
   def m93; @h.group_by { |k, v| v & 1 }.size; end
   def m94; @h.each_with_object([]) { |(k, v), a| a << v }.size; end
   def m95; @h.uniq { |k, v| v & 1 }.size; end
+  def m96; String(:sym).size; end
+  def m97; String(1.5).size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 # INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
@@ -221,3 +223,5 @@ t("hash_flat_map", N) { |n| i = 0; s = 0; while i < n; s += h.m92; i += 1; end; 
 t("hash_group_by", N) { |n| i = 0; s = 0; while i < n; s += h.m93; i += 1; end; s }
 t("hash_each_w_obj", N) { |n| i = 0; s = 0; while i < n; s += h.m94; i += 1; end; s }
 t("hash_uniq", N) { |n| i = 0; s = 0; while i < n; s += h.m95; i += 1; end; s }
+t("String(sym)", N) { |n| i = 0; s = 0; while i < n; s += h.m96; i += 1; end; s }
+t("String(float)", N) { |n| i = 0; s = 0; while i < n; s += h.m97; i += 1; end; s }

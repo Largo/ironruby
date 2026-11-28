@@ -13553,9 +13553,12 @@ module Kernel
   # A String is answered here and everything else in __ir_string__: with that body in it -
   # a rescue, a singleton class, a dozen locals - this method made a scope on every call,
   # 220 ns for String("a") where CRuby takes 40.
+  # A String is itself; an object whose class has no #to_str and the built-in #respond_to? and
+  # #respond_to_missing? is converted by its #to_s from C# (__ir_plain_to_s__, nil for any other);
+  # the rest by __ir_string__, which asks what MRI's rb_check_funcall asks.
   def String(object)
     return object if ::String === object
-    __ir_string__(object)
+    __ir_plain_to_s__(object) || __ir_string__(object)
   end
   module_function :String
 
@@ -13568,7 +13571,7 @@ module Kernel
       # rb_check_string_type: nil means "no conversion" and #to_s is tried; anything else is wrong
       unless converted.nil?
         ::Kernel.raise(::TypeError,
-          "can't convert #{object.class} to String (#{object.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
+          "can't convert #{object.class} to String (#{object.class}#to_str gives #{__ir_message_type_name__(converted)})")
       end
     end
     # rb_check_funcall: a user-defined respond_to? can veto the call; otherwise a missing
@@ -13587,9 +13590,10 @@ module Kernel
         ::Kernel.raise(::TypeError, no_conversion)
       end
     end
+    # MRI's conversion_mismatch names the class of what the method gave, nil's included ("gives NilClass")
     unless converted.is_a?(::String)
       ::Kernel.raise(::TypeError,
-        "can't convert #{object.class} to String (#{object.class}#to_s gives #{__ir_conversion_result_name__(converted)})")
+        "can't convert #{object.class} to String (#{object.class}#to_s gives #{__ir_message_type_name__(converted)})")
     end
     converted
   end
