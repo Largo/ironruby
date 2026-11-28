@@ -1994,6 +1994,24 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/kernelcall (/perf-step, 2026-11-28, on 744b83e) - an Array without instance data is
+  answered its class without the instance data table (`RubyArray.MayHaveInstanceData`,
+  `IR_ARRAY_CLASS_FAST`)** - instructions and clock, not gated. The round's premise (a C# Kernel
+  call costs ~28 ns over CRuby whatever it does) did not hold when counted: over an empty
+  method in the same harness, `Integer(5)` costs what `@i.gcd(4)` costs, implicit and explicit
+  self alike, and the rows' gap to CRuby is the harness's Ruby call. The outlier the counts
+  found: a Kernel method on an Array in a compiled body, ~370 instructions over a Hash's, because
+  `$LOAD_PATH`'s singleton class (as in MRI) sent every array's class lookup
+  (GetImmediateClassOfNonRubyObject) to the weak instance data table. A bit set before any
+  runtime makes data for an array now skips it. `@a.nil?` compiled 2531 -> 2172 instructions
+  (`@h.nil?` 2161), 95.9 -> 75.7 ns; `Array#dig` 325.7 -> 284.3 ns; other Array rows within the
+  noise. `Util/array-class-matrix.rb` (new) CRuby's but for `_id2ref` (as before) in five modes,
+  switch off and R2R; light-entry, shared-rule-light, kernel-string, numeric-conversion, jit,
+  jit-calls, ivar, hot-shapes unchanged; ruby/spec core/kernel, array, objectspace the same
+  examples; 331 IronRuby.Tests on Debug pass. Left: the same table cost for any other CLR class
+  once one of its instances has a singleton class (a String's, a Hash's) - the bit is RubyArray's
+  alone; and the harness's own Ruby call (gap 13).
+
 - **perf/kinteger (2026-11-28, on 33818f7 + 51f5637) - `Kernel#String` asks for #to_str as
   rb_check_funcall does; `Integer("1234")` rejected, nothing to win** - not gated.
   - Part 1 (correctness, from perf/kstring's leftovers): `__ir_check_to_str__` calls a private
