@@ -6549,6 +6549,54 @@ nil
         }
 
         /// <summary>
+        /// A string instance_eval or class_eval sees and sets its caller's $~ and $_ (and so $1, $`), as MRI's do: they are
+        /// the frame's, not the eval's.
+        /// </summary>
+        public void Eval_InstanceEvalSpecialVariables1() {
+            TestOutput(@"
+require 'ruby4'
+def m1
+  ""ab"" =~ /(b)/
+  [instance_eval(""$~&.to_a""), instance_eval(""$1""), binding.eval(""$~&.to_a""), eval(""$1""), instance_eval { $1 }, binding.eval(""$`"")]
+end
+p m1
+def m2
+  $_ = ""line""
+  [instance_eval(""$_""), binding.eval(""$_""), eval(""$_""), instance_exec { $_ }]
+end
+p m2
+def m3
+  ""xy"" =~ /y/
+  o = Object.new
+  [o.instance_eval(""$~&.to_s""), Object.class_eval(""$~&.to_s""), o.instance_exec { $~&.to_s }]
+end
+p m3
+""zz"" =~ /z/
+p instance_eval(""$~&.to_s""), binding.eval(""$~&.to_s"")
+def m4 = (instance_eval(""'q' =~ /q/""); $~&.to_s)
+p m4
+def h1(s) = (s =~ /(\w)/; instance_eval(""$1""))
+def h2(s) = (s =~ /(\w)/; Object.class_eval(""$~&.[](1)""))
+def h3(s)
+  $_ = s
+  instance_eval(""$_"")
+end
+def h4(s) = (instance_eval(""s =~ /(\\w)/""); $1)
+r = nil
+3000.times { |i| r = [h1(""a#{i % 3}""), h2(""b""), h3(""c#{i % 2}""), h4(""d"")] }
+p r
+", @"
+[[""b"", ""b""], ""b"", [""b"", ""b""], ""b"", ""b"", ""a""]
+[""line"", ""line"", ""line"", ""line""]
+[""y"", ""y"", ""y""]
+""z""
+""z""
+""q""
+[""a"", ""b"", ""c1"", ""d""]
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the

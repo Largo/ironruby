@@ -1406,35 +1406,43 @@ namespace IronRuby.Runtime {
             get { return true; }
         }
 
+        // The scope whose $~ and $_ these are, when not this one's own: a string instance_eval/class_eval runs in a
+        // module-eval scope of its own, but MRI's frame-local special variables are the caller's there.
+        private RubyClosureScope _specialVariablesScope;
+
+        internal void ShareSpecialVariablesOf(RubyClosureScope/*!*/ scope) {
+            _specialVariablesScope = (scope._specialVariablesScope ?? scope);
+        }
+
         public MatchData CurrentMatch {
-            get { return _currentMatch; }
-            set { _currentMatch = value; }
+            get { var owner = _specialVariablesScope; return (owner == null) ? _currentMatch : owner._currentMatch; }
+            set { var owner = _specialVariablesScope; if (owner == null) { _currentMatch = value; } else { owner._currentMatch = value; } }
         }
 
         public object LastInputLine {
-            get { return _lastInputLine; }
-            set { _lastInputLine = value; }
+            get { var owner = _specialVariablesScope; return (owner == null) ? _lastInputLine : owner._lastInputLine; }
+            set { var owner = _specialVariablesScope; if (owner == null) { _lastInputLine = value; } else { owner._lastInputLine = value; } }
         }
 
         internal MutableString GetCurrentMatchGroup(int index) {
             Debug.Assert(index >= 0);
 
-            var match = _currentMatch;
+            var match = CurrentMatch;
             return (match != null) ? match.GetGroupValue(index) : null;
         }
 
         internal MutableString GetCurrentPreMatch() {
-            var match = _currentMatch;
+            var match = CurrentMatch;
             return (match != null) ? match.GetPreMatch() : null;
         }
 
         internal MutableString GetCurrentPostMatch() {
-            var match = _currentMatch;
+            var match = CurrentMatch;
             return (match != null) ? match.GetPostMatch() : null;
         }
 
         internal MutableString GetCurrentMatchLastGroup() {
-            var match = _currentMatch;
+            var match = CurrentMatch;
             if (match != null) {
                 // the last capture group that matched; a pattern without groups has none ($+ is nil)
                 for (int i = match.GroupCount - 1; i >= 1; i--) {
