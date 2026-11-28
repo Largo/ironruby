@@ -477,6 +477,12 @@ module Enumerable
     # an Array is grouped in C#, see Enumerable.ListGroupBy
     return __list_group_by__(&block) if __plain_list__?
     result = {}
+    # a Hash whose #each is the built-in one yields one value, the [key, value] pair, per entry
+    # (__plain_each__?): the block takes it as it is, without the `|*values|` Array
+    if __plain_each__?
+      each { |item| (result[yield(item)] ||= []) << item }
+      return result
+    end
     each do |*values|
       item = __enum_item__(values)
       key = values.size == 1 ? block.call(item) : __enum_yield__(values, &block)
@@ -487,7 +493,12 @@ module Enumerable
 
   def each_with_object(memo)
     return to_enum(:each_with_object, memo) unless block_given?
-    each { |*values| yield(__enum_item__(values), memo) }
+    # see group_by: a Hash's built-in #each yields one value per entry (an Array has its own, in C#)
+    if __plain_each__?
+      each { |item| yield(item, memo) }
+    else
+      each { |*values| yield(__enum_item__(values), memo) }
+    end
     memo
   end unless method_defined?(:each_with_object)
   ::Enumerator.__iter_cursor_method__(self, :each_with_object)
@@ -706,6 +717,16 @@ module Enumerable
   def uniq(&block)
     seen = {}
     result = []
+    # see group_by: a Hash's built-in #each yields one value per entry (an Array has its own, in C#)
+    if __plain_each__?
+      each do |item|
+        key = block ? yield(item) : item
+        next if seen.key?(key)
+        seen[key] = true
+        result << item
+      end
+      return result
+    end
     each do |*values|
       item = __enum_item__(values)
       # MRI's uniq_iter yields the values as they came (rb_yield_values2), not the packed item

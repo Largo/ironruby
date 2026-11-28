@@ -28,6 +28,9 @@ METHODS = {
   'max_by(2)': ->(r, &b) { r.max_by(2, &b) },
   flat_map: ->(r, &b) { r.flat_map(&b) },
   collect_concat: ->(r, &b) { r.collect_concat(&b) },
+  group_by: ->(r, &b) { r.group_by(&b) },
+  uniq: ->(r, &b) { r.uniq(&b) },
+  each_with_object: ->(r, &b) { $ewo = []; [r.each_with_object($ewo) { |*a| $ewo << b.(a[0]) }, r.each_with_object([], &b).size] },
 }
 
 # ---------------------------------------------------------------- 1. what the block is given
@@ -98,10 +101,6 @@ METHODS.each do |name, m|
   end
   t("#{name} throw") { catch(:t) { m.(h) { |k, v| throw :t, k } } }
 end
-using RefineEach
-t('min_by under a refined Hash#each') { h.min_by { |k, v| v } }
-t('sort_by under a refined Hash#each') { h.sort_by { |k, v| v } }
-t('flat_map under a refined Hash#each') { h.flat_map { |k, v| [v] } }
 
 # ---------------------------------------------------------------- 3. Hash#each redefined, then restored
 t('a redefined Hash#each') do
@@ -134,3 +133,93 @@ t('min_by ties: the first') { { a: 1, b: 1 }.min_by { 0 } }
 t('max_by ties: the first') { { a: 1, b: 1 }.max_by { 0 } }
 t('no block: enumerator sizes') { [h.min_by.size, h.sort_by.size, h.filter_map.size, h.flat_map.size, h.max_by(2).size] }
 t('enumerator, then each') { h.min_by.each { |k, v| v } }
+
+# ---------------------------------------------------------------- 5. any?, all?, none? (any? is Hash's own in CRuby: rb_hash_any_p)
+PRED = {
+  'any?': ->(r, *a, &b) { r.any?(*a, &b) },
+  'all?': ->(r, *a, &b) { r.all?(*a, &b) },
+  'none?': ->(r, *a, &b) { r.none?(*a, &b) },
+}
+PBLOCKS = {
+  '|x|' => proc { |x| x[1] > 2 },
+  '|k, v|' => proc { |k, v| v > 2 },
+  '|k|' => proc { |k| k.is_a?(Array) },
+  '|*a|' => proc { |*a| a.size == 1 && a[0][1] > 2 },
+  '|(k, v)|' => proc { |(k, v)| v > 2 },
+  '|x, *r|' => proc { |x, *r| r.empty? && x == :c },
+  'lambda (x)' => ->(x) { x[1] > 2 },
+  'lambda (k, v)' => ->(k, v) { v > 2 },
+  '&:frozen?' => :frozen?.to_proc,
+  'method(2 args)' => Object.new.tap { |o| def o.m(k, v) = v > 2 }.method(:m).to_proc,
+  'method(1 arg)' => Object.new.tap { |o| def o.m(x) = x[1] > 2 }.method(:m).to_proc,
+}
+class EqqAll; def ===(x) = (($eqq ||= []) << x; false); end
+PRED.each do |name, m|
+  PBLOCKS.each do |bname, b|
+    t("#{name} #{bname}") { m.(h, &b) }
+  end
+  t("#{name} no block") { [m.(h), m.({}), m.({ nil => nil })] }
+  t("#{name} empty with a block") { m.({}) { raise "called" } }
+  t("#{name} a pattern") { [m.(h, [:a, 3]), m.(h, Array), m.(h, [:z, 0])] }
+  t("#{name} a pattern sees the pair") { $eqq = []; m.(h, EqqAll.new); $eqq }
+  t("#{name} a pattern and a block") { m.(h, Array) { raise "called" } }
+  t("#{name} 2 arguments") { m.(h, 1, 2) }
+  t("#{name} subclass") { m.(SubHash[h]) { |k, v| v > 2 } }
+  t("#{name} subclass with its own #each") { m.(OwnEach[h]) { |k, v| v == 2 } }
+  t("#{name} a prepended #each") { m.(PrependedHash[h]) { |k, v| v == 0 } }
+  t("#{name} a singleton #each") { x = h; def x.each = yield(:single, 5); m.(x) { |k, v| v == 5 } }
+  t("#{name} compare_by_identity") { x = {}.compare_by_identity; x["a".dup] = 2; x["a".dup] = 1; m.(x) { |k, v| v == 1 } }
+  t("#{name} default proc not called") { x = Hash.new { |hh, k| raise "default #{k}" }; x[:q] = 1; m.(x) { |k, v| v == 1 } }
+  t("#{name} adding a key in the block") { x = h; m.(x) { |k, v| x[:"n#{v}"] = 0; false } }
+  t("#{name} deleting a later key") { x = h; seen = []; m.(x) { |k, v| x.delete(:c); seen << k; false }; seen }
+  t("#{name} replacing a later value") { x = h; seen = []; m.(x) { |k, v| x[:c] = 7; seen << v; false }; seen }
+  t("#{name} break") { m.(h) { |k, v| break [:broke, k] if v == 1; false } }
+  t("#{name} next") { m.(h) { |k, v| next v == 1 } }
+  t("#{name} raise, frames") do
+    m.(h) { raise "x" }
+  rescue => e
+    e.backtrace_locations.first(3).map(&:label)
+  end
+  t("#{name} throw") { catch(:t) { m.(h) { |k, v| throw :t, k } } }
+  t("#{name} walk order and stop") { seen = []; r = m.(h) { |k, v| seen << k; v == 1 }; [r, seen] }
+  t("#{name} a frozen Hash") { m.(h.freeze) { |k, v| v == 1 } }
+end
+t('any? owner, arity, parameters') { mm = {}.method(:any?); [mm.owner, mm.arity, mm.parameters] }
+t('any? with a redefined Hash#each') do
+  class Hash; alias __saved_each__ each; def each = yield(:redef, 4); end
+  begin
+    [h.any? { |k, v| k == :redef }, h.all? { |k, v| k == :redef }]
+  ensure
+    class Hash; alias each __saved_each__; remove_method :__saved_each__; end
+  end
+end
+t('any? of ENV-like: a Struct, a Range') { [Struct.new(:a).new(1).any? { |x| x == 1 }, (1..3).any? { |x| x > 2 }] }
+
+# ---------------------------------------------------------------- 5b. each_with_object's own block shapes (the memo is the second value)
+EWO = {
+  '|x, m|' => proc { |x, m| m << x },
+  '|(k, v), m|' => proc { |(k, v), m| m << v },
+  '|k, v|' => proc { |k, v| v << k },
+  '|*a|' => proc { |*a| a[1] << a.size },
+  '|x|' => proc { |x| $ewo2 << x },
+  'lambda (x, m)' => ->(x, m) { m << x },
+  'lambda ((k, v), m)' => ->((k, v), m) { m << k },
+  'lambda (x)' => ->(x) { $ewo2 << x },
+  'method(2 args)' => Object.new.tap { |o| def o.m(x, m) = m << x }.method(:m).to_proc,
+  '&:push' => :push.to_proc,
+}
+EWO.each do |bname, b|
+  t("each_with_object #{bname}") { $ewo2 = []; [h.each_with_object([], &b), $ewo2] }
+end
+t('each_with_object no block') { e = h.each_with_object([]); [e.size, e.next] }
+t('each_with_object, a subclass with its own #each') { OwnEach[h].each_with_object([]) { |x, m| m << x } }
+t('group_by and uniq, |*a| keys') { [h.group_by { |*a| a.size }, h.uniq { |*a| a.size }] }
+t('uniq without a block') { { a: 1, b: 1 }.uniq }
+
+# ---------------------------------------------------------------- 6. a refined Hash#each (last: `using` reaches every later line of the file)
+using RefineEach
+t('min_by under a refined Hash#each') { h.min_by { |k, v| v } }
+t('sort_by under a refined Hash#each') { h.sort_by { |k, v| v } }
+t('flat_map under a refined Hash#each') { h.flat_map { |k, v| [v] } }
+t('any? under a refined Hash#each') { h.any? { |k, v| k == :refined } }
+t('all? under a refined Hash#each') { h.all? { |k, v| k == :refined } }

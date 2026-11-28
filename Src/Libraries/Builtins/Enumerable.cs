@@ -228,17 +228,23 @@ namespace IronRuby.Builtins {
 
         #region all?, any?, none?
 
+        // Not inlined: a backtrace taken in the block names the frame by this method ('Enumerable#all?'), and
+        // ReadyToRun folds a forwarder this small into its caller (see IListOps' Array#all? and friends).
+
         [RubyMethod("all?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAll(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
             return TrueForItems(each, predicate, self, false, false);
         }
 
         [RubyMethod("none?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForNone(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
             return TrueForItems(each, predicate, self, true, false);
         }
 
         [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAny(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
             return TrueForItems(each, predicate, self, true, true);
         }
@@ -248,16 +254,19 @@ namespace IronRuby.Builtins {
         // and &block made every [x].any? { } pay for a splat, a Proc and two more calls: 400 ns where MRI
         // takes 70.
         [RubyMethod("all?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAll(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
             return PatternForItems(each, caseEquals, predicate, self, pattern, false, false);
         }
 
         [RubyMethod("none?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForNone(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
             return PatternForItems(each, caseEquals, predicate, self, pattern, true, false);
         }
 
         [RubyMethod("any?")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object TrueForAny(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
             return PatternForItems(each, caseEquals, predicate, self, pattern, true, true);
         }
