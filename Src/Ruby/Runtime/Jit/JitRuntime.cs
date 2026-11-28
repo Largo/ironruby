@@ -1375,6 +1375,24 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
+        /// <summary>
+        /// An outlined copy was handed back at its safe point, or failed its entry guard: if the method version is still the
+        /// one it was compiled under and each constant it folded resolves as it did (or the constant version has not moved),
+        /// the copy is current, and its safe points compare with the epoch read before these checks from now on. False
+        /// if anything it was built on changed.
+        /// </summary>
+        internal bool TryKeep() {
+            long epoch = RubyUtils.CodeEpoch;
+            if (RubyModule.GlobalMethodVersion != Version) { return false; }
+            var context = ConstantsOf;
+            if (context != null && System.Threading.Volatile.Read(ref context.ConstantAccessVersion) != System.Threading.Volatile.Read(ref ConstantVersion) &&
+                !ConstantsStillHold()) {
+                return false;
+            }
+            System.Threading.Volatile.Write(ref Epoch, epoch);
+            return true;
+        }
+
         /// <summary>A method table or a constant the code was built on has changed since.</summary>
         internal bool Stale {
             get {

@@ -2117,6 +2117,9 @@ namespace IronRuby.Runtime.Jit {
         // safe-point word with it, as an immediate.
         private long _compileEpoch;
 
+        // IR_LOOP_KEEP=0: an outlined copy handed back at its safe point is rebuilt whatever moved the epoch, as before.
+        internal static readonly bool _KeepOutlined = Environment.GetEnvironmentVariable("IR_LOOP_KEEP") != "0";
+
         /// <summary>
         /// A typed method body's loop keeps an epoch local, which starts from the one the body last found
         /// current; null in an outlined loop, which has none (see EmitLoopSafePoint).
@@ -2150,6 +2153,15 @@ namespace IronRuby.Runtime.Jit {
             var word = Ast.Property(null, typeof(RubyUtils).GetProperty("SafePointWord"));
             var moved = Ast.NotEqual(word, Ast.Constant(_compileEpoch));
             if (epoch == null) {
+                // A copy the site kept after a hand-back that changed nothing it was built on (OsrLoopSite.Run,
+                // JitLoopGuard.TryKeep) compares with its guard's epoch, which the site moved up: against the immediate
+                // alone every later iteration would hand it back again. Only once the word has moved, though: the guard is a
+                // constant of the closure, and reading its field on every iteration made `s += K; i += 1' 1.4x slower.
+                if (_KeepOutlined) {
+                    return Ast.IfThen(moved, Ast.IfThen(
+                        Ast.NotEqual(word, Ast.Field(Ast.Constant(_loopGuard), JitLoopGuard.EpochField)),
+                        Ast.Throw(Ast.Call(JitRuntime.M("OsrHandBack")))));
+                }
                 return Ast.IfThen(moved, Ast.Throw(Ast.Call(JitRuntime.M("OsrHandBack"))));
             }
             return Ast.IfThen(moved,
