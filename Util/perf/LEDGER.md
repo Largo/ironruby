@@ -1188,7 +1188,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site; B, its Proc's scope made but not published as the frame's (no slow exit, no parking,
     the frame's calls still light), with one scope per invocation and the frame's exit marking it
     left when the Proc escaped.
-    perf/literalsite (see Landed, not gated) built A and with it the attribution: where the
+    perf/literalsite (see Landed, gated 2026-11-28 (round 7's gate entry)) built A and with it the attribution: where the
     literal runs, its Proc makes the scope anyway and A changes nothing (`nbl` 118 -> 114,
     overlapping); where it does not, A takes the whole 45 ns (`nbx` 100 -> 56, `nbp`'s 56). So
     the full site costs about nothing, and the literal's own ~60 ns is the scope made and
@@ -1628,14 +1628,14 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     and the R2R host's JIT. rbconfig.rb no longer uses CLR interop: -0.3 to -0.9% main-thread
     instructions on all five commands. Next leads: the 4,989 CLR member lookups of ruby4.rb in `-e 1`
     (5.9 ms), and eval'd strings in the startup library.
-    2026-11-27, perf/clrlookup (Landed, not gated): the 7,230 CLR member lookups of `-e 1` are
+    2026-11-27, perf/clrlookup (Landed, gated 2026-11-28 (round 7's gate entry)): the 7,230 CLR member lookups of `-e 1` are
     method resolution falling back to the CLR types of Object, Class, Module and their singleton
     classes; the hooks of the prelude's definitions (`const_added`, `method_added`...) are most of them.
     They cost little: failures are cached and names checked against metadata. The time is the first
     lookup on each of ~67 types. Taken: Random's interop call made lazy, field and event names read
     from metadata, and the failure cache keyed by a class. -0.75 to -1.97% main-thread instructions on
     the R2R host, -0.10 to -1.13% on the release image.
-    2026-11-27, perf/bootparse (Landed, not gated): the string evals start-up runs are compiled
+    2026-11-27, perf/bootparse (Landed, gated 2026-11-28 (round 7's gate entry)): the string evals start-up runs are compiled
     into the startup library: specification.rb's and kernel_require.rb's (2.3 ms each on the R2R
     host before their first call), every gemspec RubyGems loads (93 in `gem list`), Forwardable's
     delegators. Main-thread instructions -2.1 to -6.8% on the R2R host and -2.7 to -8.6% on the release
@@ -1995,6 +1995,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
+  perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
+  design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple
+  (rejected), perf/kwfwd, perf/jitrescue, perf/jitisa, perf/hashwalk, perf/hashany, perf/cdtree,
+  perf/lightmatch, perf/sinkcarrier, perf/loopreassign): the branch `claude/happy-gauss-95wm2j` at 33818f7
+  against master f81fc19, Release net10.0, four cores: **PASS**, with no fix needed.
+  The merge itself: RubyOps.EndPark, where perf/endpark's release write (IR_PARK_WRITE) met perf/permute's
+  deeper slots (IR_PARKED_DEPTH) - the write publishes into an empty slot and otherwise falls to
+  TryParkDeeper, as the compare-exchange path does; MethodDefinition's IsNeverParkedIterator (`downto` parks
+  under IR_PARK_DOWNTO) and the light rewriter's LiteralCalls and MatchSlot (both kept); perf/iter2's
+  rejected `downto` reconciled with perf/permute (9bb53b9). Ledger entries doubled by merges, dropped: the
+  ones from perf/extiter's merge (22dcf95), and two found now - perf/sieve's, whose marked header had been
+  left above perf/permute's entry, and perf/jitblockparam's. ReflectionCache.Generated.cs is what
+  ClassInitGenerator writes, and InternalMethods.Generated.cs what gen-internal-methods.rb writes with
+  CRuby 4.0.10. No new DLR patch.
+  IronRuby.Tests (`parallel-tests.sh`, Debug): 1,415 tests, every one executed, none failed.
+  `gate-matrices.rb --all` in 7 modes (the six default ones, and every round 7 switch off at once:
+  IR_HASH_WALK, IR_JIT_RESCUE, IR_JIT_TYPE_TEST, IR_KWSPLAT_BY_REFERENCE, IR_LIGHT_LITERAL_CALLS,
+  IR_LIGHT_MATCH_SINK, IR_LOOP_KEEP, IR_PARK_DOWNTO and IR_PARK_WRITE at 0, IR_PARKED_DEPTH=1): 1,274 same,
+  119 baseline, 14 DIFF, each explained: regexp-binary-ctype prints what it printed at round 6 (9 lines
+  from CRuby); string-race-matrix, compared over five runs of each tree (rows not always ok 110 -> 87, lost
+  writes 106 -> 0, no row failing only on the new build). callable-parameters, a DIFF at round 6, is the
+  same now.
+  A probe file for the round's named hot spots - perf/endpark with perf/permute's deeper slots (a recursive
+  method parking around `downto` from 8 threads at once, every result checked; a block kept from a parked
+  level), the match sink's `$~` through a TracePoint, a fiber and a raise, a hot method-level
+  rescue/else/ensure's value, `is_a?` after an include and on a BasicObject, Hash#any? shapes and a key
+  added in its block, anonymous forwarding with empty and full keywords, a TracePoint `c_call` on an
+  attribute - prints CRuby's output with the JIT on and off and with the round's switches off, but for one
+  row, as on master: two fibers suspended in a method that matched share their `$~` (perf/crubydiff's
+  d32ac04, in round 8, gives a fiber's block its own).
+  ruby/spec, all five suites (32,285 examples): no failure the known list does not name (two TCPSocket
+  timeout examples failed under the sweep's load and passed alone).
+  Census against master (Src/StdLib, Util/bench, AWFY): light frames 91.7% -> 96.2% (+1,748 with the new
+  methods; of the methods in both, 1,234 up and none down), method JIT compiles 11.7% -> 12.2% and maybe
+  10.4% -> 11.9% (466 up, none down).
+  AWFY, 8 iterations: all fourteen verify. AWFY 12 in both orders: geomean new/base 0.919 and 0.909; none
+  more than 5% slower in both (Towers 1.068 and 1.035). Alone, five rounds in each order, medians new/base:
+  Permute 0.918 / 0.881, Sieve 0.448 / 0.466, Json 0.958 / 0.975, CD 0.999 / 0.988. micro-table in both
+  orders: `cmp` (`@x < o`) 1.06 and 1.15 slower, then by ab.rb alone, 16 rounds in each order, 1.04 and 1.00
+  with the rounds overlapping: noise; no other line more than 5% slower in both.
+  Start-up on the R2R host, best of ten alternating, two runs, base -> new ms: `-e 1` 509 -> 497 and
+  514 -> 475, `gem --version` 601 -> 591 and 584 -> 562, `gem list` 1043 -> 952 and 1040 -> 929,
+  `require "irb"` 1100 -> 995 and 1080 -> 977, irb 1+1 1186 -> 1086 and 1167 -> 1075: 2-11% faster.
 - **Gate of 2026-11-28 for round 6 of round thirty-seven** (perf/crubydiff's third and fourth rounds,
   perf/sieve and gap 39's analysis, perf/evallocals, perf/evalscreen, perf/evalboxes, perf/hsortby,
   perf/arymin, perf/rescuelight and perf/splatpos with castcheck's, nilblock's and dotsfwd's findings,
@@ -2043,7 +2087,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   502 -> 471, `gem --version` 590 -> 572 and 577 -> 590, `gem list` 1006 -> 989 and 977 -> 982,
   `require "irb"` 1029 -> 1005 and 984 -> 992, irb 1+1 1133 -> 1071 and 1065 -> 1066: level.
 - **perf/endpark (round thirty-seven, 2026-11-28) - EndPark publishes the parked scope with a release
-  write, not a compare-exchange (gap 13)** - time, not gated. Stage 0 found the parked cycle's two atomics
+  write, not a compare-exchange (gap 13)** - time, gated 2026-11-28 (round 7's gate entry). Stage 0 found the parked cycle's two atomics
   about 16 ns of a literal's 50, one `CompareExchange` 10.4 ns here against a `Volatile.Write`'s 2.5. The
   take stays an exchange; the park is now `Volatile.Write(ref slot.Parked, parked)`. Why it is sound: the
   write is a release, so the scope, its tuple and the staged Procs written before it are visible to a
@@ -2065,7 +2109,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/literalsite (round thirty-seven, 2026-11-27) - a call with a block in a light frame whose
   literals are all narrow takes the light site (gaps 16 and 13)** - instructions not counted, time and
-  bytes, not gated. Change A of `Docs/light-frame-literal-blocks.md`. In a light body with literal blocks
+  bytes, gated 2026-11-28 (round 7's gate entry). Change A of `Docs/light-frame-literal-blocks.md`. In a light body with literal blocks
   every call with a block took the full site with the scope made on demand (`blockPass = ... &&
   !BlockLiterals`), so `return nb(&P) if a; nb { }` made a scope on the hot path, which never reaches the
   literal. Now, when every literal of the body is of the narrow shape (`HasOnlyNarrowLiterals`: no
@@ -2093,7 +2137,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 - **perf/kwfwd (/perf-step, 2026-11-27) - `f(*a, **h)` passes `a` itself and no array for an
   empty `h`; `def m(*, **)` keeps no copy of its arguments for a `super`** (switch
   `IR_KWSPLAT_BY_REFERENCE` for the first, on unless `=0`). Built on f7ae738b (claude/perf-lsite,
-  which has 4320d4a).
+  which has 4320d4a). Gated 2026-11-28 (round 7's gate entry).
   - **Where the cost was.** `rest_kw` (`(*a, **k) = two(*a, **k)`) 174 ns against `rest_fwd`'s
     71 (CRuby 109, 84), `anon` (`(*, **, &)`) 264 (CRuby 88). Splitting it: binding `**k` costs
     almost nothing (`kw_recv` = `rest_only`); passing an empty one on costs ~55 ns. Arguments.
@@ -2136,7 +2180,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - **Left.** `anon` and `rest_kw` are still ~40 ns over CRuby. The ruby2_keywords case above
     needs a call-site flag ("keywords given explicitly") that every dispatcher reads.
     `f(*a, k: 1, &g)` (named keywords, not a `**`) still copies.
-- **perf/jitisa (2026-11-28, census and timed, not gated) - `is_a?`, `kind_of?` and `instance_of?` in the method JIT's
+- **perf/jitisa (2026-11-28, census and timed, gated 2026-11-28 (round 7's gate entry)) - `is_a?`, `kind_of?` and `instance_of?` in the method JIT's
   typed body** (the census's "MethodCall (screen)": is_a? 693; switch `IR_JIT_TYPE_TEST`). Built on happy-gauss
   f67ac44 merged with perf/jitbody e19f454.
   - **What.** `x.is_a?(C)`, `x.kind_of?(C)` and `x.instance_of?(C)` (or on self), with C a constant and no block,
@@ -2172,7 +2216,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     more runs (11 on this build, 8 on the base) exited 0. ruby/spec core/kernel is_a, kind_of, instance_of and
     core/module/case_compare: no failures on either build. IronRuby.Tests (Debug), all 1,402: PASSED.
 
-- **perf/jitrescue (2026-11-28, census and timed, not gated) - `begin`/`rescue`/`else`/`ensure` in the method JIT's
+- **perf/jitrescue (2026-11-28, census and timed, gated 2026-11-28 (round 7's gate entry)) - `begin`/`rescue`/`else`/`ensure` in the method JIT's
   typed body** (gap 22's remainder; switch `IR_JIT_RESCUE`). Built on happy-gauss 4320d4a, perf/jitbody 238d994 and
   perf/lsite f7ae738 (lazy `$!`, IR_LAZY_ERRINFO).
   - **Approach.** The handler is not emitted in the typed body. The typed body takes a begin, or a method-level
@@ -2216,43 +2260,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (call: fetch/0). The test now expects that, plus a new `Point#jump` (a return through an ensure) that is still
     never (Body); it passes.
 
-- **perf/jitblockparam (2026-11-27, census and timed, not gated) - a typed body for a call without a block**
-  (switch `IR_JIT_BLOCK_PARAM`). A method whose block parameter is only passed on, `def w(a, b, &k) =
-  @t.two(a, b, &k)`, was never wrapped (`JitStub.ParameterShape`: "block parameter"), and one passing `&nil`
-  was refused at the screen (a call with a block). Now `JitStub.BlockParameterOnlyPassed` takes a method whose
-  block parameter is never read except as `&k`, never assigned, with no yield and no super, and only
-  mandatory parameters. Its typed body is compiled for a call without a block: there k is nil and `&k`
-  passes none, as `&nil` always does (`JitScreen.PassesNoBlock`; the screen, `EmitCall` and `TryInlineCall`
-  take such a call as one without a block). `block_given?` in a method body (not in an outlined loop, not
-  with optional or keyword parameters, Kernel's and unrefined) compiles to false on the same terms
-  (`EmitBlockGiven`). Such a body sets `JitCode.AssumesNoBlock`, and the entry adds `block == null` to its
-  test, so a call with a block runs the generic body, which passes it on. A method the profile saw called
-  with a block is declined ("called with a block"), at that call if it has a block parameter, before
-  anything is compiled. Inlined and directly called bodies are only ever called without a block.
-  Census (Src/StdLib, Util/bench, AWFY): 62 methods up, none down. 61 left "never (block parameter)"
-  (2 now compile, the rest are maybe), and `FW#pass_nil` left "never (MethodCall two)". Compiles 3,579 ->
-  3,583, maybe 3,180 -> 3,238. Traced runs: forward-shapes specialized 4 -> 7, declines 1 -> 1;
-  delegate-shapes 3 -> 3, 1 -> 1; app-shapes 120 -> 120 specialized, declines 28 -> 29. The new decline,
-  `CSV::FieldsConverter#each` (`@converters.each(&block)`), is always called with a block; it declines at
-  its first call. Most of the methods let through pass `&k` to an iterator, so they win nothing: the gain
-  is a forwarder to a leaf called without a block. Instructions per call (`callgrind/count.sh`,
-  `Util/bench/forward-shapes.rb`): fixed_blk 2,254 -> 1,703, param_only 2,094 -> 1,699, pass_nil
-  2,232 -> 1,697, the same as fixed (1,701). rest, rest_blk, dots and anon are unchanged (rest and dots
-  read +69 once and 0 on a rerun). Delegate-shapes is unchanged, row for row (its forwarders take a rest
-  or a block). Clock (ab.rb -r 3, noisy): param_only 54 -> 38 ns against the switch off; the other rows
-  overlap. `Util/jit-blockparam-matrix.rb` (new: `&k`, `&nil`, block_given? in the caller and callee,
-  break and next through the passed block, a lambda's return, `&obj` with to_proc once, `&:sym`, send and
-  Method#call with a block, two layers, anonymous `&`, an inlined callee's block_given?, k read, assigned,
-  through a binding, super with the implicit block, a deopt with a block in flight, a method always
-  called with a block, a block every third call, block_given? redefined, refined and in a loop, a
-  singleton, the callee redefined): CRuby's output with the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
-  IR_LIGHT_FRAMES=0 and the switch off. jit, jit-calls, dmeth-jit, block-pass, block-given, forward-rest
-  and hot-shapes in the same five modes: the same as the base (forward-rest's six bind_call-of-binding rows
-  differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
-  base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
 - **perf/hashany (/perf-step, 2026-11-28, on 540bdb0 + e9a8a9e) - `Hash#any?` is Hash's own
   (rb_hash_any_p); `group_by`, `uniq`, `each_with_object` walk a plain Hash with a one-value
-  block** - clock only, not gated. `Hash#any? { |k, v| }` 695 -> 403 ns (CRuby 228; 0.58),
+  block** - clock only, gated 2026-11-28 (round 7's gate entry). `Hash#any? { |k, v| }` 695 -> 403 ns (CRuby 228; 0.58),
   `group_by` 1334 -> 976 (0.73; CRuby 968), `each_with_object` 1208 -> 906 (0.75; 964),
   `uniq { }` 1284 -> 924 (0.72; 837); Array rows within the noise. `Hash#any?` now matches CRuby
   on owner, frames and a prepended, singleton or redefined #each (never called). Enumerable's
@@ -2267,7 +2277,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 - **perf/hashwalk (/perf-core, 2026-11-27, on 52f4f22) - the prelude's Enumerable methods
   walk a plain Hash with a one-value block (`__plain_each__?`, `IR_HASH_WALK`)** - clock only,
-  not gated. The lever perf/hsortby named: filter_map, min_by, max_by, sort_by, min_by(n),
+  gated 2026-11-28 (round 7's gate entry). The lever perf/hsortby named: filter_map, min_by, max_by, sort_by, min_by(n),
   max_by(n), flat_map and collect_concat walked a Hash with `|*values|` and __enum_item__,
   though Hash#each yields one [key, value] pair per entry to that block and to `|item|` alike.
   A Hash whose #each resolves to the built-in one now takes the Array's one-value walk.
@@ -2284,7 +2294,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     per method is the price of the same trick there. Hash#any? (3.8x) is C#, /perf-step's.
 - **perf/cdtree (/perf-step, 2026-11-27, on f67ac44) - CD's `Node#successor` compiles (an identity
   `==` on a local nothing samples), and a body bound to a callee that was compiled again is compiled
-  again instead of being put back (gap 3)** - not gated. (1) `x = self; ...; while y && x == y.right`:
+  again instead of being put back (gap 3)** - gated 2026-11-28 (round 7's gate entry). (1) `x = self; ...; while y && x == y.right`:
   `TrySampleOfLocal` takes a local whose first value is `self` from self's sample, as it does one from
   another local or an instance variable; and the `==`/`equal?` decision takes a method local (not a
   parameter) for an object of a Ruby class when its sample is one or an unsampled attribute access or
@@ -2328,7 +2338,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   Not done: `tree_insert`'s four changes (see gap 3).
 
 - **perf/sinkcarrier (2026-11-28) - the frame's own sink carries a match sink's `$~`: `IR_LIGHT_MATCH_SINK` on by
-  default (gap 16, the `$~` family)** - not gated. perf/lightmatch (below) was sound but off: its hand-over (a stack
+  default (gap 16, the `$~` family)** - gated 2026-11-28 (round 7's gate entry). perf/lightmatch (below) was sound but off: its hand-over (a stack
   of sink scopes per thread, entered, left and taken on every call, with a fault block in the rule) cost about what
   the late scope did.
   - The carrier: the frame's sink - a RubyTopLevelScope that holds nothing but `$~` - is the light site's scope
@@ -2365,7 +2375,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     does), with or without the switch.
 
 - **perf/lightmatch (2026-11-27) - a light frame keeps its `$~` in a CLR variable for its String and Regexp calls (gap
-  16, the `$~` family): off by default, `IR_LIGHT_MATCH_SINK=1`** - not gated. Chosen by the census of c1045a0: the
+  16, the `$~` family): off by default, `IR_LIGHT_MATCH_SINK=1`** - gated 2026-11-28 (round 7's gate entry). Chosen by the census of c1045a0: the
   regex lines were its largest refusal (gsub 273, `=~` 230, sub 104, `when` 86, scan 71, split 63, match 54).
   - CRuby's rules, the matrix's rows: `$~` is the frame's own - a method's match never sets its caller's, which keeps
     what it had (nil or a match); a block and a lambda see and set their method's; per thread too; `$1`..`$9`, `$&`,
@@ -2416,7 +2426,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - Found on the way, not fixed: `instance_eval("$~")` does not see its caller's `$~` (CRuby does), on base too.
 
 - **perf/loopreassign (round forty, 2026-11-28) - an outlined loop handed back by an epoch move that
-  changed nothing it was built on is kept (gap 29)** - not gated. Every constant reassignment anywhere
+  changed nothing it was built on is kept (gap 29)** - gated 2026-11-28 (round 7's gate entry). Every constant reassignment anywhere
   moves the code epoch; an outlined loop's safe point compared the safe-point word with the epoch it
   was compiled at, so the copy handed itself back and the site rebuilt it (after StaleRebuildSpacing),
   whatever was reassigned. Now `OsrLoopSite.Run` asks `JitLoopGuard.TryKeep` first (the method version
@@ -2491,9 +2501,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   477 -> 467, `gem --version` 532 -> 547 and 552 -> 551, `gem list` 935 -> 921 and 950 -> 955,
   `require "irb"` 953 -> 958 and 974 -> 932, irb 1+1 1063 -> 1037 and 1091 -> 1047: round 4's `-e 1`
   loss is won back (perf/startup3 and 4).
-- **perf/sieve (2026-11-27, gated 2026-11-28 (round 6's gate entry)) - a block-local first assigned inside an `if` branch or a
-
-- **perf/permute (2026-11-27, not gated) - Integer#downto parks its caller's scope, and a recursive
+- **perf/permute (2026-11-27, gated 2026-11-28 (round 7's gate entry)) - Integer#downto parks its caller's scope, and a recursive
   method parks one scope per level** (switches `IR_PARK_DOWNTO`, `IR_PARKED_DEPTH`). alloc.rb on 9b588fc:
   Permute 124.5 MB per iteration, 1.45 MB per `permute(6)` (8,660 calls), for an algorithm that needs
   a 6-element Array. Variants: with `while` in place of `downto` 208 KB (`@count += 1` boxes an Integer
@@ -2519,7 +2527,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   block/yield/break as on the base. Left: the `@count` boxes (an Integer instance variable is held
   boxed, raw only for Floats) and the locals tuple per scoped call.
 
-- **perf/sieve (2026-11-27, not gated) - a block-local first assigned inside an `if` branch or a
+- **perf/sieve (2026-11-27, gated 2026-11-28 (round 6's gate entry)) - a block-local first assigned inside an `if` branch or a
   `while` body no longer keeps the block from being outlined** (switch `IR_BLOCK_LOOP_SCOPED`). AWFY
   Sieve allocated 100.3 MB per iteration (alloc.rb). Bytes per `sieve` call, by variants: the
   `while` loops alone 1 KB beyond the 40 KB flags Array; `(2..size).each` with the real block 296 KB,
@@ -2979,7 +2987,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     cases above are the ones that must leave a class out.
 - **perf/fiberbound (2026-11-27) - fibers abandoned while suspended are bounded: a collection when
   the fibers holding a thread have grown by 256, the reclaimed threads parked for the next ones
-  (gap 35)** - not gated. Base 78bbfb1 (the round-38 branch at 15285eb with perf/fiberstart). A
+  (gap 35)** - gated 2026-11-28 (round 6's gate entry). Base 78bbfb1 (the round-38 branch at 15285eb with perf/fiberstart). A
   suspended fiber holds a thread until a collection finds its handle, and the collector knows
   nothing of the thread: 3,000 abandoned generators were three collections and 3,017 threads. Now
   `ThreadOps.FiberCore.Run` counts the fibers that hold a thread, and a fiber about to start
@@ -3013,7 +3021,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   (60) pass in five plain runs on base and five on new.
 
 - **perf/bootparse (2026-11-27) - the string evals of start-up precompiled in the startup library (gap 26)**
-  - not gated. Base 4703cb5 (f67ac44 with perf/clrlookup).
+  - gated 2026-11-28 (round 7's gate entry). Base 4703cb5 (f67ac44 with perf/clrlookup).
   What start-up parses at run time (R2R host, IR_PHASE_TIMES, IR_STARTUP_DLL_TRACE): the string evals,
   each a prism parse, a transform and a lambda compile on the main thread. They are
   specification.rb's `set_nil_attributes_to_nil` and kernel_require.rb's Kernel#require (~2.3 ms each,
@@ -3051,7 +3059,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   which compiles the same either way.
 - **perf/clrlookup (2026-11-27) - what makes the CLR member lookups of start-up; Random's class found on
   first use; field and event names from metadata; a class key for the lookup failure cache (gap 26)**
-  - not gated. Base 4320d4a.
+  - gated 2026-11-28 (round 7's gate entry). Base 4320d4a.
   The finding (a throwaway build that logged each lookup with its module, name, result, caller and
   time; `ir -e 1`, R2R host): a Ruby method name a module lacks is looked up as a CLR member of each
   CLR-backed module up the hierarchy (`RubyModule.TryGetClrMember`). That covers Object
@@ -3551,7 +3559,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   both.
 
 - **perf/crubydiff (round thirty-seven, 2026-11-26) - differences from CRuby, not speed** - not
-  gated when merged; gated 2026-11-27 (round 5's gate entry); one commit each, every one with CRuby 4.0's output as a registered IronRuby.Tests case.
+  gated when merged; gated 2026-11-27 (round 5's gate entry), its third and fourth rounds 2026-11-28 (round 6's), its fifth and sixth 2026-11-28 (round 7's); one commit each, every one with CRuby 4.0's output as a registered IronRuby.Tests case.
   - `Class#new` handed a library `initialize` (Struct's, Array's) the caller's scope, whose
     refinements then reached it: `Util/struct-matrix.rb`'s `UsingRefine.make` (after 200 calls, when
     the rule was compiled) and an Array subclass from the first call. The inner site now takes no scope
