@@ -1235,6 +1235,7 @@ namespace IronRuby.Tests {
                 Block_ReturnTraceFrameCleanup1,
                 Thread_SetTraceFunc1,
                 Fiber_ReclamationClrBoundary1,
+                Fiber_OwnSpecialVariables1,
                 Fiber_Keywords1,
                 WeakMap_NoBlock1,
                 Fiber_ThreadRaiseReachesRunningFiber1,

@@ -535,6 +535,33 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// Calls the proc as the root of a fiber: like #call, but the block's frame keeps its own $~ and $_ (the fiber's
+        /// root svar in MRI), as a thread's block does, instead of sharing the frame it was written in.
+        /// </summary>
+        public object CallAsRoot(object[]/*!*/ args) {
+            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            blockParam.IsThreadRoot = true;
+            try {
+                object result;
+                switch (args.Length) {
+                    case 0: result = RubyOps.Yield0(null, _self, blockParam); break;
+                    // as #call: a lambda does not splat its one argument
+                    case 1: result = (Kind == ProcKind.Lambda) ? RubyOps.YieldNoAutoSplat1(args[0], null, _self, blockParam) :
+                        RubyOps.Yield1(args[0], null, _self, blockParam); break;
+                    case 2: result = RubyOps.Yield2(args[0], args[1], null, _self, blockParam); break;
+                    case 3: result = RubyOps.Yield3(args[0], args[1], args[2], null, _self, blockParam); break;
+                    case 4: result = RubyOps.Yield4(args[0], args[1], args[2], args[3], null, _self, blockParam); break;
+                    default: result = RubyOps.YieldN(args, null, _self, blockParam); break;
+                }
+                return RubyOps.MethodProcCall(blockParam, result);
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
+        }
+
         public object CallN(Proc procArg, object[]/*!*/ args) {
             Debug.Assert(args.Length > 4);
             var blockParam = RubyOps.TakeBfcForProcCall(this);

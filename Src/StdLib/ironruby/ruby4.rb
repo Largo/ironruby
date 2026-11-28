@@ -3318,7 +3318,8 @@ unless defined?(Fiber)
                 ::Thread.handle_interrupt(::Object => :immediate) do
                   case msg.kind
                   when MSG_RESUME, MSG_TRANSFER
-                    result = @block.call(*msg.payload)
+                    # as the fiber's root: the block keeps its own $~ and $_, as MRI's fiber does (ec->root_svar)
+                    result = @block.__send__(:__ir_call_as_root__, *msg.payload)
                   else
                     __act__(msg)
                   end
