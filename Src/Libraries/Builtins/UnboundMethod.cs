@@ -282,6 +282,12 @@ namespace IronRuby.Builtins {
             }
 
             result.Append('>');
+
+            // MRI's method_inspect builds a BINARY string, which a part that is not ASCII - a name, a path, the
+            // inspected receiver of a singleton method - takes over to its own encoding
+            if (result.IsAscii()) {
+                result.ForceEncoding(RubyEncoding.Binary);
+            }
             return result; 
         }
 

@@ -1277,6 +1277,7 @@ namespace IronRuby.Tests {
                 Methods1, 
                 MethodDef1,
                 MethodInspect_LibraryParameters1,
+                MethodInspect_Encoding1,
                 MethodArity_CoreMethods1,
                 MethodArity_LibraryArguments1,
                 MethodArity_PreludeMethods1,

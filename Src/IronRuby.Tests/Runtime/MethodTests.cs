@@ -1696,6 +1696,29 @@ end
         }
 
         /// <summary>
+        /// Method#inspect and UnboundMethod#inspect are BINARY strings in MRI (method_inspect), unless a part of
+        /// them is not ASCII: a method named in UTF-8 gives UTF-8.
+        /// </summary>
+        public void MethodInspect_Encoding1() {
+            TestOutput(@"
+class Foo; def a(x, y = 1, *r, k:, &b); end; def é; end; end
+o = Object.new
+def o.s; end
+p method(:p).inspect.encoding, Foo.new.method(:a).inspect.encoding, Foo.instance_method(:a).inspect.encoding
+p Foo.new.method(:é).inspect.encoding, o.method(:s).inspect.encoding
+p 1.method(:+).inspect.encoding, [].method(:each).unbind.inspect.encoding
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+");
+        }
+
+        /// <summary>
         /// Method#inspect shows the parameter list for library methods and attribute accessors
         /// too, as MRI does ("_" for a required parameter with no name); a rule-generator method
         /// such as Class#new takes any arguments and says so in its arity.
