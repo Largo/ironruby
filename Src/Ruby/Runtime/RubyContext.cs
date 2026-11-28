@@ -2444,6 +2444,19 @@ namespace IronRuby.Runtime {
                 if (!result.HasInstancesWithOwnClass) {
                     return result;
                 }
+                // an array no runtime has made instance data for has no class of its own (RubyArray.MayHaveInstanceData):
+                // $LOAD_PATH's singleton class sent every array of the process down the lookups below
+                var array = obj as RubyArray;
+                if (array != null && !array.MayHaveInstanceData && !result.HasAdoptedInstances) {
+                    return result;
+                }
+                // any other object of a CLR type that keeps its data in the table, the table never given any for it
+                // (MayHaveTableInstanceData): one String or Hash with a singleton class sent every other one down the
+                // lookups below
+                if (array == null && !result.HasAdoptedInstances && RubyUtils.HasObjectState(obj) && !(obj is BigInteger) &&
+                    !MayHaveTableInstanceData(obj)) {
+                    return result;
+                }
             }
             RubyInstanceData data = TryGetNonRubyObjectInstanceData(obj);
             if (data != null && (result = data.ImmediateClass) != null) {
@@ -2951,12 +2964,51 @@ namespace IronRuby.Runtime {
         }
 
         internal bool TryGetClrTypeInstanceData(object/*!*/ obj, out RubyInstanceData result) {
+            // an array no runtime has made data for (RubyArray.MayHaveInstanceData): nothing to find in the table
+            var array = obj as RubyArray;
+            if (array != null && !array.MayHaveInstanceData) {
+                result = null;
+                return false;
+            }
             var owner = obj as IRubyInstanceDataOwner;
             if (owner != null && owner.TryGetInstanceData(this, out result)) {
                 return result != null;
             }
+            if (!MayHaveTableInstanceData(obj)) {
+                result = null;
+                return false;
+            }
             // lock-free: ConditionalWeakTable reads take no lock
             return _referenceTypeInstanceData.TryGetValue(obj, out result);
+        }
+
+        // IR_INSTANCE_DATA_FILTER=0: every object may have data in the table, as before
+        private static readonly bool _instanceDataFilterEnabled = Environment.GetEnvironmentVariable("IR_INSTANCE_DATA_FILTER") != "0";
+
+        private const int InstanceDataFilterBits = 1 << 16;
+
+        /// <summary>
+        /// A bit for each value of an object's identity hash (modulo the filter's size), set before this runtime adds the
+        /// object to _referenceTypeInstanceData, or has an IRubyInstanceDataOwner make its own (GetInstanceData), and never
+        /// cleared. A clear bit means the object has no instance data for this runtime, which a ConditionalWeakTable lookup costs some 200 instructions to find out; a set one - this
+        /// object's or another's - sends the reader to the table, as before. The object of a CLR type that has any instance
+        /// with a class of its own (a String or a Hash with a singleton method) was looked up there on every call
+        /// that asked its class (GetImmediateClassOf): every String once one String had one. 8 KB a runtime.
+        /// </summary>
+        private readonly int[]/*!*/ _instanceDataFilter = new int[InstanceDataFilterBits / 32];
+
+        private bool MayHaveTableInstanceData(object/*!*/ obj) {
+            if (!_instanceDataFilterEnabled) {
+                return true;
+            }
+            int bit = RuntimeHelpers.GetHashCode(obj) & (InstanceDataFilterBits - 1);
+            return (Volatile.Read(ref _instanceDataFilter[bit >> 5]) & (1 << (bit & 31))) != 0;
+        }
+
+        // before the entry is added: a reader that finds the bit clear finds no entry either
+        private void NoteTableInstanceData(object/*!*/ obj) {
+            int bit = RuntimeHelpers.GetHashCode(obj) & (InstanceDataFilterBits - 1);
+            Interlocked.Or(ref _instanceDataFilter[bit >> 5], 1 << (bit & 31));
         }
 
         /// <summary>
@@ -3008,13 +3060,23 @@ namespace IronRuby.Runtime {
             }
 
             var owner = obj as IRubyInstanceDataOwner;
-            if (owner != null && (result = owner.GetInstanceData(this)) != null) {
-                return result;
+            if (owner != null) {
+                // the filter covers the data an owner keeps itself too (see MayHaveTableInstanceData)
+                NoteTableInstanceData(obj);
+                if ((result = owner.GetInstanceData(this)) != null) {
+                    return result;
+                }
             }
 
             if (_referenceTypeInstanceData.TryGetValue(obj, out result)) {
                 return result;
             }
+            // marked before the entry is added: see TryGetClrTypeInstanceData
+            var array = obj as RubyArray;
+            if (array != null) {
+                array.MarkMayHaveInstanceData();
+            }
+            NoteTableInstanceData(obj);
             return _referenceTypeInstanceData.GetValue(obj, _CreateInstanceData);
         }
 

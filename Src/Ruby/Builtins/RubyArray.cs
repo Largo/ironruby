@@ -19,6 +19,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -40,6 +41,11 @@ namespace IronRuby.Builtins {
 
         private uint _flags;
         private const uint IsFrozenFlag = 1;
+        // Set once some runtime has made instance data for this array (RubyContext.GetInstanceData): its instance
+        // variables, object id or singleton class. Until then the array has none, and RubyContext.TryGetClrTypeInstanceData
+        // answers so without the weak table lookup - which every array paid, in GetImmediateClassOf, as soon as any one
+        // array of the process had a singleton class ($LOAD_PATH has one, as in MRI: resolve_feature_path).
+        private const uint MayHaveInstanceDataFlag = 2;
 
         [Conditional("DEBUG")]
         private void ObjectInvariant() {
@@ -170,8 +176,21 @@ namespace IronRuby.Builtins {
         }
 
         public RubyArray/*!*/ Freeze() {
-            _flags |= IsFrozenFlag;
+            // atomic: MarkMayHaveInstanceData may set the other bit at the same time
+            Interlocked.Or(ref _flags, IsFrozenFlag);
             return this;
+        }
+
+        // IR_ARRAY_CLASS_FAST=0: every array may have data, and its class is looked up as before
+        private static readonly bool _classFast = Environment.GetEnvironmentVariable("IR_ARRAY_CLASS_FAST") != "0";
+
+        internal bool MayHaveInstanceData {
+            get { return !_classFast || (Volatile.Read(ref _flags) & MayHaveInstanceDataFlag) != 0; }
+        }
+
+        // before the data is published, so that a reader that finds the bit clear finds no data either
+        internal void MarkMayHaveInstanceData() {
+            Interlocked.Or(ref _flags, MayHaveInstanceDataFlag);
         }
 
         #endregion

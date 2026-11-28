@@ -2128,6 +2128,39 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - **Left.** The caller's keyword hash (about 40 ns of what remains over a positional call);
     a body that can deopt still copies its rest.
 
+- **perf/datafilter (/perf-step, 2026-11-28, on fcbc67b + 672867e) - a filter by identity hash
+  keeps objects without instance data out of the instance data table (`IR_INSTANCE_DATA_FILTER`)**
+  - instructions and clock, not gated. perf/kernelcall's lead: once one String and one Hash have a
+  singleton method, every String's and Hash's class lookup went to the ConditionalWeakTable
+  (`@s.nil?` compiled +21% instructions, `@s.is_a?(String)` +37%). A per-object bit is unsafe on
+  MutableString (non-atomic `_flags`) and absent on Hash, so each runtime keeps 65,536 bits (8 KB)
+  by `RuntimeHelpers.GetHashCode`, set before data is added, never cleared. With the singletons:
+  `@s.nil?` 2572 -> 2335, `@s.is_a?` 3314 -> 2840 instructions; clock `@h.nil?` 0.88, `@s.is_a?`
+  0.87, `@h.is_a?` 0.80; without them unchanged. Census 0 up, 0 down. Left: ~200 instructions a
+  lookup over the plain case, the identity hash's runtime call.
+  `Util/clr-class-matrix.rb` (new) CRuby's output in five modes, switch off and R2R; eight other
+  matrices unchanged; ruby/spec core/string, hash, kernel, objectspace, enumerator the same;
+  460 IronRuby.Tests on Debug pass.
+
+- **perf/kernelcall (/perf-step, 2026-11-28, on 744b83e) - an Array without instance data is
+  answered its class without the instance data table (`RubyArray.MayHaveInstanceData`,
+  `IR_ARRAY_CLASS_FAST`)** - instructions and clock, not gated. The round's premise (a C# Kernel
+  call costs ~28 ns over CRuby whatever it does) did not hold when counted: over an empty
+  method in the same harness, `Integer(5)` costs what `@i.gcd(4)` costs, implicit and explicit
+  self alike, and the rows' gap to CRuby is the harness's Ruby call. The outlier the counts
+  found: a Kernel method on an Array in a compiled body, ~370 instructions over a Hash's, because
+  `$LOAD_PATH`'s singleton class (as in MRI) sent every array's class lookup
+  (GetImmediateClassOfNonRubyObject) to the weak instance data table. A bit set before any
+  runtime makes data for an array now skips it. `@a.nil?` compiled 2531 -> 2172 instructions
+  (`@h.nil?` 2161), 95.9 -> 75.7 ns; `Array#dig` 325.7 -> 284.3 ns; other Array rows within the
+  noise. `Util/array-class-matrix.rb` (new) CRuby's but for `_id2ref` (as before) in five modes,
+  switch off and R2R; light-entry, shared-rule-light, kernel-string, numeric-conversion, jit,
+  jit-calls, ivar, hot-shapes unchanged; ruby/spec core/kernel, array, objectspace the same
+  examples; 331 IronRuby.Tests on Debug pass. Left: the same table cost for any other CLR class
+  once one of its instances has a singleton class (a String's, a Hash's) - the bit is RubyArray's
+  alone; and the harness's own Ruby call (gap 13).
+
+
 - **Gate of 2026-11-28 for round 7 of round thirty-seven** (perf/crubydiff's fifth and sixth rounds,
   perf/literalsite, perf/endpark, perf/stage0 and perf/stagea with the block-cost harness and the procscope
   design, perf/primitive (rejected), perf/clrlookup, perf/bootparse, perf/permute, perf/parkedtuple
