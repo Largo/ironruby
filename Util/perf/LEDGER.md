@@ -1644,6 +1644,24 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     image; best-of-10 wall -2 to -11% and -0 to -14%. Not taken: the JIT's re-parses of start-up methods
     (2-3 ms of `-e 1`), and Kernel#require's first-call body compile (~10 ms, 4 ms of it the first
     def-body transform's cold path), the next leads.
+    2026-11-28, perf/requirecold (Landed, not gated): Kernel#require's first-call compile was
+    already gone. perf/bootparse precompiled the kernel_require.rb eval, and with it the def bodies
+    in it (`def body: transform` 9.0 ms -> 0 in `-e 1`). What was left to parse at start-up were
+    module_evals (FileUtils' 92, which `require "irb"` loads; Date::Format::Bag's 22) and the
+    36 reline delegators whose text names the tree (claimed only in the tree they were recorded in).
+    Both are now in the library: -1.4 to -2.1% main-thread instructions on `require "irb"` and irb;
+    the other three +0.05 to +0.14% (registering more keys). Next leads: the first top-level
+    transform of a process (4.1 ms for `-e 1`'s one character, a cold path), the JIT's re-parses
+    of library methods (140 `def body: AST bridge` in irb), and fileutils.rb, tmpdir.rb and
+    irb/completion.rb, still compiled from source (rescue re-raise frames, refinements).
+    2026-11-28, perf/jitreparse (Rejected, measured only): the method JIT's re-parses of the startup
+    library's methods cost ~6 ms of `-e 1`'s parse phases (11 parses; -X:NoJIT 5.9 ms against 12.5) and
+    ~11 ms of irb's (133 parses), most of `-e 1`'s the cold first run of parser and bridge paths. The
+    parse is at the method's first call because the runtime screen needs the AST (its callees resolved
+    on the declaring module), and the profile the stub keeps from that call on needs the screen's
+    results. A third of the stubs are called once, so deferring to the second call saves at most ~2 ms
+    and ~4-5 ms, against a rework of the profiling path the JIT's decisions rest on. Not taken; see
+    Rejected. The first top-level transform's cold path is still the larger lead.
 27. **Closed (perf/crubydiff, third round): `send` frames are hidden.** Was: **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -3316,6 +3334,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   the bound; the Enumerator*, Lazy*, Loop*, Fiber*, Thread*, Exception* and Raise* IronRuby.Tests
   (60) pass in five plain runs on base and five on new.
 
+- **perf/requirecold (2026-11-28) - module_evals in the startup library; eval texts that name the tree (gap 26)**
+  - not gated. Base 50b07b5 (claude/happy-gauss-95wm2j) merged with 516fb7c (perf/bootparse).
+  The brief: Kernel#require's body, compiled at its first call (~10 ms on the R2R host before
+  perf/bootparse, ~4 ms of it the cold path of the first def-body transform). Measured on the base
+  (IR_PHASE_TIMES, R2R host): that compile is gone. The kernel_require.rb eval comes from the library
+  since perf/bootparse, with its def bodies (`def body: transform` 9.0 ms / 1 -> 0 in `-e 1`,
+  `def body: LightCompile` 3.0 ms -> 0). So the transformer's cold path, R2R coverage and warming it
+  off the main thread were not pursued: what is left of it is the one top-level transform of each
+  command's own script (4.1 ms for `-e 1`). Taken instead, the largest parse left at start-up:
+  - aea43ac: module_evals. RubyUtils.Evaluate left `module_eval`/`class_eval` strings out of the
+    precompiled evals (with the eval code cache). FileUtils makes Verbose, NoWrite and DryRun with 92
+    `module_eval <<-EOS def #{name}...` (`require "irb"` loads fileutils through tmpdir) and
+    Date::Format::Bag 22 accessors; irb `1+1` parsed and transformed 135 texts. A module_eval of a named
+    module that is not a singleton class is now recorded and claimed, with the module's name in the key.
+    The compiler walks its text as that module's body, so its defs' frame labels name the module
+    (FileUtils::Verbose#mkdir) and their bodies are not compiled again from source at their first call.
+    FactoryKind.ModuleEval, as CreateCompilerOptionsForEval. instance_eval (a singleton class) and an
+    anonymous module's module_eval compile from text; the code cache still takes plain evals only.
+    startup-evals.txt 150 -> 264 evals; irb claims 212 (84), top-level transforms 135 -> 7.
+  - 658195a: Forwardable writes the location that defined a delegator into its text (the
+    private-method warning), so 36 of reline's 56 delegators name the tree's root. They were claimed
+    only in the tree startup-files.rb recorded them in: the release image, a build from any other
+    checkout, and perf/bootparse's measured base claimed 20 of 56. The recorder writes the root as
+    ${ROOT} in a text as in a path; HashEvalCode hashes a text with the root as RootMarker; and an
+    eval's frozen strings that name the tree are rebased as the library's other strings are. A copy of
+    the release image moved elsewhere claims all 56, and the warning names the moved tree. An eval that
+    would still tie the library to its tree (a symbol) is left out rather than the library unused.
+  Numbers (base / new, one batch each):
+  - Main-thread instructions (callgrind, TieredCompilation=0), R2R host: `-e 1` +0.08%, `gem --version`
+    +0.08%, `gem list` +0.07%, `require "irb"` -1.42%, irb -1.82%. Release image: +0.05%, +0.05%, +0.14%,
+    -2.09%, -1.79%. The +0.1% is the attribute's 114 more keys and hashes read at every start: 264 entries
+    share 99 keys, so a key table would take most of it back.
+  - Wall, best of 10 alternating, two batches: within noise (the spread between batches was +-9% on
+    the release image, against a ~2% effect).
+  Checked: FileUtils::Verbose/NoWrite/DryRun output, frame labels, owner, source_location, parameters and
+  an ArgumentError's backtrace as the base and as CRuby 4.0; Date's parsers as the base; the bootparse
+  probe (second load, changed byte, other file and line, threads) as the base. The five commands print what
+  the base prints (R2R host; release image moved). `startup-files.rb --check` passes. Matrices eval,
+  eval-locals, eval-defined, eval-literals, erb-escape, forwardable, binding-lvar, caller, sdef,
+  refinement, error-message, super-light in the gate's modes, r2r and r2r with IR_STARTUP_DLL=none: PASS
+  (70 same, 14 baseline). IronRuby.Tests and ruby/spec not run this round.
+  For the gate: that a module_eval's compiled code depends on nothing of its module but the name (the
+  key's), and labels; the root replacement in HashEvalCode and in eval strings (an eval text naming the
+  tree is now relocated, where a file's literal naming it still makes the library unrelocatable).
 - **perf/bootparse (2026-11-27) - the string evals of start-up precompiled in the startup library (gap 26)**
   - gated 2026-11-28 (round 7's gate entry). Base 4703cb5 (f67ac44 with perf/clrlookup).
   What start-up parses at run time (R2R host, IR_PHASE_TIMES, IR_STARTUP_DLL_TRACE): the string evals,
@@ -8454,6 +8516,42 @@ after master (#228 to #233) had been merged into both trees.
   about 90 methods at best, so it was not written. Not worth trying again until the typed body can make
   general calls; the block loop the generic code already runs in place (BlockLoopSite) is what these
   methods have.
+
+- **perf/jitreparse (2026-11-28) - the method JIT's re-parses of the startup library's methods: measured,
+  no change** (gap 26). Base 33818f7 merged with 4405475 (perf/requirecold).
+  A method of the startup library that the JIT may specialize keeps its def's source (AotCompiler.JitSource,
+  only for a method the static screen takes). RubyMethodBody parses it at the method's first call
+  (PrecompiledCode.ParseJitSource) and hands the AST to JitStub.Wrap.
+  - Cost, R2R host, IR_PHASE_TIMES (prism parse, load, AST bridge, def-body bridge; five runs):
+    | | JIT parses | parse phases | with -X:NoJIT |
+    |---|---|---|---|
+    | `-e 1` | 11 | 12.5 ms | 5.9 ms |
+    | `gem --version` | 51 | | |
+    | `gem list` | 78 | | |
+    | `require "irb"` | 69 | | |
+    | irb `1+1` | 133 | 33-35 ms | 20-25 ms |
+    A warm re-parse is ~0.08 ms. `-e 1`'s ~0.5 ms each is the first run of the parser's and bridge's paths
+    for defs, which nothing after pays in `-e 1`.
+  - What the AST is for at the first call: Wrap's Screen, whose verdict depends on the running program
+    (IsLeafMethod and IsCallableMethod resolve the body's callees on the declaring module, constant guards
+    are folded). It cannot be computed ahead of time: irb screens out 33 of its 133 at run time, all
+    accepted by the static screen. And the screen's results (keywords, literal defaults, per-count
+    bodies, the typed arity) are what Profile needs from the first call on.
+  - Of the stubs made, how often each was called while profiling (a throwaway counter, Release build):
+    `-e 1` 8 stubs, 4 once; `gem --version` 36, 22 once; `gem list` 53, 17 once; `require "irb"` 50, 19
+    once; irb 92, 31 once (12 reached the threshold of 40).
+  - The candidates:
+    - Deferring the parse to the second call: Observe needs only a CLR type, an immediate class and a
+      numeric kind per argument, so the first call could be kept as tokens and replayed. But it skips only
+      the once-called methods' parses, ~2 ms of `-e 1` and ~4-5 ms of irb (the cold costs fall on whichever
+      parse comes first), for a rework of the trampolines (a stub without an AST, per arity) and of Profile.
+      Those decide what the JIT specializes. Not worth it.
+    - Wrapping without screening: a method the screen would decline would keep the trampoline for life, in
+      the call sites' rules (Wrap's own comment): slower code, and other decisions.
+    - Parsing each file once: ruby4.rb's methods are among the parsed, and the file is 11,000 lines.
+    - A serialized AST in the library: a serializer for every node kind, to save at most ~1-2% of start-up.
+  Next lead instead: the cold path of the first top-level transform (4.1-4.8 ms for `-e 1`'s one-character
+  script).
 
 - **perf/stagea (round thirty-seven, 2026-11-28) - stage A of `Docs/block-calling-convention.md`, a narrow
   literal given to a `[BlockNotKept]` iterator as a block descriptor: simulated, not built** (gap 13).
