@@ -75,6 +75,17 @@ namespace IronRuby.Builtins {
         // a block hands a Proc object on, as one whose scope converted it does (see BlockParam.IsLiteralBlock).
         private const int MethodConverterFlag = 16;
 
+        // The light-frame method the proc was given to made its scope, which holds the proc (RubyOps.CreateMethodScopeLazy): while
+        // it is set the proc is not reusable, as if ReusableFlag were clear. Unlike a clear ReusableFlag it is lifted again - by
+        // that scope's parking (RubyOps.EndPark), which proves that nothing kept the scope - so that the caller's literal stays
+        // reusable when its callee's scope is parked (`c.each { }' where `def each; (a..b).each { |i| yield @s[i] }; end').
+        // A call that does not park, an exception, any other clear of ReusableFlag leave the proc not reusable, as they did.
+        private const int HeldFlag = 32;
+        private const int ReusableMask = ReusableFlag | HeldFlag;
+
+        /// <summary>IR_SCOPE_HELD_BLOCKS=0: a light-frame method's scope clears its block's ReusableFlag for good, as it did.</summary>
+        internal static readonly bool ScopeHeldBlocksEnabled = Environment.GetEnvironmentVariable("IR_SCOPE_HELD_BLOCKS") != "0";
+
         /// <summary>
         /// The state few procs have, out of line: a Proc is allocated for every call with a literal block.
         /// </summary>
@@ -127,9 +138,9 @@ namespace IronRuby.Builtins {
         /// literal allows that (BlockDispatcher.ReusesProc) and no TracePoint listens, which could hand out a scope it runs in.
         /// </summary>
         internal void ConvertAsLightFrame() {
-            _kind = (_dispatcher.ReusesProc && TracePoint.ActiveEvents == 0)
+            _kind = ((_dispatcher.ReusesProc && TracePoint.ActiveEvents == 0)
                 ? (int)ProcKind.Proc | SelfConverterFlag | ReusableFlag
-                : (int)ProcKind.Proc | SelfConverterFlag;
+                : (int)ProcKind.Proc | SelfConverterFlag) | (_kind & HeldFlag);
             _activeFlowControlScope = this;
         }
 
@@ -156,15 +167,32 @@ namespace IronRuby.Builtins {
             _kind &= ~ReusableFlag;
         }
 
+        /// <summary>
+        /// The scope of the light-frame method this proc was given to was made, and holds it (see HeldFlag): ClearReusable until
+        /// <see cref="ReleaseHold"/>.
+        /// </summary>
+        internal void HoldForScope() {
+            if (ScopeHeldBlocksEnabled) {
+                _kind |= HeldFlag;
+            } else {
+                _kind &= ~ReusableFlag;
+            }
+        }
+
+        /// <summary>The scope that held this proc is being parked: nothing kept it (see HeldFlag).</summary>
+        internal void ReleaseHold() {
+            _kind &= ~HeldFlag;
+        }
+
         internal bool IsReusable {
-            get { return (_kind & ReusableFlag) != 0; }
+            get { return (_kind & ReusableMask) == ReusableFlag; }
         }
 
         /// <summary>
         /// TryReuse would succeed: nothing but the frame that made the proc holds it (see RubyOps.ParkMethodScope).
         /// </summary>
         internal bool IsReusableAndInactive {
-            get { return (_kind & ReusableFlag) != 0 && _activeFlowControlScope == null; }
+            get { return (_kind & ReusableMask) == ReusableFlag && _activeFlowControlScope == null; }
         }
 
         /// <summary>
@@ -204,7 +232,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal bool TryReuse() {
-            if ((_kind & ReusableFlag) != 0 && _activeFlowControlScope == null) {
+            if ((_kind & ReusableMask) == ReusableFlag && _activeFlowControlScope == null) {
                 _kind = (int)ProcKind.Block;
                 return true;
             }
@@ -535,6 +563,33 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// Calls the proc as the root of a fiber: like #call, but the block's frame keeps its own $~ and $_ (the fiber's
+        /// root svar in MRI), as a thread's block does, instead of sharing the frame it was written in.
+        /// </summary>
+        public object CallAsRoot(object[]/*!*/ args) {
+            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            blockParam.IsThreadRoot = true;
+            try {
+                object result;
+                switch (args.Length) {
+                    case 0: result = RubyOps.Yield0(null, _self, blockParam); break;
+                    // as #call: a lambda does not splat its one argument
+                    case 1: result = (Kind == ProcKind.Lambda) ? RubyOps.YieldNoAutoSplat1(args[0], null, _self, blockParam) :
+                        RubyOps.Yield1(args[0], null, _self, blockParam); break;
+                    case 2: result = RubyOps.Yield2(args[0], args[1], null, _self, blockParam); break;
+                    case 3: result = RubyOps.Yield3(args[0], args[1], args[2], null, _self, blockParam); break;
+                    case 4: result = RubyOps.Yield4(args[0], args[1], args[2], args[3], null, _self, blockParam); break;
+                    default: result = RubyOps.YieldN(args, null, _self, blockParam); break;
+                }
+                return RubyOps.MethodProcCall(blockParam, result);
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
+        }
+
         public object CallN(Proc procArg, object[]/*!*/ args) {
             Debug.Assert(args.Length > 4);
             var blockParam = RubyOps.TakeBfcForProcCall(this);
@@ -594,11 +649,14 @@ namespace IronRuby.Builtins {
             // MRI 1.9.2 doesn't do so though (see http://redmine.ruby-lang.org/issues/show/3792).
 
             // the block a symbol proc is called with goes on to the method it invokes:
-            // [1, 2].map(&:foo) { ... } passes the block through to #foo
+            // [1, 2].map(&:foo) { ... } passes the block through to #foo. Keywords too: the proc keeps them in its rest list as a
+            // marked hash (Ruby2Keywords, below), which this site makes keywords again, as a Ruby splat site does - the one site
+            // a library method makes that does (RubyCallFlags.HasRuby2KeywordsSplat).
             var site = CallSite<Func<CallSite, object, object, Proc, object, object>>.Create(
                 RubyCallAction.Make(
                     scope.RubyContext, methodName,
-                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
+                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock |
+                        RubyCallFlags.HasRuby2KeywordsSplat)
                 )
             );
 

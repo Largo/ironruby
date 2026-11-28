@@ -3340,7 +3340,8 @@ unless defined?(Fiber)
                 ::Thread.handle_interrupt(::Object => :immediate) do
                   case msg.kind
                   when MSG_RESUME, MSG_TRANSFER
-                    result = @block.call(*msg.payload)
+                    # as the fiber's root: the block keeps its own $~ and $_, as MRI's fiber does (ec->root_svar)
+                    result = @block.__send__(:__ir_call_as_root__, *msg.payload)
                   else
                     __act__(msg)
                   end
@@ -12540,9 +12541,12 @@ class Struct
     # self.class.members, not members: a struct may have a member called "members"
     names = self.class.members
 
+    # The stores splat with `**nil': the values are stored as they came, as MRI's C rb_struct_initialize_m stores them -
+    # a ruby2_keywords Hash among them too, which a splat without `**' would make keywords (RubyCallFlags.
+    # HasRuby2KeywordsSplat).
     # The overwhelmingly common call: one positional value per member.
     if kwargs.empty? && !keyword_init && args.size == names.size
-      return __struct_initialize__(*args)
+      return __struct_initialize__(*args, **nil)
     end
 
     # Since 3.2 a struct built without keyword_init: takes keywords as well as
@@ -12577,12 +12581,12 @@ class Struct
         # MRI's wording is plural whatever the count
         raise ArgumentError, "unknown keywords: #{unknown.join(', ')}"
       end
-      __struct_initialize__(*values)
+      __struct_initialize__(*values, **nil)
     else
       # pad with nil so that a partial re-initialize clears the remaining members
       values = args.dup
       values.concat([nil] * (names.size - values.size)) if values.size < names.size
-      __struct_initialize__(*values)
+      __struct_initialize__(*values, **nil)
     end
   end
   private :__struct_initialize_slow__

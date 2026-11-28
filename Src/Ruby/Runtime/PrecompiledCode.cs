@@ -563,10 +563,12 @@ namespace IronRuby.Runtime.Precompiled {
         /// What the code of a string eval depends on besides its text: the text's encoding, the file and line, $VERBOSE (0 nil, 1
         /// false, 2 true), the frame (inside a method or not, its label, block depth, method name and parameter names, a rest
         /// parameter), the locals it can see, and the names of the modules its constants are looked up in, innermost first
-        /// (EvalCodeCache.ConstantModules; "" for none). Null if a module has no name: such an eval is not precompiled.
+        /// (EvalCodeCache.ConstantModules; "" for none), and for a module_eval the name of the module it runs in, which its
+        /// defs' frame labels name (null for a plain eval). Null if a module has no name: such an eval is not precompiled.
         /// </summary>
         public static string EvalKey(string/*!*/ encoding, string/*!*/ path, int line, int verbosity, bool inMethod, string baseLabel,
-            int blockLevels, string methodName, string[] parameterNames, bool hasUnsplat, System.Collections.Generic.IList<string> localNames, string[] moduleNames) {
+            int blockLevels, string methodName, string[] parameterNames, bool hasUnsplat, System.Collections.Generic.IList<string> localNames, string[] moduleNames,
+            string evalModule) {
             if (moduleNames == null) {
                 return null;
             }
@@ -575,7 +577,7 @@ namespace IronRuby.Runtime.Precompiled {
                 .Append(inMethod ? '1' : '0').Append('\u0001').Append(baseLabel).Append('\u0001').Append(blockLevels).Append('\u0001')
                 .Append(methodName).Append('\u0001').Append(parameterNames != null ? String.Join("\u0002", parameterNames) : "\u0003").Append('\u0001')
                 .Append(hasUnsplat ? '1' : '0').Append('\u0001').Append(localNames != null ? String.Join("\u0002", localNames) : "\u0003").Append('\u0001')
-                .Append(String.Join("\u0002", moduleNames));
+                .Append(String.Join("\u0002", moduleNames)).Append('\u0001').Append(evalModule ?? "\u0003");
             return sb.ToString();
         }
 
@@ -605,8 +607,29 @@ namespace IronRuby.Runtime.Precompiled {
             }
         }
 
-        /// <summary>The SHA-256 of an eval's text, hex: what tells the text the library was compiled from.</summary>
-        public static string/*!*/ HashEvalCode(byte[]/*!*/ code) {
+        /// <summary>
+        /// The SHA-256 of an eval's text, hex: what tells the text the library was compiled from. The tree's root in it
+        /// (<paramref name="root"/>, with its trailing separator) counts as <see cref="RootMarker"/>: a text made from a
+        /// location (Forwardable's delegators name the file that defined them in a warning) is the same text in a tree that
+        /// has moved, and the compiled code's strings move with the tree (as a file's do).
+        /// </summary>
+        public static string/*!*/ HashEvalCode(byte[]/*!*/ code, string root) {
+            if (!String.IsNullOrEmpty(root)) {
+                byte[] rootBytes = System.Text.Encoding.UTF8.GetBytes(root);
+                if (code.AsSpan().IndexOf(rootBytes) >= 0) {
+                    byte[] marker = System.Text.Encoding.UTF8.GetBytes(RootMarker.ToString());
+                    var rooted = new System.Collections.Generic.List<byte>(code.Length);
+                    var rest = code.AsSpan();
+                    int i;
+                    while ((i = rest.IndexOf(rootBytes)) >= 0) {
+                        rooted.AddRange(rest.Slice(0, i).ToArray());
+                        rooted.AddRange(marker);
+                        rest = rest.Slice(i + rootBytes.Length);
+                    }
+                    rooted.AddRange(rest.ToArray());
+                    code = rooted.ToArray();
+                }
+            }
             return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(code));
         }
 
@@ -634,7 +657,7 @@ namespace IronRuby.Runtime.Precompiled {
             if (!_evals.TryGetValue(key, out candidates)) {
                 return null;
             }
-            string hash = HashEvalCode(code);
+            string hash = HashEvalCode(code, _runtimeRoot ?? _compiledRoot);
             PrecompiledEval eval = null;
             foreach (var candidate in candidates) {
                 if (candidate.Hash == hash) {
@@ -672,7 +695,7 @@ namespace IronRuby.Runtime.Precompiled {
         }
 
         /// <summary>
-        /// IR_EVAL_RECORD=file: every plain string eval compiled without a warning is appended to the file, one JSON object a
+        /// IR_EVAL_RECORD=file: every plain string eval and module_eval compiled without a warning is appended to the file, one JSON object a
         /// line, with what the startup library needs to compile it ahead of time (Util/aot/startup-files.rb writes
         /// startup-evals.txt from it).
         /// </summary>
@@ -680,7 +703,7 @@ namespace IronRuby.Runtime.Precompiled {
 
         internal static void RecordEval(byte[]/*!*/ code, string/*!*/ encoding, string/*!*/ path, int line, int verbosity, bool inMethod,
             string baseLabel, int blockLevels, string methodName, string[] parameterNames, bool hasUnsplat, System.Collections.Generic.IList<string> localNames,
-            string[] moduleNames) {
+            string[] moduleNames, string evalModule) {
             if (moduleNames == null) {
                 return;
             }
@@ -698,6 +721,7 @@ namespace IronRuby.Runtime.Precompiled {
                 ["hasUnsplat"] = hasUnsplat,
                 ["localNames"] = localNames != null ? new System.Text.Json.Nodes.JsonArray(localNames.Select(n => (System.Text.Json.Nodes.JsonNode)n).ToArray()) : null,
                 ["moduleNames"] = new System.Text.Json.Nodes.JsonArray(Array.ConvertAll(moduleNames, n => (System.Text.Json.Nodes.JsonNode)n)),
+                ["module"] = evalModule,
             };
             lock (_recordLock) {
                 File.AppendAllText(EvalRecordPath, o.ToJsonString() + "\n");

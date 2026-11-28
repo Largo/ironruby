@@ -230,6 +230,7 @@ namespace IronRuby.Runtime.Calls {
                 var list = (IList)splattedArg.Value;
                 _restTakesListFrom = GetRestTakesListFrom(args, list.Count);
                 metaBuilder.AddSplattedArgumentTest(list, splattedArg.Expression, (_restTakesListFrom >= 0) ? _restTakesListFrom + 1 : -1,
+                    args.Signature.HasRuby2KeywordsSplat,
                     out _listLength, out _listVariable);
                 _actualArgumentCount += _listLength;
             }

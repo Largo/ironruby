@@ -66,7 +66,27 @@ namespace IronRuby.Compiler.Ast {
         /// Transform as expression (value is read) and mark sequence point.
         /// </summary>
         internal MSA.Expression/*!*/ TransformReadStep(AstGenerator/*!*/ gen) {
-            return gen.AddDebugInfo(TransformRead(gen), Location);
+            EnterLine(gen);
+            return LeaveLine(gen, gen.AddDebugInfo(TransformRead(gen), Location));
+        }
+
+        /// <summary>
+        /// A statement's sequence point makes its first line the frame's before any of its code runs (see
+        /// AstGenerator.AddCallLine, which compares a call's line with it).
+        /// </summary>
+        internal void EnterLine(AstGenerator/*!*/ gen) {
+            if (Location.IsValid) {
+                gen.CurrentLine = Location.Start.Line;
+            }
+        }
+
+        /// <summary>
+        /// After the statement the line is the one its last code left, which a statement nested in an expression (an
+        /// `if' in an argument) may have changed on some paths only: unknown to whatever follows in the expression.
+        /// </summary>
+        internal static MSA.Expression/*!*/ LeaveLine(AstGenerator/*!*/ gen, MSA.Expression/*!*/ result) {
+            gen.CurrentLine = -1;
+            return result;
         }
         
         /// <summary>
@@ -84,7 +104,8 @@ namespace IronRuby.Compiler.Ast {
             if (!StackGuard.IsSufficient) {
                 return StackGuard.RunOnFreshStack(() => TransformCondition(gen, positive));
             }
-            return gen.AddDebugInfo(TransformReadBoolean(gen, positive), Location);
+            EnterLine(gen);
+            return LeaveLine(gen, gen.AddDebugInfo(TransformReadBoolean(gen, positive), Location));
         }	
 		
 
@@ -92,13 +113,15 @@ namespace IronRuby.Compiler.Ast {
         /// Transform as statement (value is not read). Marks sequnce point.
         /// </summary>
         internal virtual MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
-            return gen.AddDebugInfo(TransformRead(gen), Location);
+            EnterLine(gen);
+            return LeaveLine(gen, gen.AddDebugInfo(TransformRead(gen), Location));
         }
 
         /// <summary>
         /// Transform and handle the result according to the specified result operation. Marks sequence point.
         /// </summary>
         internal virtual MSA.Expression/*!*/ TransformResult(AstGenerator/*!*/ gen, ResultOperation resultOperation) {
+            EnterLine(gen);
             MSA.Expression resultExpression = TransformRead(gen);
             MSA.Expression statement;
 
@@ -108,7 +131,7 @@ namespace IronRuby.Compiler.Ast {
                 statement = gen.Return(resultExpression);
             }
 
-            return gen.AddDebugInfo(statement, Location);
+            return LeaveLine(gen, gen.AddDebugInfo(statement, Location));
         }
 
         // Condition under which the expression is considered "defined?".

@@ -6586,6 +6586,54 @@ nil
         }
 
         /// <summary>
+        /// A string instance_eval or class_eval sees and sets its caller's $~ and $_ (and so $1, $`), as MRI's do: they are
+        /// the frame's, not the eval's.
+        /// </summary>
+        public void Eval_InstanceEvalSpecialVariables1() {
+            TestOutput(@"
+require 'ruby4'
+def m1
+  ""ab"" =~ /(b)/
+  [instance_eval(""$~&.to_a""), instance_eval(""$1""), binding.eval(""$~&.to_a""), eval(""$1""), instance_eval { $1 }, binding.eval(""$`"")]
+end
+p m1
+def m2
+  $_ = ""line""
+  [instance_eval(""$_""), binding.eval(""$_""), eval(""$_""), instance_exec { $_ }]
+end
+p m2
+def m3
+  ""xy"" =~ /y/
+  o = Object.new
+  [o.instance_eval(""$~&.to_s""), Object.class_eval(""$~&.to_s""), o.instance_exec { $~&.to_s }]
+end
+p m3
+""zz"" =~ /z/
+p instance_eval(""$~&.to_s""), binding.eval(""$~&.to_s"")
+def m4 = (instance_eval(""'q' =~ /q/""); $~&.to_s)
+p m4
+def h1(s) = (s =~ /(\w)/; instance_eval(""$1""))
+def h2(s) = (s =~ /(\w)/; Object.class_eval(""$~&.[](1)""))
+def h3(s)
+  $_ = s
+  instance_eval(""$_"")
+end
+def h4(s) = (instance_eval(""s =~ /(\\w)/""); $1)
+r = nil
+3000.times { |i| r = [h1(""a#{i % 3}""), h2(""b""), h3(""c#{i % 2}""), h4(""d"")] }
+p r
+", @"
+[[""b"", ""b""], ""b"", [""b"", ""b""], ""b"", ""b"", ""a""]
+[""line"", ""line"", ""line"", ""line""]
+[""y"", ""y"", ""y""]
+""z""
+""z""
+""q""
+[""a"", ""b"", ""c1"", ""d""]
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
@@ -8351,6 +8399,37 @@ puts refs.count { |r| r.IsAlive }
         }
 
         /// <summary>
+        /// IR_LIGHT_LAMBDA: a method whose lambda literals are in a branch runs in a light frame, which makes its scope when the
+        /// literal runs (MethodDefinition.HasUnconditionalLambda): the lambda's `return' is its own, it keeps the method's locals
+        /// past its return, and it checks its arity.
+        /// </summary>
+        public void Method_LightFrameLambda1() {
+            TestOutput(@"
+def pick(x) = x > 0 ? ->(y) { return y * x if y; :never } : x
+def counter(x)
+  if x
+    n = x
+    [-> { n += 1 }, -> { n }]
+  end
+end
+def arity(x) = x ? (l = ->(a, b) { a + b }; begin; l.(1); rescue ArgumentError => e; e.message; end) : nil
+p 30.times.map { |i| pick(i - 2) }.uniq.size, pick(3).(4), pick(-1)
+inc, get = counter(5)
+inc.(); inc.()
+p get.(), counter(nil), arity(1)
+p 40.times.map { |i| [pick(i + 1).(2), counter(i)[1].()] }.last
+", @"
+30
+12
+-1
+7
+nil
+""wrong number of arguments (given 1, expected 2)""
+[80, 39]
+");
+        }
+
+        /// <summary>
         /// `recv.m op= v' in a light frame (IR_LIGHT_MEMBER_OPASSIGN): the read of m, the operator and the write of m= are calls of
         /// the frame's light sites; the value is the right-hand side whatever m= returns; a private accessor on self; `&.'; binding.
         /// </summary>
@@ -8477,6 +8556,157 @@ false
 6
 [1]
 []
+");
+        }
+
+        /// <summary>
+        /// A call with an explicit `**' - even one that passes nothing - leaves a ruby2_keywords hash ending its splatted list
+        /// positional, the same object with its mark (RubyCallFlags.HasRuby2KeywordsSplat), and so does a library method
+        /// passing its arguments on, where `yield(*args)' makes it keywords as `f(*args)' does; and `**h' alone gives the callee a dup of h, its default, default proc and
+        /// compare_by_identity with it (RubyOps.KeywordSplatArgument). Expected output from CRuby 4.0.
+        /// </summary>
+        public void Method_Ruby2KeywordsExplicitSplat1() {
+            TestOutput(@"
+require 'ruby4'
+def g(*a, **k) = [a, k]
+def g2(a, k: 0) = [a, k]
+def rest(*a) = a
+h = Hash.ruby2_keywords_hash({k: 1})
+a = [1, h]
+e = {}
+p g(*a), g(*a, **e), g(*a, **nil), g(*a, **{z: 2})
+r = rest(*a, **e)
+p r.last.equal?(h), Hash.ruby2_keywords_hash?(r.last)
+p((g2(*a, **e) rescue $!.class), g2(*a))
+p send(:g, *a, **e), method(:g).call(*a, **e), method(:g).to_proc.call(*a, **e)
+p proc { |*x, **kk| [x, kk] }.call(*a, **e)
+ruby2_keywords def fwd(*r) = g(*r, **{})
+p fwd(1, k: 2)
+class P; def m(*x, **kk) = [x, kk]; end
+class C < P; def m(*x) = super(*x, **{}); end
+p C.new.m(1, h)
+dp = Hash.new { :dp }; dp[:z] = 1
+dv = Hash.new(5); dv[:z] = 1
+ci = {}.compare_by_identity; ci[:z] = 1
+def kr(**r) = [r[:missing], r.default, r.compare_by_identity?]
+def kn(k: 1, **r) = [k, r.default, r.compare_by_identity?]
+def pos(x) = [x.default, x.compare_by_identity?]
+p kr(**dp), kr(**dv), kr(**ci), kn(**dv), kn(**ci), pos(**dv)
+p kr(a: 1, **dv), kr(**dv, **{})
+def y(args) = yield(*args)
+def yk(args) = yield(*args, **{})
+p y([h]) { |*x, **kk| [x, kk] }, y([h], &-> *x, **kk { [x, kk] }), yk([h]) { |*x, **kk| [x, kk] }
+", @"
+[[1], {k: 1}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {z: 2}]
+true
+true
+ArgumentError
+[1, 1]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 1}], {}]
+[[1, {k: 2}], {}]
+[[1, {k: 1}], {}]
+[:dp, nil, false]
+[5, 5, false]
+[nil, nil, true]
+[1, 5, false]
+[1, nil, true]
+[5, false]
+[nil, nil, false]
+[nil, nil, false]
+[[], {k: 1}]
+[[], {k: 1}]
+[[{k: 1}], {}]
+");
+        }
+
+        /// <summary>
+        /// A Struct stores a ruby2_keywords Hash given as a member value as it came, as MRI's C rb_struct_initialize_m does: the
+        /// prelude's slow path splats the values with `**nil' (RubyCallFlags.HasRuby2KeywordsSplat). Expected output from CRuby 4.0.
+        /// </summary>
+        public void Struct_Ruby2KeywordsHash1() {
+            TestOutput(@"
+require 'ruby4'
+h = Hash.ruby2_keywords_hash({k: 1})
+S = Struct.new(:x, :y)
+s = S.new(1, h)
+p s.y.equal?(h), Hash.ruby2_keywords_hash?(s.y)
+s = S.new(*[1, h], **{})
+p s.y.equal?(h), s.to_a
+S3 = Struct.new(:x, :y, :z)
+s = S3.new(1, h)
+p s.y.equal?(h), s.to_a
+K = Struct.new(:x, :y, keyword_init: true)
+p K.new(x: 1, y: h).y.equal?(h)
+s = S.new(1, 2); s.send(:initialize, 3, h)
+p s.y.equal?(h)
+p S.new(x: 1, y: 2).to_a, S.new({x: 1}).to_a
+", @"
+true
+true
+true
+[1, {k: 1}]
+true
+[1, {k: 1}, nil]
+true
+true
+[1, 2]
+[{x: 1}, nil]
+");
+        }
+
+        /// <summary>
+        /// A **rest parameter is the keyword hash the call made for itself, the declared keywords taken out in place
+        /// (RubyOps.MakeKeywordRest, IR_KWREST_TAKE): never a hash the caller holds - `**h' passes a copy - nor one another call
+        /// gets; its default and comparer as the copy had them. Expected output from CRuby 4.0.
+        /// </summary>
+        public void Method_KeywordRestTakeover1() {
+            TestOutput(@"
+def kt_mut(k: 0, **o) = (o[:added] = k; o.delete(:z); o)
+def kt_keep(**o) = o
+class KtP; def m(k: 0, **o) = [k, o]; end
+class KtZ < KtP; def m(k: 0, **o) = (o[:local] = 1; super); end
+class KtE < KtP; def m(k: 0, **o) = (o[:local] = 1; eval('super')); end
+h = {k: 1, z: 2}
+p kt_mut(**h), h
+p kt_mut(k: 3, z: 4, y: 5)
+a = kt_keep(a: 1); b = kt_keep(a: 1); a[:x] = 1
+p a, b, a.equal?(b)
+p send(:kt_mut, k: 1, z: 2, y: 3), method(:kt_mut).call(k: 1, y: 2)
+p proc { |k: 0, **o| o[:p] = 1; o }.call(k: 1, y: 2)
+p KtZ.new.m(k: 1, y: 2), KtE.new.m(k: 1, y: 2)
+d = Hash.new(5).compare_by_identity; d[:y] = 1
+o = kt_keep(**d)
+p o.default, o.compare_by_identity?, o.equal?(d)
+f = {k: 1, y: 2}.freeze
+p kt_mut(**f), f.frozen?
+p kt_mut, kt_keep
+p kt_mut(**{""s"" => 1, k: 2})
+", @"
+{added: 1}
+{k: 1, z: 2}
+{y: 5, added: 3}
+{a: 1, x: 1}
+{a: 1}
+false
+{y: 3, added: 1}
+{y: 2, added: 1}
+{y: 2, p: 1}
+[1, {y: 2, local: 1}]
+[1, {y: 2, local: 1}]
+5
+true
+false
+{y: 2, added: 1}
+true
+{added: 0}
+{}
+{""s"" => 1, added: 2}
 ");
         }
 

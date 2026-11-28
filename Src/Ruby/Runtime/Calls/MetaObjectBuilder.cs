@@ -461,8 +461,8 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
-        internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, out int listLength, out ParameterExpression/*!*/ listVariable) {
-            AddSplattedArgumentTest(value, expression, -1, out listLength, out listVariable);
+        internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, bool ruby2Keywords, out int listLength, out ParameterExpression/*!*/ listVariable) {
+            AddSplattedArgumentTest(value, expression, -1, ruby2Keywords, out listLength, out listVariable);
         }
 
         /// <param name="minLength">
@@ -470,15 +470,20 @@ namespace IronRuby.Runtime.Calls {
         /// callee takes the list's tail into its rest parameter, whatever its length (see ArgsBuilder.AddCallArguments). Without it a
         /// site whose list grows at every call - `f(n - 1, *a, n)' recursing - built a rule for each length and never hit one.
         /// </param>
-        internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, int minLength, out int listLength, out ParameterExpression/*!*/ listVariable) {
+        /// <param name="ruby2Keywords">
+        /// Whether a ruby2_keywords hash ending the list is made keyword arguments again: only at a splat written in Ruby
+        /// source without a `**' (RubyCallFlags.HasRuby2KeywordsSplat).
+        /// </param>
+        internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, int minLength, bool ruby2Keywords, out int listLength, out ParameterExpression/*!*/ listVariable) {
             // Every splatted call comes through here, whoever built the list - `f(*args)' in Ruby
             // source, Kernel#send, an Enumerator replaying the arguments it was made with. A hash
             // a ruby2_keywords method is carrying goes back to being keyword arguments at exactly
             // this point, and nowhere else. The list keeps its length, so the rule below is
             // unaffected.
             listVariable = GetTemporary(typeof(IList), "#list");
-            Expression assignment = Ast.Assign(listVariable,
-                Methods.SplatRuby2Keywords.OpCall(AstUtils.Convert(expression, typeof(IList)))
+            Expression assignment = Ast.Assign(listVariable, ruby2Keywords ?
+                Methods.SplatRuby2Keywords.OpCall(AstUtils.Convert(expression, typeof(IList))) :
+                AstUtils.Convert(expression, typeof(IList))
             );
 
             listLength = value.Count;
