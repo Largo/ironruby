@@ -1221,8 +1221,17 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
-    Untried: a name the compiler turns into a direct static call in prelude files only
-    (lessons, section 4, item 4).
+    Measured in round thirty-eight (perf/primitive, see Rejected) before building it: most of
+    those calls are not to C#. Of 1,604 `__x__` calls in `ruby4.rb` (489 names), 1,156 call a
+    Ruby method the prelude defines itself (`__flt__` 31, `__check__` 28, `__err__` 24,
+    `__chain__` 22...) and 225 (110 names) a C#-only helper, the most frequent of which run once
+    at start-up (`__hide_constant__` 23, `__iter_cursor_method__` 10);
+    `ruby Util/bench/helper-call-cost.rb --census`. A primitive could take only those 225: about
+    10 ns a call (a C# method on self from a Ruby method 42-44 ns against 28-31 for a constant)
+    and, at `-e 1` (in-place build), 59 binds and 9.6 ms of a 1.4 s start. Of the 56 prelude
+    methods the method JIT's screen refuses for helper calls alone, the helpers are mostly Ruby
+    (`__check__` 15, `__ir_try_convert__`, `__hash_operand__`, `__hash_subset__` 4 each): what would
+    let those through is the screen taking a self call to a private prelude method, not a primitive.
 18. **A `while ... yield` in Ruby runs at ~100 ns per element** against 9 for a C#
     iterator compiled with its block, and at twice CRuby's time for the same source: the
     loop compiler gives up on `yield` (see the Rejected entry "A block whose body is
@@ -2555,6 +2564,40 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Alias*, BasicObject, singleton, send, define_method, the JIT) pass.
   - For the gate: the shared rule's set now decides `!=` for every plain-object class a program has; the
     cases above are the ones that must leave a class out.
+- **perf/fiberbound (2026-11-27) - fibers abandoned while suspended are bounded: a collection when
+  the fibers holding a thread have grown by 256, the reclaimed threads parked for the next ones
+  (gap 35)** - not gated. Base 78bbfb1 (the round-38 branch at 15285eb with perf/fiberstart). A
+  suspended fiber holds a thread until a collection finds its handle, and the collector knows
+  nothing of the thread: 3,000 abandoned generators were three collections and 3,017 threads. Now
+  `ThreadOps.FiberCore.Run` counts the fibers that hold a thread, and a fiber about to start
+  (`__fiber_reuse__`) collects when the count has grown by 256 since the lowest it has been since
+  the last collection; the pool of parked fiber threads is as large as the bound (8 before), so
+  the threads the collection reclaims are the next fibers' instead of ending (a pool of 8 made the
+  bound cost 15-25% per abandoned enumerator: 862-927 against 748 us). A collection that reclaims
+  fewer than a quarter of the interval's fibers (counted as they unwind, an interval of starts
+  later) doubles the interval: a program whose fibers are alive, or held by a block on their own
+  thread that closes over them (`e = xs.lazy.map { |x| ... }; e.next`), which no collector sees
+  past, paid twice per enumerator when every 256 starts collected over 10,000 threads (1,073 ->
+  1,918 us); a first try that judged by the lowest count since the collection doubled the interval
+  while the reclaimed threads were still unwinding and let 2,787 pile up. GC.AddMemoryPressure for
+  each fiber's stack, tried instead: 18-21 collections in 3,000, 608-742 threads at the peak.
+  `IR_FIBER_BOUND=0` turns it off (and the pool back to 8); bounds of 64-1024 measured, 256 kept.
+  `extiter-abandoned.rb`, 10,000 each, base -> new: a lazy made in a method 1,229 us, peak 1,066
+  threads, 359 MB -> 689 us, 281, 174 MB; a generator 1,282 us, 513, 335 MB -> 700 us, 280, 165 MB;
+  the ones a block holds 1,073-1,126 us, 10,018 threads -> 1,119-1,145 us, 10,017 (unchanged: not
+  reachable while a fiber is a thread). `fiber-start.rb`: fibers that finish and threads level
+  (`fiber_complete` 13 / 18 us, `gen_drain` 136 / 142, `thread_join` 199 / 196), abandoned ones
+  281-294 threads after 3,000 against 2,823-3,017. Cursor shapes level (`ab.rb -r 6`, 0.96-1.07, all
+  overlapping). With it, the cursor path's StopIteration when StopIteration#new or #initialize is the
+  program's: made in C# it was another object than the one rescued, so a later end's cause was not
+  the first, and `map`'s result was lost; now the cursor hands the end to the prelude's
+  __iter_stop__ as the fiber path does (`__iter_slow__` op 4). `Util/extiter-matrix.rb` (332 probes)
+  prints CRuby's output with the bound and without; base differs in that probe only, off
+  (IR_FAST_NEXT=0) in `flm_to_ary_next` only. fiber-reclaim-matrix passes in every mode;
+  enum-next- and raise-matrix the same on base, new, off and without the bound. spec/core/fiber,
+  enumerator, thread and kernel/loop_spec: 1,026 examples, 0 failures on base, new and without
+  the bound; the Enumerator*, Lazy*, Loop*, Fiber*, Thread*, Exception* and Raise* IronRuby.Tests
+  (60) pass in five plain runs on base and five on new.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
@@ -7750,6 +7793,25 @@ after master (#228 to #233) had been merged into both trees.
   `sum`, `uniq` and `to_h` with a block (48, 100, 225 and 273 ns against CRuby's 28, 28, 57 and 94 per
   element). The next attempt starts from JITResume's stage 2 (`Docs/jit-resume-deopt.md`), with the
   yield as its first fallback that is not an attribute operation, not from the yield.
+- **perf/primitive (2026-11-27) - a direct static call for the prelude's C# helpers (gap 17),
+  not built: measured first, it cannot pay for itself.** Base 4708492 (the round-38 branch at
+  4320d4a with perf/fiberbound). The gap counted every `__x__` call as a call to C#; 72% of
+  them (1,156 of 1,604 in `ruby4.rb`) call a Ruby method the prelude defines, which a primitive
+  cannot replace, and the 225 that reach a C#-only helper are dominated by start-up registrations
+  run once. What the 225 cost: about 10 ns a call in the steady state (`Util/bench/helper-call-cost.rb`,
+  new: a method calling `size` or `frozen?` on self 42-44 ns, answering a constant 28-31;
+  `__plain_list__?` 79 ns, most of it the helper's own method lookups, which a direct call keeps),
+  so 3% of `filter_map` (344 ns) and less of the other core methods that call one; at start-up
+  (`IR_BIND_TRACE=1 IR_PHASE_TIMES=1 ./ir.sh -e 1`, in-place build): 1,050 binds, 333 ms
+  inclusive, of which 59 binds and 9.6 ms are C# helpers' (13 and 11.5 ms the Ruby helpers'),
+  so at most about 0.7% of the start, less on the R2R host, and not the 4-5% round four left. The
+  cost of building it - the compiler resolving a library method's overloads and parameter
+  conventions (storages, BlockParam, RubyContext, conversions) at compile time, the startup library
+  and R2R emitting the same, and the JIT taking the call - is larger than any of that. The
+  census's helper refusals (56 prelude methods refused at the JIT screen by helper calls alone)
+  are mostly Ruby helpers, so a primitive would not move the census either. What would: the screen
+  taking a self call to a private prelude method (`__check__`, `__flt__`, `__err__`), or, for the
+  start, the binds that are not helpers' (965 of 1,050).
 
 - **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
   above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
